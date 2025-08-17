@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,12 +29,13 @@ type Session interface {
 
 // Record represents a conversation turn in the session history.
 type Record struct {
-	ID        int64     `json:"id,omitzero"`
-	Role      chat.Role `json:"role"`
-	Content   string    `json:"content"`
-	Live      bool      `json:"live"`   // In active context window
-	Tokens    int       `json:"tokens"` // Estimated token count
-	Timestamp time.Time `json:"timestamp"`
+	ID           int64     `json:"id,omitzero"`
+	Role         chat.Role `json:"role"`
+	Content      string    `json:"content"`
+	Live         bool      `json:"live"`          // In active context window
+	InputTokens  int       `json:"input_tokens"`  // Actual tokens from LLM
+	OutputTokens int       `json:"output_tokens"` // Actual tokens from LLM
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // SessionMetrics provides usage statistics for the session.
@@ -56,6 +56,7 @@ type SessionOption func(*sessionOptions)
 type sessionOptions struct {
 	store           persistence.Store
 	initialMessages []chat.Message
+	summarizer      Summarizer
 }
 
 // WithStore sets a custom persistence store for the session.
@@ -73,6 +74,14 @@ func WithInitialMessages(msgs ...chat.Message) SessionOption {
 	}
 }
 
+// WithSummarizer sets a custom summarizer for context compaction.
+// If not provided, a default LLM-based summarizer is used.
+func WithSummarizer(summarizer Summarizer) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.summarizer = summarizer
+	}
+}
+
 // NewSession creates a new Session with the given client, system prompt, and options.
 func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) Session {
 	// Apply options
@@ -86,6 +95,12 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 	// Default to memory store if not specified
 	if options.store == nil {
 		options.store = persistence.NewMemoryStore()
+	}
+
+	// Default to LLM summarizer if not specified
+	if options.summarizer == nil {
+		// Use same client but could specify a cheaper model here
+		options.summarizer = NewLLMSummarizer(client, "")
 	}
 
 	// Load existing metrics if available
@@ -118,24 +133,24 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 	if !hasExistingRecords {
 		// Create initial records from system prompt and initial messages
 		if systemPrompt != "" {
-			tokens := estimateTokens(systemPrompt)
 			options.store.AddRecord(persistence.Record{
-				Role:      "system",
-				Content:   systemPrompt,
-				Live:      true,
-				Tokens:    tokens,
-				Timestamp: time.Now(),
+				Role:         "system",
+				Content:      systemPrompt,
+				Live:         true,
+				InputTokens:  0, // System prompt tokens counted with first message
+				OutputTokens: 0,
+				Timestamp:    time.Now(),
 			})
 		}
 
 		for _, msg := range options.initialMessages {
-			tokens := estimateTokens(msg.Content)
 			options.store.AddRecord(persistence.Record{
-				Role:      chat.Role(msg.Role),
-				Content:   msg.Content,
-				Live:      true,
-				Tokens:    tokens,
-				Timestamp: time.Now(),
+				Role:         chat.Role(msg.Role),
+				Content:      msg.Content,
+				Live:         true,
+				InputTokens:  0, // Initial messages' tokens counted with first query
+				OutputTokens: 0,
+				Timestamp:    time.Now(),
 			})
 		}
 	}
@@ -145,6 +160,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		client:              client,
 		systemPrompt:        actualSystemPrompt,
 		store:               options.store,
+		summarizer:          options.summarizer,
 		compactionThreshold: metrics.CompactionThreshold,
 		compactionCount:     metrics.CompactionCount,
 		lastCompaction:      metrics.LastCompaction,
@@ -160,6 +176,7 @@ type persistentSession struct {
 	client       chat.Client
 	systemPrompt string
 	store        persistence.Store
+	summarizer   Summarizer
 
 	mu                  sync.Mutex
 	compactionThreshold float64
@@ -167,9 +184,11 @@ type persistentSession struct {
 	lastCompaction      time.Time
 	cumulativeTokens    int
 	maxTokens           int
+	lastUsage           chat.TokenUsageDetails
 
 	// Tool tracking - use single mutex for simplicity as per CLAUDE.md
-	tools map[string]registeredTool
+	tools             map[string]registeredTool
+	lastUserMessageID int64
 }
 
 type registeredTool struct {
@@ -221,15 +240,18 @@ func (s *persistentSession) prepareForMessage(msg chat.Message) (chat.Chat, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Add user message to records
-	userTokens := estimateTokens(msg.Content)
-	s.store.AddRecord(persistence.Record{
-		Role:      chat.Role(msg.Role),
-		Content:   msg.Content,
-		Live:      true,
-		Tokens:    userTokens,
-		Timestamp: time.Now(),
+	// Add user message to records (tokens will be updated after response)
+	userMsgID, _ := s.store.AddRecord(persistence.Record{
+		Role:         chat.Role(msg.Role),
+		Content:      msg.Content,
+		Live:         true,
+		InputTokens:  0, // Will be updated after response
+		OutputTokens: 0,
+		Timestamp:    time.Now(),
 	})
+
+	// Store message ID for later token update
+	s.lastUserMessageID = userMsgID
 
 	// Check if we need to compact before sending
 	if s.shouldCompactLocked() {
@@ -256,24 +278,38 @@ func (s *persistentSession) prepareForMessage(msg chat.Message) (chat.Chat, erro
 	return tempChat, nil
 }
 
-// trackResponse records the response and updates metrics.
+// trackResponse records the response and updates metrics with actual token counts.
 // This method expects the mutex is NOT held and will handle locking internally.
 func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	responseTokens := estimateTokens(response.Content)
-	s.store.AddRecord(persistence.Record{
-		Role:      chat.Role(response.Role),
-		Content:   response.Content,
-		Live:      true,
-		Tokens:    responseTokens,
-		Timestamp: time.Now(),
-	})
-
-	// Update token usage
+	// Get actual token usage from the LLM
 	usage, _ := tempChat.TokenUsage()
+	s.lastUsage = usage.LastMessage
 	s.cumulativeTokens += usage.LastMessage.TotalTokens
+
+	// Update the user message with actual input tokens
+	if s.lastUserMessageID > 0 {
+		userRec, _ := s.store.GetAllRecords()
+		for i := len(userRec) - 2; i >= 0 && i < len(userRec); i++ {
+			if userRec[i].ID == s.lastUserMessageID {
+				userRec[i].InputTokens = usage.LastMessage.InputTokens
+				s.store.UpdateRecord(s.lastUserMessageID, userRec[i])
+				break
+			}
+		}
+	}
+
+	// Add response with actual output tokens
+	s.store.AddRecord(persistence.Record{
+		Role:         chat.Role(response.Role),
+		Content:      response.Content,
+		Live:         true,
+		InputTokens:  0, // Input tokens are on the user message
+		OutputTokens: usage.LastMessage.OutputTokens,
+		Timestamp:    time.Now(),
+	})
 
 	// Save metrics
 	s.saveMetricsLocked()
@@ -361,12 +397,13 @@ func (s *persistentSession) LiveRecords() []Record {
 	var result []Record
 	for _, r := range records {
 		result = append(result, Record{
-			ID:        r.ID,
-			Role:      chat.Role(r.Role),
-			Content:   r.Content,
-			Live:      r.Live,
-			Tokens:    r.Tokens,
-			Timestamp: r.Timestamp,
+			ID:           r.ID,
+			Role:         chat.Role(r.Role),
+			Content:      r.Content,
+			Live:         r.Live,
+			InputTokens:  r.InputTokens,
+			OutputTokens: r.OutputTokens,
+			Timestamp:    r.Timestamp,
 		})
 	}
 	return result
@@ -381,12 +418,13 @@ func (s *persistentSession) TotalRecords() []Record {
 	var result []Record
 	for _, r := range records {
 		result = append(result, Record{
-			ID:        r.ID,
-			Role:      chat.Role(r.Role),
-			Content:   r.Content,
-			Live:      r.Live,
-			Tokens:    r.Tokens,
-			Timestamp: r.Timestamp,
+			ID:           r.ID,
+			Role:         chat.Role(r.Role),
+			Content:      r.Content,
+			Live:         r.Live,
+			InputTokens:  r.InputTokens,
+			OutputTokens: r.OutputTokens,
+			Timestamp:    r.Timestamp,
 		})
 	}
 	return result
@@ -409,28 +447,25 @@ func (s *persistentSession) compactNowLocked() error {
 		return nil
 	}
 
-	// Build conversation text for summarization
-	var conversation strings.Builder
-	for _, r := range liveRecords[:len(liveRecords)-2] { // Keep last 2 messages
-		conversation.WriteString(fmt.Sprintf("%s: %s\n\n", r.Role, r.Content))
+	// Keep last 2 messages, summarize the rest
+	recordsToSummarize := liveRecords[:len(liveRecords)-2]
+
+	// Convert persistence.Record to agent.Record for summarizer
+	var agentRecords []Record
+	for _, r := range recordsToSummarize {
+		agentRecords = append(agentRecords, Record{
+			ID:           r.ID,
+			Role:         chat.Role(r.Role),
+			Content:      r.Content,
+			Live:         r.Live,
+			InputTokens:  r.InputTokens,
+			OutputTokens: r.OutputTokens,
+			Timestamp:    r.Timestamp,
+		})
 	}
 
-	// Create summarization prompt
-	summaryPrompt := fmt.Sprintf(`Please provide a concise summary of the following conversation that preserves the key information, decisions made, and any important context. The summary should be suitable for continuing the conversation later.
-
-Conversation to summarize:
-%s
-
-Provide only the summary, no additional commentary.`, conversation.String())
-
-	// Use a cheaper model for summarization
-	summaryClient := s.client // In real impl, would create client with cheaper model
-	summaryChat := summaryClient.NewChat("You are a helpful assistant that creates concise conversation summaries.")
-
-	summaryMsg, err := summaryChat.Message(context.Background(), chat.Message{
-		Role:    chat.UserRole,
-		Content: summaryPrompt,
-	})
+	// Use the configured summarizer
+	summary, err := s.summarizer.Summarize(context.Background(), agentRecords)
 	if err != nil {
 		return fmt.Errorf("summarization failed: %w", err)
 	}
@@ -443,13 +478,13 @@ Provide only the summary, no additional commentary.`, conversation.String())
 	}
 
 	// Add summary as new record
-	summaryTokens := estimateTokens(summaryMsg.Content)
 	s.store.AddRecord(persistence.Record{
-		Role:      "system",
-		Content:   fmt.Sprintf("[Previous conversation summary]\n%s", summaryMsg.Content),
-		Live:      true,
-		Tokens:    summaryTokens,
-		Timestamp: time.Now(),
+		Role:         "system",
+		Content:      fmt.Sprintf("[Previous conversation summary]\n%s", summary),
+		Live:         true,
+		InputTokens:  0, // Summary tokens will be counted with next message
+		OutputTokens: 0,
+		Timestamp:    time.Now(),
 	})
 
 	// Update compaction metrics
@@ -518,7 +553,8 @@ func (s *persistentSession) calculateLiveTokensLocked() int {
 	records, _ := s.store.GetLiveRecords()
 	total := 0
 	for _, r := range records {
-		total += r.Tokens
+		// Count both input and output tokens
+		total += r.InputTokens + r.OutputTokens
 	}
 	return total
 }
@@ -556,11 +592,4 @@ func (s *persistentSession) saveMetricsLocked() {
 		CumulativeTokens:    s.cumulativeTokens,
 		CompactionThreshold: s.compactionThreshold,
 	})
-}
-
-// estimateTokens provides a rough token count estimate.
-// In production, this would use a proper tokenizer.
-func estimateTokens(text string) int {
-	// Rough estimate: ~4 characters per token
-	return len(text) / 4
 }

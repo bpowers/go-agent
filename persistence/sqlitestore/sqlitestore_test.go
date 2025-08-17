@@ -65,7 +65,8 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 
 	// Update the record
 	record.Content = "Updated"
-	record.Tokens = 7
+	record.InputTokens = 5
+	record.OutputTokens = 2
 	err = store.UpdateRecord(id, record)
 	require.NoError(t, err)
 
@@ -74,7 +75,8 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
 	assert.Equal(t, "Updated", records[0].Content)
-	assert.Equal(t, 7, records[0].Tokens)
+	assert.Equal(t, 5, records[0].InputTokens)
+	assert.Equal(t, 2, records[0].OutputTokens)
 }
 
 func TestSQLiteStoreMarkLiveDead(t *testing.T) {

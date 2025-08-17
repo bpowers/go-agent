@@ -39,12 +39,13 @@ func New(dbPath string) (*SQLiteStore, error) {
 func (s *SQLiteStore) initSchema() error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS records (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    role       TEXT NOT NULL,
-    content    TEXT NOT NULL,
-    live       BOOLEAN NOT NULL,
-    tokens     INTEGER NOT NULL,
-    timestamp  DATETIME NOT NULL
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    role          TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    live          BOOLEAN NOT NULL,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    timestamp     DATETIME NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_records_live ON records(live);
@@ -69,8 +70,8 @@ INSERT OR IGNORE INTO metrics (id) VALUES (1);
 // AddRecord implements persistence.Store.
 func (s *SQLiteStore) AddRecord(record persistence.Record) (int64, error) {
 	result, err := s.db.Exec(
-		`INSERT INTO records (role, content, live, tokens, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		string(record.Role), record.Content, record.Live, record.Tokens, record.Timestamp,
+		`INSERT INTO records (role, content, live, input_tokens, output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+		string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert record: %w", err)
@@ -87,7 +88,7 @@ func (s *SQLiteStore) AddRecord(record persistence.Record) (int64, error) {
 // GetAllRecords implements persistence.Store.
 func (s *SQLiteStore) GetAllRecords() ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, live, tokens, timestamp FROM records ORDER BY timestamp, id`,
+		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records ORDER BY timestamp, id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query records: %w", err)
@@ -98,7 +99,7 @@ func (s *SQLiteStore) GetAllRecords() ([]persistence.Record, error) {
 	for rows.Next() {
 		var r persistence.Record
 		var roleStr string
-		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.Tokens, &r.Timestamp); err != nil {
+		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)
 		}
 		r.Role = chat.Role(roleStr)
@@ -126,7 +127,7 @@ func (s *SQLiteStore) GetLiveRecords() ([]persistence.Record, error) {
 	for rows.Next() {
 		var r persistence.Record
 		var roleStr string
-		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.Tokens, &r.Timestamp); err != nil {
+		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)
 		}
 		r.Role = chat.Role(roleStr)
@@ -143,8 +144,8 @@ func (s *SQLiteStore) GetLiveRecords() ([]persistence.Record, error) {
 // UpdateRecord implements persistence.Store.
 func (s *SQLiteStore) UpdateRecord(id int64, record persistence.Record) error {
 	_, err := s.db.Exec(
-		`UPDATE records SET role = ?, content = ?, live = ?, tokens = ?, timestamp = ? WHERE id = ?`,
-		string(record.Role), record.Content, record.Live, record.Tokens, record.Timestamp, id,
+		`UPDATE records SET role = ?, content = ?, live = ?, input_tokens = ?, output_tokens = ?, timestamp = ? WHERE id = ?`,
+		string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp, id,
 	)
 	if err != nil {
 		return fmt.Errorf("update record: %w", err)

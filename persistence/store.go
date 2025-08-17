@@ -2,6 +2,7 @@
 package persistence
 
 import (
+	"sync"
 	"time"
 
 	"github.com/bpowers/go-agent/chat"
@@ -9,12 +10,13 @@ import (
 
 // Record represents a conversation turn that can be persisted.
 type Record struct {
-	ID        int64     `json:"id"`
-	Role      chat.Role `json:"role"`
-	Content   string    `json:"content"`
-	Live      bool      `json:"live"`
-	Tokens    int       `json:"tokens"`
-	Timestamp time.Time `json:"timestamp"`
+	ID           int64     `json:"id"`
+	Role         chat.Role `json:"role"`
+	Content      string    `json:"content"`
+	Live         bool      `json:"live"`
+	InputTokens  int       `json:"input_tokens"`  // Actual tokens from LLM
+	OutputTokens int       `json:"output_tokens"` // Actual tokens from LLM
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // Store defines the interface for persisting session records.
@@ -63,6 +65,7 @@ type SessionMetrics struct {
 
 // MemoryStore provides an in-memory implementation of Store.
 type MemoryStore struct {
+	mu      sync.Mutex
 	records []Record
 	nextID  int64
 	metrics SessionMetrics
@@ -78,6 +81,8 @@ func NewMemoryStore() *MemoryStore {
 
 // AddRecord implements Store.
 func (m *MemoryStore) AddRecord(record Record) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	record.ID = m.nextID
 	m.nextID++
 	m.records = append(m.records, record)
@@ -86,6 +91,8 @@ func (m *MemoryStore) AddRecord(record Record) (int64, error) {
 
 // GetAllRecords implements Store.
 func (m *MemoryStore) GetAllRecords() ([]Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	result := make([]Record, len(m.records))
 	copy(result, m.records)
 	return result, nil
@@ -93,6 +100,8 @@ func (m *MemoryStore) GetAllRecords() ([]Record, error) {
 
 // GetLiveRecords implements Store.
 func (m *MemoryStore) GetLiveRecords() ([]Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var live []Record
 	for _, r := range m.records {
 		if r.Live {
@@ -104,6 +113,8 @@ func (m *MemoryStore) GetLiveRecords() ([]Record, error) {
 
 // UpdateRecord implements Store.
 func (m *MemoryStore) UpdateRecord(id int64, record Record) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i, r := range m.records {
 		if r.ID == id {
 			record.ID = id // Preserve ID
