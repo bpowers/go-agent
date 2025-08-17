@@ -34,7 +34,7 @@ func TestParseFlags(t *testing.T) {
 			expected: &Config{
 				Model:        "gpt-4o-mini",
 				APIKey:       "",
-				Temperature:  0.7,
+				Temperature:  -1,
 				MaxTokens:    0,
 				SystemPrompt: "You are a helpful assistant.",
 				Debug:        false,
@@ -46,7 +46,7 @@ func TestParseFlags(t *testing.T) {
 			expected: &Config{
 				Model:        "claude-3-opus",
 				APIKey:       "",
-				Temperature:  0.7,
+				Temperature:  -1,
 				MaxTokens:    0,
 				SystemPrompt: "You are a helpful assistant.",
 				Debug:        false,
@@ -58,7 +58,7 @@ func TestParseFlags(t *testing.T) {
 			expected: &Config{
 				Model:        "gpt-4o-mini",
 				APIKey:       "test-key-123",
-				Temperature:  0.7,
+				Temperature:  -1,
 				MaxTokens:    0,
 				SystemPrompt: "You are a helpful assistant.",
 				Debug:        false,
@@ -82,7 +82,7 @@ func TestParseFlags(t *testing.T) {
 			expected: &Config{
 				Model:        "gpt-4o-mini",
 				APIKey:       "",
-				Temperature:  0.7,
+				Temperature:  -1,
 				MaxTokens:    2048,
 				SystemPrompt: "You are a helpful assistant.",
 				Debug:        false,
@@ -94,7 +94,7 @@ func TestParseFlags(t *testing.T) {
 			expected: &Config{
 				Model:        "gpt-4o-mini",
 				APIKey:       "",
-				Temperature:  0.7,
+				Temperature:  -1,
 				MaxTokens:    0,
 				SystemPrompt: "You are a coding assistant.",
 				Debug:        false,
@@ -106,7 +106,7 @@ func TestParseFlags(t *testing.T) {
 			expected: &Config{
 				Model:        "gpt-4o-mini",
 				APIKey:       "",
-				Temperature:  0.7,
+				Temperature:  -1,
 				MaxTokens:    0,
 				SystemPrompt: "You are a helpful assistant.",
 				Debug:        true,

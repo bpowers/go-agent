@@ -108,6 +108,19 @@ replace github.com/bpowers/go-agent => ` + repoRoot + `
 		}
 	}
 
+	// Check that outputSchema is included in the generated JSON
+	if !contains(string(content), `"outputSchema"`) {
+		t.Error("generated JSON missing outputSchema field")
+	}
+
+	// Verify the outputSchema contains expected properties
+	if !contains(string(content), `"Revision"`) && !contains(string(content), `"revision"`) {
+		t.Error("outputSchema missing Revision field")
+	}
+	if !contains(string(content), `"Data"`) && !contains(string(content), `"data"`) {
+		t.Error("outputSchema missing Data field")
+	}
+
 	// Run go mod tidy to fetch dependencies after files are generated
 	tidyCmd := exec.Command("go", "mod", "tidy")
 	tidyCmd.Dir = tmpDir
