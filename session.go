@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/persistence"
+	"github.com/bpowers/go-agent/persistence/sqlitestore"
 )
 
 // Session manages conversation lifecycle with automatic context compaction.
@@ -29,6 +31,7 @@ type Session interface {
 
 // Record represents a conversation turn in the session history.
 type Record struct {
+	ID        int64     `json:"id,omitempty"`
 	Role      chat.Role `json:"role"`
 	Content   string    `json:"content"`
 	Live      bool      `json:"live"`   // In active context window
@@ -48,15 +51,66 @@ type SessionMetrics struct {
 	PercentFull     float64   `json:"percent_full"`     // LiveTokens/MaxTokens
 }
 
+// SessionOption configures a Session.
+type SessionOption func(*sessionOptions)
+
+type sessionOptions struct {
+	store persistence.Store
+}
+
+// WithStore sets a custom persistence store for the session.
+// If not provided, an in-memory store is used.
+func WithStore(store persistence.Store) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.store = store
+	}
+}
+
+// WithSQLiteStore configures the session to use SQLite persistence at the given path.
+func WithSQLiteStore(dbPath string) SessionOption {
+	return func(opts *sessionOptions) {
+		store, err := sqlitestore.New(dbPath)
+		if err != nil {
+			// Fall back to memory store if SQLite fails
+			opts.store = persistence.NewMemoryStore()
+		} else {
+			opts.store = store
+		}
+	}
+}
+
 // NewSession creates a new Session with the given client and system prompt.
 func NewSession(client chat.Client, systemPrompt string, initialMsgs ...chat.Message) Session {
+	return NewSessionWithOptions(client, systemPrompt, initialMsgs, nil)
+}
+
+// NewSessionWithOptions creates a new Session with custom options.
+func NewSessionWithOptions(client chat.Client, systemPrompt string, initialMsgs []chat.Message, opts []SessionOption) Session {
 	baseChat := client.NewChat(systemPrompt, initialMsgs...)
 
+	// Apply options
+	var options sessionOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+
+	// Default to memory store if not specified
+	if options.store == nil {
+		options.store = persistence.NewMemoryStore()
+	}
+
+	// Load existing metrics if available
+	metrics, _ := options.store.LoadMetrics()
+	if metrics.CompactionThreshold == 0 {
+		metrics.CompactionThreshold = 0.8
+	}
+
 	// Create initial records from system prompt and initial messages
-	var records []Record
 	if systemPrompt != "" {
 		tokens := estimateTokens(systemPrompt)
-		records = append(records, Record{
+		options.store.AddRecord(persistence.Record{
 			Role:      "system",
 			Content:   systemPrompt,
 			Live:      true,
@@ -67,8 +121,8 @@ func NewSession(client chat.Client, systemPrompt string, initialMsgs ...chat.Mes
 
 	for _, msg := range initialMsgs {
 		tokens := estimateTokens(msg.Content)
-		records = append(records, Record{
-			Role:      msg.Role,
+		options.store.AddRecord(persistence.Record{
+			Role:      chat.Role(msg.Role),
 			Content:   msg.Content,
 			Live:      true,
 			Tokens:    tokens,
@@ -76,24 +130,28 @@ func NewSession(client chat.Client, systemPrompt string, initialMsgs ...chat.Mes
 		})
 	}
 
-	return &memorySession{
+	return &persistentSession{
 		chat:                baseChat,
 		client:              client,
 		systemPrompt:        systemPrompt,
-		records:             records,
-		compactionThreshold: 0.8,
+		store:               options.store,
+		compactionThreshold: metrics.CompactionThreshold,
+		compactionCount:     metrics.CompactionCount,
+		lastCompaction:      metrics.LastCompaction,
+		cumulativeTokens:    metrics.CumulativeTokens,
 		maxTokens:           baseChat.MaxTokens(),
+		tools:               make(map[string]registeredTool),
 	}
 }
 
-// memorySession is the in-memory implementation of Session.
-type memorySession struct {
+// persistentSession is the implementation of Session with pluggable storage.
+type persistentSession struct {
 	chat         chat.Chat
 	client       chat.Client
 	systemPrompt string
+	store        persistence.Store
 
 	mu                  sync.Mutex
-	records             []Record
 	compactionThreshold float64
 	compactionCount     int
 	lastCompaction      time.Time
@@ -111,13 +169,13 @@ type registeredTool struct {
 }
 
 // Message implements chat.Chat
-func (s *memorySession) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
+func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
 	s.mu.Lock()
 
 	// Add user message to records
 	userTokens := estimateTokens(msg.Content)
-	s.records = append(s.records, Record{
-		Role:      msg.Role,
+	s.store.AddRecord(persistence.Record{
+		Role:      chat.Role(msg.Role),
 		Content:   msg.Content,
 		Live:      true,
 		Tokens:    userTokens,
@@ -159,8 +217,8 @@ func (s *memorySession) Message(ctx context.Context, msg chat.Message, opts ...c
 	// Track response
 	s.mu.Lock()
 	responseTokens := estimateTokens(response.Content)
-	s.records = append(s.records, Record{
-		Role:      response.Role,
+	s.store.AddRecord(persistence.Record{
+		Role:      chat.Role(response.Role),
 		Content:   response.Content,
 		Live:      true,
 		Tokens:    responseTokens,
@@ -170,19 +228,22 @@ func (s *memorySession) Message(ctx context.Context, msg chat.Message, opts ...c
 	// Update token usage
 	usage, _ := tempChat.TokenUsage()
 	s.cumulativeTokens += usage.TotalTokens
+
+	// Save metrics
+	s.saveMetrics()
 	s.mu.Unlock()
 
 	return response, nil
 }
 
 // MessageStream implements chat.Chat
-func (s *memorySession) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
+func (s *persistentSession) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
 	s.mu.Lock()
 
 	// Add user message to records
 	userTokens := estimateTokens(msg.Content)
-	s.records = append(s.records, Record{
-		Role:      msg.Role,
+	s.store.AddRecord(persistence.Record{
+		Role:      chat.Role(msg.Role),
 		Content:   msg.Content,
 		Live:      true,
 		Tokens:    userTokens,
@@ -224,8 +285,8 @@ func (s *memorySession) MessageStream(ctx context.Context, msg chat.Message, cal
 	// Track response
 	s.mu.Lock()
 	responseTokens := estimateTokens(response.Content)
-	s.records = append(s.records, Record{
-		Role:      response.Role,
+	s.store.AddRecord(persistence.Record{
+		Role:      chat.Role(response.Role),
 		Content:   response.Content,
 		Live:      true,
 		Tokens:    responseTokens,
@@ -235,13 +296,16 @@ func (s *memorySession) MessageStream(ctx context.Context, msg chat.Message, cal
 	// Update token usage
 	usage, _ := tempChat.TokenUsage()
 	s.cumulativeTokens += usage.TotalTokens
+
+	// Save metrics
+	s.saveMetrics()
 	s.mu.Unlock()
 
 	return response, nil
 }
 
 // History implements chat.Chat
-func (s *memorySession) History() (systemPrompt string, msgs []chat.Message) {
+func (s *persistentSession) History() (systemPrompt string, msgs []chat.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -249,7 +313,7 @@ func (s *memorySession) History() (systemPrompt string, msgs []chat.Message) {
 }
 
 // TokenUsage implements chat.Chat
-func (s *memorySession) TokenUsage() (chat.TokenUsage, error) {
+func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -263,12 +327,12 @@ func (s *memorySession) TokenUsage() (chat.TokenUsage, error) {
 }
 
 // MaxTokens implements chat.Chat
-func (s *memorySession) MaxTokens() int {
+func (s *persistentSession) MaxTokens() int {
 	return s.maxTokens
 }
 
 // RegisterTool implements chat.Chat
-func (s *memorySession) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
+func (s *persistentSession) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
 	s.toolsLock.Lock()
 	defer s.toolsLock.Unlock()
 
@@ -286,7 +350,7 @@ func (s *memorySession) RegisterTool(def chat.ToolDef, fn func(context.Context, 
 }
 
 // DeregisterTool implements chat.Chat
-func (s *memorySession) DeregisterTool(name string) {
+func (s *persistentSession) DeregisterTool(name string) {
 	s.toolsLock.Lock()
 	defer s.toolsLock.Unlock()
 
@@ -295,7 +359,7 @@ func (s *memorySession) DeregisterTool(name string) {
 }
 
 // ListTools implements chat.Chat
-func (s *memorySession) ListTools() []string {
+func (s *persistentSession) ListTools() []string {
 	s.toolsLock.RLock()
 	defer s.toolsLock.RUnlock()
 
@@ -307,41 +371,52 @@ func (s *memorySession) ListTools() []string {
 }
 
 // LiveRecords returns all records marked as live (in active context window).
-func (s *memorySession) LiveRecords() []Record {
+func (s *persistentSession) LiveRecords() []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var live []Record
-	for _, r := range s.records {
-		if r.Live {
-			live = append(live, r)
-		}
+	records, _ := s.store.GetLiveRecords()
+	var result []Record
+	for _, r := range records {
+		result = append(result, Record{
+			ID:        r.ID,
+			Role:      chat.Role(r.Role),
+			Content:   r.Content,
+			Live:      r.Live,
+			Tokens:    r.Tokens,
+			Timestamp: r.Timestamp,
+		})
 	}
-	return live
+	return result
 }
 
 // TotalRecords returns all records (both live and dead).
-func (s *memorySession) TotalRecords() []Record {
+func (s *persistentSession) TotalRecords() []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result := make([]Record, len(s.records))
-	copy(result, s.records)
+	records, _ := s.store.GetAllRecords()
+	var result []Record
+	for _, r := range records {
+		result = append(result, Record{
+			ID:        r.ID,
+			Role:      chat.Role(r.Role),
+			Content:   r.Content,
+			Live:      r.Live,
+			Tokens:    r.Tokens,
+			Timestamp: r.Timestamp,
+		})
+	}
 	return result
 }
 
 // CompactNow manually triggers context compaction.
-func (s *memorySession) CompactNow() error {
+func (s *persistentSession) CompactNow() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Find live records to compact
-	var liveRecords []Record
-	for _, r := range s.records {
-		if r.Live {
-			liveRecords = append(liveRecords, r)
-		}
-	}
+	liveRecords, _ := s.store.GetLiveRecords()
 
 	if len(liveRecords) < 3 { // Need at least a few messages to summarize
 		return nil
@@ -373,39 +448,33 @@ Provide only the summary, no additional commentary.`, conversation.String())
 		return fmt.Errorf("summarization failed: %w", err)
 	}
 
-	// Mark old records as dead
-	for i := range s.records {
-		if s.records[i].Live && i < len(s.records)-2 {
-			s.records[i].Live = false
+	// Mark old records as dead (except last 2)
+	for i, r := range liveRecords {
+		if i < len(liveRecords)-2 {
+			s.store.MarkRecordDead(r.ID)
 		}
 	}
 
 	// Add summary as new record
 	summaryTokens := estimateTokens(summaryMsg.Content)
-	summaryRecord := Record{
+	s.store.AddRecord(persistence.Record{
 		Role:      "system",
 		Content:   fmt.Sprintf("[Previous conversation summary]\n%s", summaryMsg.Content),
 		Live:      true,
 		Tokens:    summaryTokens,
 		Timestamp: time.Now(),
-	}
-
-	// Insert summary before the last 2 messages
-	newRecords := make([]Record, 0, len(s.records)+1)
-	newRecords = append(newRecords, s.records[:len(s.records)-2]...)
-	newRecords = append(newRecords, summaryRecord)
-	newRecords = append(newRecords, s.records[len(s.records)-2:]...)
-	s.records = newRecords
+	})
 
 	// Update compaction metrics
 	s.compactionCount++
 	s.lastCompaction = time.Now()
+	s.saveMetrics()
 
 	return nil
 }
 
 // SetCompactionThreshold sets the threshold for automatic compaction (0.0-1.0).
-func (s *memorySession) SetCompactionThreshold(threshold float64) {
+func (s *persistentSession) SetCompactionThreshold(threshold float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -416,20 +485,17 @@ func (s *memorySession) SetCompactionThreshold(threshold float64) {
 		threshold = 1
 	}
 	s.compactionThreshold = threshold
+	s.saveMetrics()
 }
 
 // SessionMetrics returns usage statistics for the session.
-func (s *memorySession) SessionMetrics() SessionMetrics {
+func (s *persistentSession) SessionMetrics() SessionMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	liveTokens := s.calculateLiveTokens()
-	liveCount := 0
-	for _, r := range s.records {
-		if r.Live {
-			liveCount++
-		}
-	}
+	liveRecords, _ := s.store.GetLiveRecords()
+	allRecords, _ := s.store.GetAllRecords()
 
 	percentFull := 0.0
 	if s.maxTokens > 0 {
@@ -442,15 +508,15 @@ func (s *memorySession) SessionMetrics() SessionMetrics {
 		MaxTokens:       s.maxTokens,
 		CompactionCount: s.compactionCount,
 		LastCompaction:  s.lastCompaction,
-		RecordsLive:     liveCount,
-		RecordsTotal:    len(s.records),
+		RecordsLive:     len(liveRecords),
+		RecordsTotal:    len(allRecords),
 		PercentFull:     percentFull,
 	}
 }
 
 // Helper methods
 
-func (s *memorySession) shouldCompact() bool {
+func (s *persistentSession) shouldCompact() bool {
 	liveTokens := s.calculateLiveTokens()
 	if s.maxTokens <= 0 {
 		return false
@@ -459,25 +525,21 @@ func (s *memorySession) shouldCompact() bool {
 	return percentFull >= s.compactionThreshold
 }
 
-func (s *memorySession) calculateLiveTokens() int {
+func (s *persistentSession) calculateLiveTokens() int {
+	records, _ := s.store.GetLiveRecords()
 	total := 0
-	for _, r := range s.records {
-		if r.Live {
-			total += r.Tokens
-		}
+	for _, r := range records {
+		total += r.Tokens
 	}
 	return total
 }
 
-func (s *memorySession) buildChatHistory() (string, []chat.Message) {
+func (s *persistentSession) buildChatHistory() (string, []chat.Message) {
 	var systemPrompt string
 	var msgs []chat.Message
 
-	for _, r := range s.records {
-		if !r.Live {
-			continue
-		}
-
+	records, _ := s.store.GetLiveRecords()
+	for _, r := range records {
 		if r.Role == "system" {
 			if systemPrompt == "" {
 				systemPrompt = r.Content
@@ -487,13 +549,22 @@ func (s *memorySession) buildChatHistory() (string, []chat.Message) {
 			}
 		} else {
 			msgs = append(msgs, chat.Message{
-				Role:    r.Role,
+				Role:    chat.Role(r.Role),
 				Content: r.Content,
 			})
 		}
 	}
 
 	return systemPrompt, msgs
+}
+
+func (s *persistentSession) saveMetrics() {
+	s.store.SaveMetrics(persistence.SessionMetrics{
+		CompactionCount:     s.compactionCount,
+		LastCompaction:      s.lastCompaction,
+		CumulativeTokens:    s.cumulativeTokens,
+		CompactionThreshold: s.compactionThreshold,
+	})
 }
 
 // estimateTokens provides a rough token count estimate.
