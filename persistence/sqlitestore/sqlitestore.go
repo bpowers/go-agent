@@ -116,7 +116,7 @@ func (s *SQLiteStore) GetAllRecords() ([]persistence.Record, error) {
 // GetLiveRecords implements persistence.Store.
 func (s *SQLiteStore) GetLiveRecords() ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, live, tokens, timestamp FROM records WHERE live = 1 ORDER BY timestamp, id`,
+		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records WHERE live = 1 ORDER BY timestamp, id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query live records: %w", err)

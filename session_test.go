@@ -12,6 +12,12 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
+// estimateTokens provides a simple token count estimate for testing
+func estimateTokens(content string) int {
+	// Simple estimate: ~4 characters per token
+	return len(content) / 4
+}
+
 // mockChat implements chat.Chat for testing
 type mockChat struct {
 	systemPrompt string
@@ -36,10 +42,19 @@ func (m *mockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.O
 	}
 	m.messages = append(m.messages, response)
 
-	// Update token usage
-	m.tokenUsage.InputTokens += estimateTokens(msg.Content)
-	m.tokenUsage.OutputTokens += estimateTokens(response.Content)
-	m.tokenUsage.TotalTokens = m.tokenUsage.InputTokens + m.tokenUsage.OutputTokens
+	// Update token usage - new format with LastMessage and Cumulative
+	inputTokens := estimateTokens(msg.Content)
+	outputTokens := estimateTokens(response.Content)
+	
+	m.tokenUsage.LastMessage = chat.TokenUsageDetails{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
+	
+	m.tokenUsage.Cumulative.InputTokens += inputTokens
+	m.tokenUsage.Cumulative.OutputTokens += outputTokens
+	m.tokenUsage.Cumulative.TotalTokens = m.tokenUsage.Cumulative.InputTokens + m.tokenUsage.Cumulative.OutputTokens
 
 	return response, nil
 }
@@ -70,6 +85,20 @@ func (m *mockChat) MessageStream(ctx context.Context, msg chat.Message, callback
 
 	m.messages = append(m.messages, msg)
 	m.messages = append(m.messages, fullResponse)
+
+	// Update token usage - new format with LastMessage and Cumulative
+	inputTokens := estimateTokens(msg.Content)
+	outputTokens := estimateTokens(response)
+	
+	m.tokenUsage.LastMessage = chat.TokenUsageDetails{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
+	
+	m.tokenUsage.Cumulative.InputTokens += inputTokens
+	m.tokenUsage.Cumulative.OutputTokens += outputTokens
+	m.tokenUsage.Cumulative.TotalTokens = m.tokenUsage.Cumulative.InputTokens + m.tokenUsage.Cumulative.OutputTokens
 
 	return fullResponse, nil
 }
@@ -359,7 +388,7 @@ func TestSessionTokenTracking(t *testing.T) {
 	// Check token usage
 	usage, err := session.TokenUsage()
 	require.NoError(t, err)
-	assert.Greater(t, usage.TotalTokens, 0)
+	assert.Greater(t, usage.Cumulative.TotalTokens, 0)
 
 	// Send another message
 	_, err = session.Message(ctx, chat.Message{
@@ -371,7 +400,7 @@ func TestSessionTokenTracking(t *testing.T) {
 	// Token usage should increase
 	newUsage, err := session.TokenUsage()
 	require.NoError(t, err)
-	assert.Greater(t, newUsage.TotalTokens, usage.TotalTokens)
+	assert.Greater(t, newUsage.Cumulative.TotalTokens, usage.Cumulative.TotalTokens)
 }
 
 func TestSessionRecordTimestamps(t *testing.T) {

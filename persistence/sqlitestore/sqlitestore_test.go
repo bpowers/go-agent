@@ -21,11 +21,12 @@ func TestSQLiteStoreBasics(t *testing.T) {
 
 	// Test adding a record
 	record := persistence.Record{
-		Role:      chat.UserRole,
-		Content:   "Test message",
-		Live:      true,
-		Tokens:    10,
-		Timestamp: time.Now(),
+		Role:         chat.UserRole,
+		Content:      "Test message",
+		Live:         true,
+		InputTokens:  7,
+		OutputTokens: 3,
+		Timestamp:    time.Now(),
 	}
 
 	id, err := store.AddRecord(record)
@@ -53,11 +54,12 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 
 	// Add a record
 	record := persistence.Record{
-		Role:      chat.UserRole,
-		Content:   "Original",
-		Live:      true,
-		Tokens:    5,
-		Timestamp: time.Now(),
+		Role:         chat.UserRole,
+		Content:      "Original",
+		Live:         true,
+		InputTokens:  3,
+		OutputTokens: 2,
+		Timestamp:    time.Now(),
 	}
 
 	id, err := store.AddRecord(record)
@@ -87,11 +89,12 @@ func TestSQLiteStoreMarkLiveDead(t *testing.T) {
 	// Add multiple records
 	for i := 0; i < 3; i++ {
 		record := persistence.Record{
-			Role:      chat.UserRole,
-			Content:   "Message",
-			Live:      true,
-			Tokens:    10,
-			Timestamp: time.Now(),
+			Role:         chat.UserRole,
+			Content:      "Message",
+			Live:         true,
+			InputTokens:  6,
+			OutputTokens: 4,
+			Timestamp:    time.Now(),
 		}
 		_, err := store.AddRecord(record)
 		require.NoError(t, err)
@@ -131,11 +134,12 @@ func TestSQLiteStoreDelete(t *testing.T) {
 	// Add records
 	for i := 0; i < 3; i++ {
 		record := persistence.Record{
-			Role:      chat.UserRole,
-			Content:   "Message",
-			Live:      true,
-			Tokens:    10,
-			Timestamp: time.Now(),
+			Role:         chat.UserRole,
+			Content:      "Message",
+			Live:         true,
+			InputTokens:  6,
+			OutputTokens: 4,
+			Timestamp:    time.Now(),
 		}
 		_, err := store.AddRecord(record)
 		require.NoError(t, err)
@@ -161,11 +165,12 @@ func TestSQLiteStoreClear(t *testing.T) {
 	// Add records
 	for i := 0; i < 5; i++ {
 		record := persistence.Record{
-			Role:      chat.UserRole,
-			Content:   "Message",
-			Live:      true,
-			Tokens:    10,
-			Timestamp: time.Now(),
+			Role:         chat.UserRole,
+			Content:      "Message",
+			Live:         true,
+			InputTokens:  6,
+			OutputTokens: 4,
+			Timestamp:    time.Now(),
 		}
 		_, err := store.AddRecord(record)
 		require.NoError(t, err)
@@ -217,11 +222,12 @@ func TestSQLiteStorePersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	record := persistence.Record{
-		Role:      chat.AssistantRole,
-		Content:   "Persisted message",
-		Live:      true,
-		Tokens:    15,
-		Timestamp: time.Now(),
+		Role:         chat.AssistantRole,
+		Content:      "Persisted message",
+		Live:         true,
+		InputTokens:  9,
+		OutputTokens: 6,
+		Timestamp:    time.Now(),
 	}
 
 	id, err := store1.AddRecord(record)
@@ -272,11 +278,12 @@ func TestSQLiteStoreOrdering(t *testing.T) {
 
 	for i, duration := range times {
 		record := persistence.Record{
-			Role:      chat.UserRole,
-			Content:   string(rune('A' + i)), // A, B, C
-			Live:      true,
-			Tokens:    10,
-			Timestamp: baseTime.Add(duration),
+			Role:         chat.UserRole,
+			Content:      string(rune('A' + i)), // A, B, C
+			Live:         true,
+			InputTokens:  6,
+			OutputTokens: 4,
+			Timestamp:    baseTime.Add(duration),
 		}
 		_, err := store.AddRecord(record)
 		require.NoError(t, err)
