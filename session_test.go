@@ -205,7 +205,8 @@ func TestSessionHistory(t *testing.T) {
 		{Role: chat.AssistantRole, Content: "Initial response"},
 	}
 
-	session := NewSession(client, "System prompt", initialMsgs...)
+	session := NewSession(client, "System prompt",
+		WithInitialMessages(initialMsgs...))
 
 	systemPrompt, msgs := session.History()
 	assert.Equal(t, "System prompt", systemPrompt)
@@ -410,7 +411,8 @@ func TestSessionWithInitialMessages(t *testing.T) {
 		{Role: chat.AssistantRole, Content: "Second response"},
 	}
 
-	session := NewSession(client, "System", initialMsgs...)
+	session := NewSession(client, "System",
+		WithInitialMessages(initialMsgs...))
 
 	// Check initial records
 	records := session.LiveRecords()

@@ -9,7 +9,6 @@ import (
 
 	"github.com/bpowers/go-agent/chat"
 	"github.com/bpowers/go-agent/persistence"
-	"github.com/bpowers/go-agent/persistence/sqlitestore"
 )
 
 // Session manages conversation lifecycle with automatic context compaction.
@@ -31,7 +30,7 @@ type Session interface {
 
 // Record represents a conversation turn in the session history.
 type Record struct {
-	ID        int64     `json:"id,omitempty"`
+	ID        int64     `json:"id,omitzero"`
 	Role      chat.Role `json:"role"`
 	Content   string    `json:"content"`
 	Live      bool      `json:"live"`   // In active context window
@@ -55,7 +54,8 @@ type SessionMetrics struct {
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
-	store persistence.Store
+	store           persistence.Store
+	initialMessages []chat.Message
 }
 
 // WithStore sets a custom persistence store for the session.
@@ -66,28 +66,15 @@ func WithStore(store persistence.Store) SessionOption {
 	}
 }
 
-// WithSQLiteStore configures the session to use SQLite persistence at the given path.
-func WithSQLiteStore(dbPath string) SessionOption {
+// WithInitialMessages sets the initial messages for the session.
+func WithInitialMessages(msgs ...chat.Message) SessionOption {
 	return func(opts *sessionOptions) {
-		store, err := sqlitestore.New(dbPath)
-		if err != nil {
-			// Fall back to memory store if SQLite fails
-			opts.store = persistence.NewMemoryStore()
-		} else {
-			opts.store = store
-		}
+		opts.initialMessages = msgs
 	}
 }
 
-// NewSession creates a new Session with the given client and system prompt.
-func NewSession(client chat.Client, systemPrompt string, initialMsgs ...chat.Message) Session {
-	return NewSessionWithOptions(client, systemPrompt, initialMsgs, nil)
-}
-
-// NewSessionWithOptions creates a new Session with custom options.
-func NewSessionWithOptions(client chat.Client, systemPrompt string, initialMsgs []chat.Message, opts []SessionOption) Session {
-	baseChat := client.NewChat(systemPrompt, initialMsgs...)
-
+// NewSession creates a new Session with the given client, system prompt, and options.
+func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) Session {
 	// Apply options
 	var options sessionOptions
 	for _, opt := range opts {
@@ -107,33 +94,56 @@ func NewSessionWithOptions(client chat.Client, systemPrompt string, initialMsgs 
 		metrics.CompactionThreshold = 0.8
 	}
 
-	// Create initial records from system prompt and initial messages
-	if systemPrompt != "" {
-		tokens := estimateTokens(systemPrompt)
-		options.store.AddRecord(persistence.Record{
-			Role:      "system",
-			Content:   systemPrompt,
-			Live:      true,
-			Tokens:    tokens,
-			Timestamp: time.Now(),
-		})
+	// Check if we have existing records in the store
+	existingRecords, _ := options.store.GetAllRecords()
+	hasExistingRecords := len(existingRecords) > 0
+
+	// If we have existing records, use the system prompt from the store
+	// Otherwise, use the provided system prompt
+	actualSystemPrompt := systemPrompt
+	if hasExistingRecords {
+		// Find the system prompt from existing records
+		for _, r := range existingRecords {
+			if r.Role == "system" {
+				actualSystemPrompt = r.Content
+				break
+			}
+		}
 	}
 
-	for _, msg := range initialMsgs {
-		tokens := estimateTokens(msg.Content)
-		options.store.AddRecord(persistence.Record{
-			Role:      chat.Role(msg.Role),
-			Content:   msg.Content,
-			Live:      true,
-			Tokens:    tokens,
-			Timestamp: time.Now(),
-		})
+	// Create base chat
+	baseChat := client.NewChat(actualSystemPrompt, options.initialMessages...)
+
+	// Only add initial records if the store is empty
+	if !hasExistingRecords {
+		// Create initial records from system prompt and initial messages
+		if systemPrompt != "" {
+			tokens := estimateTokens(systemPrompt)
+			options.store.AddRecord(persistence.Record{
+				Role:      "system",
+				Content:   systemPrompt,
+				Live:      true,
+				Tokens:    tokens,
+				Timestamp: time.Now(),
+			})
+		}
+
+		for _, msg := range options.initialMessages {
+			tokens := estimateTokens(msg.Content)
+			options.store.AddRecord(persistence.Record{
+				Role:      chat.Role(msg.Role),
+				Content:   msg.Content,
+				Live:      true,
+				Tokens:    tokens,
+				Timestamp: time.Now(),
+			})
+		}
 	}
 
 	return &persistentSession{
 		chat:                baseChat,
 		client:              client,
-		systemPrompt:        systemPrompt,
+		systemPrompt:        actualSystemPrompt,
 		store:               options.store,
 		compactionThreshold: metrics.CompactionThreshold,
 		compactionCount:     metrics.CompactionCount,
@@ -158,9 +168,8 @@ type persistentSession struct {
 	cumulativeTokens    int
 	maxTokens           int
 
-	// Tool tracking
-	tools     map[string]registeredTool
-	toolsLock sync.RWMutex
+	// Tool tracking - use single mutex for simplicity as per CLAUDE.md
+	tools map[string]registeredTool
 }
 
 type registeredTool struct {
@@ -170,43 +179,11 @@ type registeredTool struct {
 
 // Message implements chat.Chat
 func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
-	s.mu.Lock()
-
-	// Add user message to records
-	userTokens := estimateTokens(msg.Content)
-	s.store.AddRecord(persistence.Record{
-		Role:      chat.Role(msg.Role),
-		Content:   msg.Content,
-		Live:      true,
-		Tokens:    userTokens,
-		Timestamp: time.Now(),
-	})
-
-	// Check if we need to compact before sending
-	if s.shouldCompact() {
-		s.mu.Unlock()
-		if err := s.CompactNow(); err != nil {
-			return chat.Message{}, fmt.Errorf("auto-compaction failed: %w", err)
-		}
-		s.mu.Lock()
+	// Add user message and check compaction
+	tempChat, err := s.prepareForMessage(msg)
+	if err != nil {
+		return chat.Message{}, err
 	}
-
-	// Build the message history from live records
-	systemPrompt, msgs := s.buildChatHistory()
-	s.mu.Unlock()
-
-	// Recreate chat with current history
-	tempChat := s.client.NewChat(systemPrompt, msgs...)
-
-	// Re-register tools
-	s.toolsLock.RLock()
-	for _, tool := range s.tools {
-		if err := tempChat.RegisterTool(tool.def, tool.fn); err != nil {
-			s.toolsLock.RUnlock()
-			return chat.Message{}, fmt.Errorf("failed to re-register tool %s: %w", tool.def.Name(), err)
-		}
-	}
-	s.toolsLock.RUnlock()
 
 	// Send message
 	response, err := tempChat.Message(ctx, msg, opts...)
@@ -215,30 +192,34 @@ func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts 
 	}
 
 	// Track response
-	s.mu.Lock()
-	responseTokens := estimateTokens(response.Content)
-	s.store.AddRecord(persistence.Record{
-		Role:      chat.Role(response.Role),
-		Content:   response.Content,
-		Live:      true,
-		Tokens:    responseTokens,
-		Timestamp: time.Now(),
-	})
-
-	// Update token usage
-	usage, _ := tempChat.TokenUsage()
-	s.cumulativeTokens += usage.TotalTokens
-
-	// Save metrics
-	s.saveMetrics()
-	s.mu.Unlock()
-
+	s.trackResponse(tempChat, response)
 	return response, nil
 }
 
 // MessageStream implements chat.Chat
 func (s *persistentSession) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
+	// Add user message and check compaction
+	tempChat, err := s.prepareForMessage(msg)
+	if err != nil {
+		return chat.Message{}, err
+	}
+
+	// Send message with streaming
+	response, err := tempChat.MessageStream(ctx, msg, callback, opts...)
+	if err != nil {
+		return response, err
+	}
+
+	// Track response
+	s.trackResponse(tempChat, response)
+	return response, nil
+}
+
+// prepareForMessage adds the user message, checks for compaction, and returns a prepared chat.
+// This method expects the mutex is NOT held and will handle locking internally.
+func (s *persistentSession) prepareForMessage(msg chat.Message) (chat.Chat, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// Add user message to records
 	userTokens := estimateTokens(msg.Content)
@@ -251,39 +232,36 @@ func (s *persistentSession) MessageStream(ctx context.Context, msg chat.Message,
 	})
 
 	// Check if we need to compact before sending
-	if s.shouldCompact() {
-		s.mu.Unlock()
-		if err := s.CompactNow(); err != nil {
-			return chat.Message{}, fmt.Errorf("auto-compaction failed: %w", err)
+	if s.shouldCompactLocked() {
+		// We need to compact, but CompactNow needs the lock too
+		// So we use a locked variant
+		if err := s.compactNowLocked(); err != nil {
+			return nil, fmt.Errorf("auto-compaction failed: %w", err)
 		}
-		s.mu.Lock()
 	}
 
 	// Build the message history from live records
-	systemPrompt, msgs := s.buildChatHistory()
-	s.mu.Unlock()
+	systemPrompt, msgs := s.buildChatHistoryLocked()
 
 	// Recreate chat with current history
 	tempChat := s.client.NewChat(systemPrompt, msgs...)
 
 	// Re-register tools
-	s.toolsLock.RLock()
 	for _, tool := range s.tools {
 		if err := tempChat.RegisterTool(tool.def, tool.fn); err != nil {
-			s.toolsLock.RUnlock()
-			return chat.Message{}, fmt.Errorf("failed to re-register tool %s: %w", tool.def.Name(), err)
+			return nil, fmt.Errorf("failed to re-register tool %s: %w", tool.def.Name(), err)
 		}
 	}
-	s.toolsLock.RUnlock()
 
-	// Send message with streaming
-	response, err := tempChat.MessageStream(ctx, msg, callback, opts...)
-	if err != nil {
-		return response, err
-	}
+	return tempChat, nil
+}
 
-	// Track response
+// trackResponse records the response and updates metrics.
+// This method expects the mutex is NOT held and will handle locking internally.
+func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Message) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	responseTokens := estimateTokens(response.Content)
 	s.store.AddRecord(persistence.Record{
 		Role:      chat.Role(response.Role),
@@ -298,10 +276,7 @@ func (s *persistentSession) MessageStream(ctx context.Context, msg chat.Message,
 	s.cumulativeTokens += usage.TotalTokens
 
 	// Save metrics
-	s.saveMetrics()
-	s.mu.Unlock()
-
-	return response, nil
+	s.saveMetricsLocked()
 }
 
 // History implements chat.Chat
@@ -309,7 +284,7 @@ func (s *persistentSession) History() (systemPrompt string, msgs []chat.Message)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.buildChatHistory()
+	return s.buildChatHistoryLocked()
 }
 
 // TokenUsage implements chat.Chat
@@ -317,7 +292,7 @@ func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	liveTokens := s.calculateLiveTokens()
+	liveTokens := s.calculateLiveTokensLocked()
 
 	return chat.TokenUsage{
 		InputTokens:  liveTokens,
@@ -333,8 +308,8 @@ func (s *persistentSession) MaxTokens() int {
 
 // RegisterTool implements chat.Chat
 func (s *persistentSession) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
-	s.toolsLock.Lock()
-	defer s.toolsLock.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if s.tools == nil {
 		s.tools = make(map[string]registeredTool)
@@ -351,8 +326,8 @@ func (s *persistentSession) RegisterTool(def chat.ToolDef, fn func(context.Conte
 
 // DeregisterTool implements chat.Chat
 func (s *persistentSession) DeregisterTool(name string) {
-	s.toolsLock.Lock()
-	defer s.toolsLock.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	delete(s.tools, name)
 	s.chat.DeregisterTool(name)
@@ -360,8 +335,8 @@ func (s *persistentSession) DeregisterTool(name string) {
 
 // ListTools implements chat.Chat
 func (s *persistentSession) ListTools() []string {
-	s.toolsLock.RLock()
-	defer s.toolsLock.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	var names []string
 	for name := range s.tools {
@@ -415,6 +390,11 @@ func (s *persistentSession) CompactNow() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.compactNowLocked()
+}
+
+// compactNowLocked performs compaction with the mutex already held.
+func (s *persistentSession) compactNowLocked() error {
 	// Find live records to compact
 	liveRecords, _ := s.store.GetLiveRecords()
 
@@ -468,7 +448,7 @@ Provide only the summary, no additional commentary.`, conversation.String())
 	// Update compaction metrics
 	s.compactionCount++
 	s.lastCompaction = time.Now()
-	s.saveMetrics()
+	s.saveMetricsLocked()
 
 	return nil
 }
@@ -485,7 +465,7 @@ func (s *persistentSession) SetCompactionThreshold(threshold float64) {
 		threshold = 1
 	}
 	s.compactionThreshold = threshold
-	s.saveMetrics()
+	s.saveMetricsLocked()
 }
 
 // SessionMetrics returns usage statistics for the session.
@@ -493,7 +473,7 @@ func (s *persistentSession) SessionMetrics() SessionMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	liveTokens := s.calculateLiveTokens()
+	liveTokens := s.calculateLiveTokensLocked()
 	liveRecords, _ := s.store.GetLiveRecords()
 	allRecords, _ := s.store.GetAllRecords()
 
@@ -514,10 +494,11 @@ func (s *persistentSession) SessionMetrics() SessionMetrics {
 	}
 }
 
-// Helper methods
+// Helper methods - all expect mutex to be held
 
-func (s *persistentSession) shouldCompact() bool {
-	liveTokens := s.calculateLiveTokens()
+// shouldCompactLocked checks if compaction is needed (mutex must be held).
+func (s *persistentSession) shouldCompactLocked() bool {
+	liveTokens := s.calculateLiveTokensLocked()
 	if s.maxTokens <= 0 {
 		return false
 	}
@@ -525,7 +506,8 @@ func (s *persistentSession) shouldCompact() bool {
 	return percentFull >= s.compactionThreshold
 }
 
-func (s *persistentSession) calculateLiveTokens() int {
+// calculateLiveTokensLocked calculates live token count (mutex must be held).
+func (s *persistentSession) calculateLiveTokensLocked() int {
 	records, _ := s.store.GetLiveRecords()
 	total := 0
 	for _, r := range records {
@@ -534,7 +516,8 @@ func (s *persistentSession) calculateLiveTokens() int {
 	return total
 }
 
-func (s *persistentSession) buildChatHistory() (string, []chat.Message) {
+// buildChatHistoryLocked builds the chat history (mutex must be held).
+func (s *persistentSession) buildChatHistoryLocked() (string, []chat.Message) {
 	var systemPrompt string
 	var msgs []chat.Message
 
@@ -558,7 +541,8 @@ func (s *persistentSession) buildChatHistory() (string, []chat.Message) {
 	return systemPrompt, msgs
 }
 
-func (s *persistentSession) saveMetrics() {
+// saveMetricsLocked saves metrics to store (mutex must be held).
+func (s *persistentSession) saveMetricsLocked() {
 	s.store.SaveMetrics(persistence.SessionMetrics{
 		CompactionCount:     s.compactionCount,
 		LastCompaction:      s.lastCompaction,
