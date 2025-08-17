@@ -1,0 +1,6 @@
+/.idea
+*~
+/examples/agent-cli/agent-cli
+/.gocache
+/third_party
+*.test
