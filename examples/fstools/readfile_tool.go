@@ -5,44 +5,28 @@ package fstools
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/bpowers/go-agent/chat"
 )
 
+// readFileToolDefType implements chat.ToolDef for the ReadFile function
+type readFileToolDefType struct{}
+
+func (readFileToolDefType) MCPJsonSchema() string {
+	return `{"name":"read_file","description":"Reads a file from the test filesystem","inputSchema":{"type":"object","properties":{"fileName":{"type":"string"}},"required":["fileName"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"content":{"type":"string"},"error":{"type":["string","null"]}},"required":["content","error"],"additionalProperties":false}}`
+}
+
+func (readFileToolDefType) Name() string {
+	return "read_file"
+}
+
+func (readFileToolDefType) Description() string {
+	return "Reads a file from the test filesystem"
+}
+
 // ReadFileToolDef is the MCP tool definition for the ReadFile function
-const ReadFileToolDef = `{
-  "name": "read_file",
-  "description": "Function ReadFile",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "fileName": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "fileName"
-    ],
-    "additionalProperties": false
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "content": {
-        "type": "string"
-      },
-      "error": {
-        "type": [
-          "string",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "content",
-      "error"
-    ],
-    "additionalProperties": false
-  }
-}`
+var ReadFileToolDef chat.ToolDef = readFileToolDefType{}
+
 
 // ReadFileTool is a generic wrapper that accepts JSON input and returns JSON output
 func ReadFileTool(ctx context.Context, input string) string {

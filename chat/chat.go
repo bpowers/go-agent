@@ -40,6 +40,16 @@ type ModelTokenLimits struct {
 	TokenLimits
 }
 
+// ToolDef represents a tool definition that can be registered with an LLM.
+type ToolDef interface {
+	// MCPJsonSchema returns the MCP JSON schema for the tool as a compact JSON string
+	MCPJsonSchema() string
+	// Name returns the tool's name
+	Name() string
+	// Description returns the tool's description
+	Description() string
+}
+
 // Chat is the stateful interface used to interact with an LLM in a turn-based way (including single-turn use).
 type Chat interface {
 	// Message sends a new message, as well as all previous messages, to an LLM returning the result.
@@ -59,10 +69,9 @@ type Chat interface {
 
 	// RegisterTool registers a tool with its MCP definition and handler function.
 	// Tools enable LLMs to perform actions by calling registered functions during conversation.
-	// The def parameter should be a JSON string containing name, description, and inputSchema fields
-	// following the Model Context Protocol (MCP) specification. The handler function receives
-	// a context (which may contain request-specific state) and the tool arguments as a JSON string,
-	// and returns a JSON string response.
+	// The def parameter provides the tool's name, description, and MCP JSON schema.
+	// The handler function receives a context (which may contain request-specific state)
+	// and the tool arguments as a JSON string, and returns a JSON string response.
 	//
 	// All LLM providers (OpenAI, Claude, Gemini) support multi-round tool calling, where the model
 	// can request multiple tools in sequence, using outputs from earlier tools as inputs to later ones.
@@ -74,7 +83,7 @@ type Chat interface {
 	// allowing tools to access request-scoped resources like filesystems or databases.
 	// OpenAI's Responses API does not support tools and will automatically fall back to ChatCompletions
 	// when tools are registered.
-	RegisterTool(def string, fn func(context.Context, string) string) error
+	RegisterTool(def ToolDef, fn func(context.Context, string) string) error
 	// DeregisterTool removes a tool by name
 	DeregisterTool(name string)
 	// ListTools returns the names of all registered tools

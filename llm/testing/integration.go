@@ -9,6 +9,25 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
+// testToolDef is a simple implementation of chat.ToolDef for testing
+type testToolDef struct {
+	name        string
+	description string
+	jsonSchema  string
+}
+
+func (t *testToolDef) MCPJsonSchema() string {
+	return t.jsonSchema
+}
+
+func (t *testToolDef) Name() string {
+	return t.name
+}
+
+func (t *testToolDef) Description() string {
+	return t.description
+}
+
 // IntegrationConfig holds configuration for integration tests
 type IntegrationConfig struct {
 	Provider    string // "openai", "claude", "gemini"
@@ -203,20 +222,24 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
 
 	// Register a simple echo tool
-	toolDef := `{
-		"name": "echo",
-		"description": "Echo back the provided message",
-		"inputSchema": {
-			"type": "object",
-			"properties": {
-				"message": {
-					"type": "string",
-					"description": "The message to echo back"
-				}
-			},
-			"required": ["message"]
-		}
-	}`
+	toolDef := &testToolDef{
+		name:        "echo",
+		description: "Echo back the provided message",
+		jsonSchema: `{
+			"name": "echo",
+			"description": "Echo back the provided message",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"message": {
+						"type": "string",
+						"description": "The message to echo back"
+					}
+				},
+				"required": ["message"]
+			}
+		}`,
+	}
 
 	toolCalled := false
 	err := chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {

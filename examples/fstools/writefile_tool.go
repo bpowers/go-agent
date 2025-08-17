@@ -5,48 +5,28 @@ package fstools
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/bpowers/go-agent/chat"
 )
 
+// writeFileToolDefType implements chat.ToolDef for the WriteFile function
+type writeFileToolDefType struct{}
+
+func (writeFileToolDefType) MCPJsonSchema() string {
+	return `{"name":"write_file","description":"Writes a file to the test filesystem","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"fileName":{"type":"string"}},"required":["fileName","content"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"success":{"type":"boolean"}},"required":["success","error"],"additionalProperties":false}}`
+}
+
+func (writeFileToolDefType) Name() string {
+	return "write_file"
+}
+
+func (writeFileToolDefType) Description() string {
+	return "Writes a file to the test filesystem"
+}
+
 // WriteFileToolDef is the MCP tool definition for the WriteFile function
-const WriteFileToolDef = `{
-  "name": "write_file",
-  "description": "Function WriteFile",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "content": {
-        "type": "string"
-      },
-      "fileName": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "fileName",
-      "content"
-    ],
-    "additionalProperties": false
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "error": {
-        "type": [
-          "string",
-          "null"
-        ]
-      },
-      "success": {
-        "type": "boolean"
-      }
-    },
-    "required": [
-      "success",
-      "error"
-    ],
-    "additionalProperties": false
-  }
-}`
+var WriteFileToolDef chat.ToolDef = writeFileToolDefType{}
+
 
 // WriteFileTool is a generic wrapper that accepts JSON input and returns JSON output
 func WriteFileTool(ctx context.Context, input string) string {

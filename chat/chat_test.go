@@ -320,7 +320,7 @@ func (m *MockChat) MaxTokens() int {
 }
 
 // RegisterTool registers a mock tool
-func (m *MockChat) RegisterTool(def string, fn func(context.Context, string) string) error {
+func (m *MockChat) RegisterTool(def ToolDef, fn func(context.Context, string) string) error {
 	return nil
 }
 

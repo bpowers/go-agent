@@ -53,9 +53,19 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
 	}
 
 	// Create go.mod for the test
+	// Get the absolute path to the repo root (3 levels up from this test file)
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("failed to get repo root: %v", err)
+	}
 	goModContent := `module testpkg
 
-go 1.21`
+go 1.21
+
+require github.com/bpowers/go-agent v0.0.0
+
+replace github.com/bpowers/go-agent => ` + repoRoot + `
+`
 	goModFile := filepath.Join(tmpDir, "go.mod")
 	if err := os.WriteFile(goModFile, []byte(goModContent), 0o644); err != nil {
 		t.Fatalf("failed to write go.mod: %v", err)
@@ -96,6 +106,14 @@ go 1.21`
 		if !contains(string(content), elem) {
 			t.Errorf("generated file missing expected element: %s", elem)
 		}
+	}
+
+	// Run go mod tidy to fetch dependencies after files are generated
+	tidyCmd := exec.Command("go", "mod", "tidy")
+	tidyCmd.Dir = tmpDir
+	if output, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Logf("go mod tidy output: %s", output)
+		// Don't fail here, the test compilation might still work
 	}
 
 	// Test that it compiles
@@ -167,12 +185,30 @@ func GetSystemInfo(ctx context.Context) GetSystemInfoResult {
 	}
 
 	// Create go.mod for the test
+	// Get the absolute path to the repo root (3 levels up from this test file)
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("failed to get repo root: %v", err)
+	}
 	goModContent := `module testpkg
 
-go 1.21`
+go 1.21
+
+require github.com/bpowers/go-agent v0.0.0
+
+replace github.com/bpowers/go-agent => ` + repoRoot + `
+`
 	goModFile := filepath.Join(tmpDir, "go.mod")
 	if err := os.WriteFile(goModFile, []byte(goModContent), 0o644); err != nil {
 		t.Fatalf("failed to write go.mod: %v", err)
+	}
+
+	// Run go mod tidy to fetch dependencies
+	tidyCmd := exec.Command("go", "mod", "tidy")
+	tidyCmd.Dir = tmpDir
+	if output, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Logf("go mod tidy output: %s", output)
+		// Don't fail here, the test compilation might still work
 	}
 
 	// Run funcschema to generate the wrapper
@@ -221,6 +257,14 @@ go 1.21`
 		if contains(string(content), elem) {
 			t.Errorf("generated file should not contain: %s", elem)
 		}
+	}
+
+	// Run go mod tidy to fetch dependencies after files are generated
+	tidyCmd2 := exec.Command("go", "mod", "tidy")
+	tidyCmd2.Dir = tmpDir
+	if output, err := tidyCmd2.CombinedOutput(); err != nil {
+		t.Logf("go mod tidy output: %s", output)
+		// Don't fail here, the test compilation might still work
 	}
 
 	// Test that it compiles
