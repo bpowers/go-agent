@@ -116,7 +116,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 				_, _ = fmt.Fprintln(output, "\nGoodbye!")
 
 				if usage, err := chatSession.TokenUsage(); err == nil {
-					_, _ = fmt.Fprintf(output, "usage: %d input tokens, %d output tokens, %d cached tokens", usage.InputTokens, usage.OutputTokens, usage.CachedTokens)
+					_, _ = fmt.Fprintf(output, "usage: %d input tokens, %d output tokens, %d cached tokens", usage.Cumulative.InputTokens, usage.Cumulative.OutputTokens, usage.Cumulative.CachedTokens)
 				} else {
 					_, _ = fmt.Fprintf(output, "error getting usage info: %v", err)
 				}

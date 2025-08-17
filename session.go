@@ -273,7 +273,7 @@ func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Mess
 
 	// Update token usage
 	usage, _ := tempChat.TokenUsage()
-	s.cumulativeTokens += usage.TotalTokens
+	s.cumulativeTokens += usage.LastMessage.TotalTokens
 
 	// Save metrics
 	s.saveMetricsLocked()
@@ -295,9 +295,16 @@ func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
 	liveTokens := s.calculateLiveTokensLocked()
 
 	return chat.TokenUsage{
-		InputTokens:  liveTokens,
-		OutputTokens: 0, // Not tracked separately at session level
-		TotalTokens:  s.cumulativeTokens,
+		LastMessage: chat.TokenUsageDetails{
+			InputTokens:  0, // Not tracked at session level
+			OutputTokens: 0, // Not tracked at session level
+			TotalTokens:  0, // Not tracked at session level
+		},
+		Cumulative: chat.TokenUsageDetails{
+			InputTokens:  liveTokens,
+			OutputTokens: 0, // Not tracked separately at session level
+			TotalTokens:  s.cumulativeTokens,
+		},
 	}, nil
 }
 

@@ -152,8 +152,9 @@ type chatClient struct {
 	msgs []chat.Message
 
 	// Token tracking
-	cumulativeUsage chat.TokenUsage
-	maxTokens       int
+	cumulativeUsage  chat.TokenUsageDetails
+	lastMessageUsage chat.TokenUsageDetails
+	maxTokens        int
 
 	// Tool support
 	tools     map[string]common.RegisteredTool
@@ -403,11 +404,12 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		case "response.completed":
 			// Response is complete - extract usage information
 			if event.JSON.Response.Valid() && event.Response.JSON.Usage.Valid() {
-				usage := chat.TokenUsage{
+				usage := chat.TokenUsageDetails{
 					InputTokens:  int(event.Response.Usage.InputTokens),
 					OutputTokens: int(event.Response.Usage.OutputTokens),
 					TotalTokens:  int(event.Response.Usage.TotalTokens),
 				}
+				c.lastMessageUsage = usage
 				c.cumulativeUsage.InputTokens += usage.InputTokens
 				c.cumulativeUsage.OutputTokens += usage.OutputTokens
 				c.cumulativeUsage.TotalTokens += usage.TotalTokens
@@ -570,11 +572,12 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 		// Check for usage information (provided in the final chunk when stream_options.include_usage is true)
 		if chunk.JSON.Usage.Valid() && chunk.Usage.PromptTokens > 0 {
 			// This is the final usage chunk
-			usage := chat.TokenUsage{
+			usage := chat.TokenUsageDetails{
 				InputTokens:  int(chunk.Usage.PromptTokens),
 				OutputTokens: int(chunk.Usage.CompletionTokens),
 				TotalTokens:  int(chunk.Usage.TotalTokens),
 			}
+			c.lastMessageUsage = usage
 			c.cumulativeUsage.InputTokens += usage.InputTokens
 			c.cumulativeUsage.OutputTokens += usage.OutputTokens
 			c.cumulativeUsage.TotalTokens += usage.TotalTokens
@@ -821,11 +824,12 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 
 				// Check for usage information in retry path
 				if chunk.JSON.Usage.Valid() && chunk.Usage.PromptTokens > 0 {
-					usage := chat.TokenUsage{
+					usage := chat.TokenUsageDetails{
 						InputTokens:  int(chunk.Usage.PromptTokens),
 						OutputTokens: int(chunk.Usage.CompletionTokens),
 						TotalTokens:  int(chunk.Usage.TotalTokens),
 					}
+					c.lastMessageUsage = usage
 					c.cumulativeUsage.InputTokens += usage.InputTokens
 					c.cumulativeUsage.OutputTokens += usage.OutputTokens
 					c.cumulativeUsage.TotalTokens += usage.TotalTokens
@@ -1065,11 +1069,12 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 			// Check for usage information
 			if chunk.JSON.Usage.Valid() && chunk.Usage.PromptTokens > 0 {
-				usage := chat.TokenUsage{
+				usage := chat.TokenUsageDetails{
 					InputTokens:  int(chunk.Usage.PromptTokens),
 					OutputTokens: int(chunk.Usage.CompletionTokens),
 					TotalTokens:  int(chunk.Usage.TotalTokens),
 				}
+				c.lastMessageUsage = usage
 				c.cumulativeUsage.InputTokens += usage.InputTokens
 				c.cumulativeUsage.OutputTokens += usage.OutputTokens
 				c.cumulativeUsage.TotalTokens += usage.TotalTokens
@@ -1275,11 +1280,14 @@ func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {
 	return c.systemPrompt, msgs
 }
 
-// TokenUsage returns the token usage for the last message exchange
+// TokenUsage returns token usage for both the last message and cumulative session
 func (c *chatClient) TokenUsage() (chat.TokenUsage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.cumulativeUsage, nil
+	return chat.TokenUsage{
+		LastMessage: c.lastMessageUsage,
+		Cumulative:  c.cumulativeUsage,
+	}, nil
 }
 
 // MaxTokens returns the maximum token limit for the model
