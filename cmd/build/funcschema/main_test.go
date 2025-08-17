@@ -328,6 +328,17 @@ func SimpleFunc(req EmptyRequest) SimpleResult { return SimpleResult{Value: "tes
 				if s.Properties["Error"] == nil {
 					t.Error("expected Error property")
 				}
+				// Error should be nullable
+				typeArr, ok := s.Properties["Error"].Type.([]interface{})
+				if !ok {
+					t.Errorf("expected type array for nullable Error, got %T", s.Properties["Error"].Type)
+				} else if len(typeArr) != 2 || typeArr[0] != "string" || typeArr[1] != "null" {
+					t.Errorf("expected [\"string\", \"null\"] for Error, got %v", typeArr)
+				}
+				// All fields should be required for OpenAI compatibility
+				if len(s.Required) != 2 {
+					t.Errorf("expected 2 required fields, got %v", s.Required)
+				}
 			},
 		},
 		{
@@ -353,6 +364,79 @@ func StructReturn(req Request) Result { return Result{} }`,
 				}
 				if s.Properties["Error"] == nil {
 					t.Error("expected Error property")
+				}
+			},
+		},
+		{
+			name: "nested struct return",
+			code: `package test
+import "context"
+type NestedData struct {
+	Count int
+	Items []string
+}
+type NestedResult struct {
+	Data  NestedData
+	Error *string
+}
+func NestedFunc(ctx context.Context) NestedResult { return NestedResult{} }`,
+			funcName: "NestedFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if s.Type != schema.Object {
+					t.Errorf("expected object type, got %v", s.Type)
+				}
+				if s.Properties["Data"] == nil {
+					t.Error("expected 'Data' property")
+				}
+				dataSchema := s.Properties["Data"]
+				if dataSchema.Type != schema.Object {
+					t.Errorf("expected Data to be object, got %v", dataSchema.Type)
+				}
+				if dataSchema.Properties["Count"] == nil {
+					t.Error("expected 'Count' property in Data")
+				}
+				if dataSchema.Properties["Items"] == nil {
+					t.Error("expected 'Items' property in Data")
+				}
+				itemsSchema := dataSchema.Properties["Items"]
+				if itemsSchema.Type != schema.Array {
+					t.Errorf("expected Items to be array, got %v", itemsSchema.Type)
+				}
+			},
+		},
+		{
+			name: "array return type",
+			code: `package test
+import "context"
+type FileInfo struct {
+	Name string
+	Size int64
+}
+type ListResult struct {
+	Files []FileInfo
+	Error *string
+}
+func ListFunc(ctx context.Context) ListResult { return ListResult{} }`,
+			funcName: "ListFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if s.Properties["Files"] == nil {
+					t.Error("expected 'Files' property")
+				}
+				filesSchema := s.Properties["Files"]
+				if filesSchema.Type != schema.Array {
+					t.Errorf("expected Files to be array, got %v", filesSchema.Type)
+				}
+				if filesSchema.Items == nil {
+					t.Error("expected Files array to have items schema")
+				}
+				if filesSchema.Items.Type != schema.Object {
+					t.Errorf("expected Files items to be objects, got %v", filesSchema.Items.Type)
+				}
+				if filesSchema.Items.Properties["Name"] == nil {
+					t.Error("expected 'Name' property in FileInfo")
+				}
+				if filesSchema.Items.Properties["Size"] == nil {
+					t.Error("expected 'Size' property in FileInfo")
 				}
 			},
 		},
