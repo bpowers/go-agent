@@ -687,27 +687,40 @@ func extractDescription(fn *ast.FuncDecl, funcName string) string {
 		return fmt.Sprintf("Function %s", funcName)
 	}
 
-	// Get the first line of the doc comment
-	firstLine := fn.Doc.List[0].Text
-	// Remove the comment prefix (// or /*)
-	if strings.HasPrefix(firstLine, "//") {
-		firstLine = strings.TrimSpace(strings.TrimPrefix(firstLine, "//"))
-	} else if strings.HasPrefix(firstLine, "/*") {
-		firstLine = strings.TrimSpace(strings.TrimPrefix(firstLine, "/*"))
-		firstLine = strings.TrimSuffix(firstLine, "*/")
+	// Get the whole doc comment
+	var docLines []string
+	for _, comment := range fn.Doc.List {
+		text := comment.Text
+		// Remove the comment prefix (// or /*)
+		if strings.HasPrefix(text, "//") {
+			text = strings.TrimSpace(strings.TrimPrefix(text, "//"))
+		} else if strings.HasPrefix(text, "/*") {
+			text = strings.TrimSpace(strings.TrimPrefix(text, "/*"))
+			text = strings.TrimSuffix(text, "*/")
+		}
+		if text != "" {
+			docLines = append(docLines, text)
+		}
 	}
 
+	if len(docLines) == 0 {
+		return fmt.Sprintf("Function %s", funcName)
+	}
+
+	// Join all lines
+	fullDoc := strings.Join(docLines, " ")
+
 	// If the comment starts with the function name, remove it and capitalize the next word
-	if strings.HasPrefix(firstLine, funcName+" ") {
-		remainder := strings.TrimPrefix(firstLine, funcName+" ")
+	if strings.HasPrefix(fullDoc, funcName+" ") {
+		remainder := strings.TrimPrefix(fullDoc, funcName+" ")
 		if len(remainder) > 0 {
 			// Capitalize the first letter
-			firstLine = strings.ToUpper(remainder[:1]) + remainder[1:]
+			fullDoc = strings.ToUpper(remainder[:1]) + remainder[1:]
 		}
-	} else if firstLine == "" || firstLine == funcName {
+	} else if fullDoc == "" || fullDoc == funcName {
 		// If just the function name or empty, use default
 		return fmt.Sprintf("Function %s", funcName)
 	}
 
-	return firstLine
+	return fullDoc
 }
