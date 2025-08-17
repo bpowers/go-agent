@@ -16,7 +16,7 @@ Building LLM-powered applications requires dealing with multiple providers, each
 ```
 examples/           # Example applications
   agent-cli/        # Command-line chat interface (displays tool invocations)
-llm/                # LLM provider implementationsq
+llm/                # LLM provider implementations
   openai/           # OpenAI (GPT models) - supports both Responses and ChatCompletions APIs
   claude/           # Anthropic Claude models
   gemini/           # Google Gemini models

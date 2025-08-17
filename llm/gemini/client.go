@@ -346,23 +346,16 @@ func (c *chatClient) MaxTokens() int {
 }
 
 // RegisterTool registers a tool with its MCP definition and handler function
-func (c *chatClient) RegisterTool(def string, fn func(context.Context, string) string) error {
+func (c *chatClient) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
 	c.toolsLock.Lock()
 	defer c.toolsLock.Unlock()
 
-	// Parse the definition to extract the tool name
-	var toolDef struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(def), &toolDef); err != nil {
-		return fmt.Errorf("failed to parse tool definition: %w", err)
+	toolName := def.Name()
+	if toolName == "" {
+		return fmt.Errorf("tool definition missing name")
 	}
 
-	if toolDef.Name == "" {
-		return fmt.Errorf("tool definition missing name field")
-	}
-
-	c.tools[toolDef.Name] = common.RegisteredTool{
+	c.tools[toolName] = common.RegisteredTool{
 		Definition: def,
 		Handler:    fn,
 	}
@@ -390,14 +383,14 @@ func (c *chatClient) ListTools() []string {
 }
 
 // mcpToGeminiFunctionDeclaration converts an MCP tool definition to Gemini FunctionDeclaration format
-func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef string) (*genai.FunctionDeclaration, error) {
+func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef chat.ToolDef) (*genai.FunctionDeclaration, error) {
+	// Parse the MCP JSON schema to extract the inputSchema
 	var mcp struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
 		InputSchema json.RawMessage `json:"inputSchema"`
 	}
 
-	if err := json.Unmarshal([]byte(mcpDef), &mcp); err != nil {
+	jsonSchema := mcpDef.MCPJsonSchema()
+	if err := json.Unmarshal([]byte(jsonSchema), &mcp); err != nil {
 		return nil, fmt.Errorf("failed to parse MCP definition: %w", err)
 	}
 
@@ -463,8 +456,8 @@ func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef string) (*genai.Funct
 	}
 
 	return &genai.FunctionDeclaration{
-		Name:        mcp.Name,
-		Description: mcp.Description,
+		Name:        mcpDef.Name(),
+		Description: mcpDef.Description(),
 		Parameters:  parameters,
 	}, nil
 }

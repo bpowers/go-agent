@@ -5,63 +5,33 @@ package fstools
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/bpowers/go-agent/chat"
 )
 
+// readDirToolDefType implements chat.ToolDef for the ReadDir function
+type readDirToolDefType struct{}
+
+func (readDirToolDefType) MCPJsonSchema() string {
+	return `{"name":"read_dir","description":"Reads the root directory of the test filesystem","inputSchema":{"type":"object","properties":{},"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"files":{"type":"array","items":{"type":"object","properties":{"is_dir":{"type":"boolean"},"name":{"type":"string"},"size":{"type":"integer"}},"required":["name","is_dir","size"],"additionalProperties":false}}},"required":["files","error"],"additionalProperties":false}}`
+}
+
+func (readDirToolDefType) Name() string {
+	return "read_dir"
+}
+
+func (readDirToolDefType) Description() string {
+	return "Reads the root directory of the test filesystem"
+}
+
 // ReadDirToolDef is the MCP tool definition for the ReadDir function
-const ReadDirToolDef = `{
-  "name": "read_dir",
-  "description": "Function ReadDir",
-  "inputSchema": {
-    "type": "object",
-    "properties": {},
-    "additionalProperties": false,
-    "$schema": "http://json-schema.org/draft-07/schema#"
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "error": {
-        "type": [
-          "string",
-          "null"
-        ]
-      },
-      "files": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "is_dir": {
-              "type": "boolean"
-            },
-            "name": {
-              "type": "string"
-            },
-            "size": {
-              "type": "integer"
-            }
-          },
-          "required": [
-            "name",
-            "is_dir",
-            "size"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    "required": [
-      "files",
-      "error"
-    ],
-    "additionalProperties": false
-  }
-}`
+var ReadDirToolDef chat.ToolDef = readDirToolDefType{}
+
 
 // ReadDirTool is a generic wrapper that accepts JSON input and returns JSON output
 func ReadDirTool(ctx context.Context, input string) string {
 	// No input parameters needed, ignore input JSON
-
+	
 	// Call the actual function with context only
 	result := ReadDir(ctx)
 
