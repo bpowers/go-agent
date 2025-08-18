@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -271,8 +272,23 @@ func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Mess
 	defer s.mu.Unlock()
 
 	// Get actual token usage from the LLM
-	usage, _ := tempChat.TokenUsage()
+	usage, err := tempChat.TokenUsage()
+	if err != nil {
+		log.Printf("Warning: Failed to get token usage from LLM: %v", err)
+	}
 	s.lastUsage = usage.LastMessage
+
+	// Log if we're missing expected token values
+	if usage.LastMessage.InputTokens == 0 {
+		log.Printf("Warning: LLM returned 0 input tokens for message")
+	}
+	if usage.LastMessage.OutputTokens == 0 {
+		log.Printf("Warning: LLM returned 0 output tokens for response")
+	}
+	if usage.LastMessage.TotalTokens == 0 {
+		log.Printf("Warning: LLM returned 0 total tokens for exchange")
+	}
+
 	s.cumulativeTokens += usage.LastMessage.TotalTokens
 
 	// Update the user message with actual input tokens
