@@ -39,14 +39,14 @@ type Record struct {
 
 // SessionMetrics provides usage statistics for the session.
 type SessionMetrics struct {
-	TotalTokens     int       `json:"total_tokens"`     // Cumulative tokens used
-	LiveTokens      int       `json:"live_tokens"`      // Tokens in active window
-	MaxTokens       int       `json:"max_tokens"`       // Model's max context size
-	CompactionCount int       `json:"compaction_count"` // Number of compactions
-	LastCompaction  time.Time `json:"last_compaction"`  // When last compacted
-	RecordsLive     int       `json:"records_live"`     // Number of live records
-	RecordsTotal    int       `json:"records_total"`    // Total records (live + dead)
-	PercentFull     float64   `json:"percent_full"`     // LiveTokens/MaxTokens
+	CumulativeTokens int       `json:"cumulative_tokens"` // Total tokens used across all messages
+	LiveTokens       int       `json:"live_tokens"`       // Tokens in active context window
+	MaxTokens        int       `json:"max_tokens"`        // Model's max context size
+	CompactionCount  int       `json:"compaction_count"`  // Number of compactions performed
+	LastCompaction   time.Time `json:"last_compaction"`   // When last compacted
+	RecordsLive      int       `json:"records_live"`      // Number of live records
+	RecordsTotal     int       `json:"records_total"`     // Total records (live + dead)
+	PercentFull      float64   `json:"percent_full"`      // LiveTokens/MaxTokens ratio
 }
 
 // SessionOption configures a Session.
@@ -328,16 +328,13 @@ func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	liveTokens := s.calculateLiveTokensLocked()
-
+	// Return actual usage information:
+	// - LastMessage: The token counts from the most recent exchange
+	// - Cumulative: Total tokens used across all messages in the session
 	return chat.TokenUsage{
-		LastMessage: chat.TokenUsageDetails{
-			InputTokens:  0, // Not tracked at session level
-			OutputTokens: 0, // Not tracked at session level
-			TotalTokens:  0, // Not tracked at session level
-		},
+		LastMessage: s.lastUsage,
 		Cumulative: chat.TokenUsageDetails{
-			InputTokens:  liveTokens,
+			InputTokens:  0, // Not tracked separately at session level
 			OutputTokens: 0, // Not tracked separately at session level
 			TotalTokens:  s.cumulativeTokens,
 		},
@@ -510,7 +507,7 @@ func (s *persistentSession) SetCompactionThreshold(threshold float64) {
 	s.saveMetricsLocked()
 }
 
-// SessionMetrics returns usage statistics for the session.
+// Metrics returns usage statistics for the session.
 func (s *persistentSession) Metrics() SessionMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -525,14 +522,14 @@ func (s *persistentSession) Metrics() SessionMetrics {
 	}
 
 	return SessionMetrics{
-		TotalTokens:     s.cumulativeTokens,
-		LiveTokens:      liveTokens,
-		MaxTokens:       s.maxTokens,
-		CompactionCount: s.compactionCount,
-		LastCompaction:  s.lastCompaction,
-		RecordsLive:     len(liveRecords),
-		RecordsTotal:    len(allRecords),
-		PercentFull:     percentFull,
+		CumulativeTokens: s.cumulativeTokens,
+		LiveTokens:       liveTokens,
+		MaxTokens:        s.maxTokens,
+		CompactionCount:  s.compactionCount,
+		LastCompaction:   s.lastCompaction,
+		RecordsLive:      len(liveRecords),
+		RecordsTotal:     len(allRecords),
+		PercentFull:      percentFull,
 	}
 }
 

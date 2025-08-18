@@ -150,7 +150,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 				// Show session metrics
 				metrics := session.Metrics()
 				_, _ = fmt.Fprintf(output, "\nSession Stats:\n")
-				_, _ = fmt.Fprintf(output, "  Total tokens used: %d\n", metrics.TotalTokens)
+				_, _ = fmt.Fprintf(output, "  Total tokens used: %d\n", metrics.CumulativeTokens)
 				_, _ = fmt.Fprintf(output, "  Live context: %d/%d tokens (%.1f%% full)\n",
 					metrics.LiveTokens, metrics.MaxTokens, metrics.PercentFull*100)
 				_, _ = fmt.Fprintf(output, "  Records: %d live, %d total\n", metrics.RecordsLive, metrics.RecordsTotal)
@@ -179,7 +179,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 					_, _ = fmt.Fprintf(output, "  Context: %d/%d tokens (%.1f%% full)\n",
 						metrics.LiveTokens, metrics.MaxTokens, metrics.PercentFull*100)
 					_, _ = fmt.Fprintf(output, "  Records: %d live, %d total\n", metrics.RecordsLive, metrics.RecordsTotal)
-					_, _ = fmt.Fprintf(output, "  Total tokens used: %d\n", metrics.TotalTokens)
+					_, _ = fmt.Fprintf(output, "  Total tokens used: %d\n", metrics.CumulativeTokens)
 					if metrics.CompactionCount > 0 {
 						_, _ = fmt.Fprintf(output, "  Compactions: %d (last: %s)\n",
 							metrics.CompactionCount, metrics.LastCompaction.Format("15:04:05"))

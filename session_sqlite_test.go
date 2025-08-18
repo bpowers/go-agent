@@ -43,7 +43,7 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	// Get metrics
 	metrics := session.Metrics()
 	assert.Equal(t, 3, metrics.RecordsLive)
-	assert.Greater(t, metrics.TotalTokens, 0)
+	assert.Greater(t, metrics.CumulativeTokens, 0)
 
 	// Create new session with same store to test persistence
 	session2 := NewSession(client, "Should be ignored", // System prompt already in store
@@ -80,7 +80,7 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 	}
 
 	metrics1 := session1.Metrics()
-	tokens1 := metrics1.TotalTokens
+	tokens1 := metrics1.CumulativeTokens
 
 	// Close first store
 	store1.Close()
@@ -98,7 +98,7 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 
 	// Metrics should be preserved
 	metrics2 := session2.Metrics()
-	assert.Equal(t, tokens1, metrics2.TotalTokens)
+	assert.Equal(t, tokens1, metrics2.CumulativeTokens)
 }
 
 func TestSessionCompactionWithSQLite(t *testing.T) {

@@ -178,7 +178,7 @@ func TestSessionBasics(t *testing.T) {
 	assert.Equal(t, 4096, session.MaxTokens())
 
 	metrics := session.Metrics()
-	assert.Equal(t, 0, metrics.TotalTokens)
+	assert.Equal(t, 0, metrics.CumulativeTokens)
 	assert.Equal(t, 1, metrics.RecordsLive) // System prompt
 	assert.Equal(t, 1, metrics.RecordsTotal)
 
