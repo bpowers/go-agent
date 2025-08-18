@@ -197,10 +197,7 @@ The pre-commit hook automatically runs:
 3. **Linting** - Runs `golangci-lint` with our configuration
 4. **Tests** - Runs all tests with race detection enabled
 
-To bypass the pre-commit hook in exceptional cases:
-```bash
-git commit --no-verify  # Not recommended
-```
+You MUST NOT bypass the pre-commit hook with `--no-verify`.  Fix the root issue causing the hook to fail.  If you uncover a deep problem with an ambiguous solution, present the problem and background to the user to get their decision on how to proceed.
 
 ### Go Development Standards
 
