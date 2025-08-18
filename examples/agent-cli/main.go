@@ -104,9 +104,6 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 	session := agent.NewSession(client, config.SystemPrompt, sessionOpts...)
 	session.SetCompactionThreshold(config.CompactThreshold)
 
-	// Create chat alias for compatibility
-	chatSession := session
-
 	root, err := os.OpenRoot(".")
 	if err != nil {
 		return fmt.Errorf("failed to open root directory: %w", err)
@@ -115,15 +112,15 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 
 	ctx := fstools.WithTestFS(context.Background(), root.FS())
 
-	if err := chatSession.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool); err != nil {
+	if err := session.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool); err != nil {
 		return fmt.Errorf("failed to register ReadDirTool: %w", err)
 	}
 
-	if err = chatSession.RegisterTool(fstools.ReadFileToolDef, fstools.ReadFileTool); err != nil {
+	if err = session.RegisterTool(fstools.ReadFileToolDef, fstools.ReadFileTool); err != nil {
 		return fmt.Errorf("failed to register ReadFileTool: %w", err)
 	}
 
-	if err = chatSession.RegisterTool(fstools.WriteFileToolDef, fstools.WriteFileTool); err != nil {
+	if err = session.RegisterTool(fstools.WriteFileToolDef, fstools.WriteFileTool); err != nil {
 		return fmt.Errorf("failed to register WriteFileTool: %w", err)
 	}
 
@@ -289,7 +286,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 			return nil
 		}
 
-		_, err := chatSession.MessageStream(ctx, userMsg, callback, opts...)
+		_, err := session.MessageStream(ctx, userMsg, callback, opts...)
 		if err != nil {
 			_, _ = fmt.Fprintf(errOutput, "\nError: %v\n", err)
 			continue

@@ -79,7 +79,7 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-// AddRecord implements Store.
+// AddRecord adds a new record to the in-memory store and returns its assigned ID.
 func (m *MemoryStore) AddRecord(record Record) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -89,7 +89,7 @@ func (m *MemoryStore) AddRecord(record Record) (int64, error) {
 	return record.ID, nil
 }
 
-// GetAllRecords implements Store.
+// GetAllRecords returns a copy of all records in the store, both live and dead.
 func (m *MemoryStore) GetAllRecords() ([]Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -98,7 +98,7 @@ func (m *MemoryStore) GetAllRecords() ([]Record, error) {
 	return result, nil
 }
 
-// GetLiveRecords implements Store.
+// GetLiveRecords returns only the records marked as live in the current context window.
 func (m *MemoryStore) GetLiveRecords() ([]Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -111,7 +111,7 @@ func (m *MemoryStore) GetLiveRecords() ([]Record, error) {
 	return live, nil
 }
 
-// UpdateRecord implements Store.
+// UpdateRecord updates an existing record with the given ID in the store.
 func (m *MemoryStore) UpdateRecord(id int64, record Record) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,7 +125,7 @@ func (m *MemoryStore) UpdateRecord(id int64, record Record) error {
 	return nil // Not found is not an error for memory store
 }
 
-// MarkRecordDead implements Store.
+// MarkRecordDead marks a record as dead, removing it from the active context window.
 func (m *MemoryStore) MarkRecordDead(id int64) error {
 	for i, r := range m.records {
 		if r.ID == id {
@@ -136,7 +136,7 @@ func (m *MemoryStore) MarkRecordDead(id int64) error {
 	return nil
 }
 
-// MarkRecordLive implements Store.
+// MarkRecordLive marks a record as live, adding it back to the active context window.
 func (m *MemoryStore) MarkRecordLive(id int64) error {
 	for i, r := range m.records {
 		if r.ID == id {
@@ -147,7 +147,7 @@ func (m *MemoryStore) MarkRecordLive(id int64) error {
 	return nil
 }
 
-// DeleteRecord implements Store.
+// DeleteRecord permanently removes a record with the given ID from the store.
 func (m *MemoryStore) DeleteRecord(id int64) error {
 	for i, r := range m.records {
 		if r.ID == id {
@@ -158,7 +158,7 @@ func (m *MemoryStore) DeleteRecord(id int64) error {
 	return nil
 }
 
-// Clear implements Store.
+// Clear removes all records and resets the store to its initial state.
 func (m *MemoryStore) Clear() error {
 	m.records = m.records[:0]
 	m.nextID = 1
@@ -166,19 +166,19 @@ func (m *MemoryStore) Clear() error {
 	return nil
 }
 
-// Close implements Store.
+// Close is a no-op for the in-memory store as there are no resources to release.
 func (m *MemoryStore) Close() error {
 	// Nothing to close for memory store
 	return nil
 }
 
-// SaveMetrics implements Store.
+// SaveMetrics stores the session metrics in memory for later retrieval.
 func (m *MemoryStore) SaveMetrics(metrics SessionMetrics) error {
 	m.metrics = metrics
 	return nil
 }
 
-// LoadMetrics implements Store.
+// LoadMetrics retrieves the previously saved session metrics from memory.
 func (m *MemoryStore) LoadMetrics() (SessionMetrics, error) {
 	return m.metrics, nil
 }

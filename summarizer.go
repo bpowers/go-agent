@@ -58,7 +58,7 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, records []Record) (string
 	summaryPrompt := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", s.prompt, conversation.String())
 
 	// Create a chat session with the summarization model
-	summaryChat := s.client.NewChat("You are a helpful assistant that creates concise conversation summaries.")
+	summaryChat := s.client.NewChat("You are an assistant tasked with summarizing conversations.")
 
 	// Get the summary
 	response, err := summaryChat.Message(ctx, chat.Message{
@@ -81,7 +81,9 @@ Focus on:
 - Important context that affects future conversation
 - Any unresolved questions or action items
 
-Provide only the summary, no additional commentary.`
+The summary must be in markdown format.
+
+Provide only the summary, no additional commentary, relying **strictly** on the provided text.`
 
 // SimpleSummarizer provides a basic extractive summarization strategy.
 // It keeps the first and last N messages without compression.
