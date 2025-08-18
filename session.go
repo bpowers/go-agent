@@ -122,7 +122,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 			opt(&options)
 		}
 	}
-	
+
 	// Generate session ID if not provided
 	if options.sessionID == "" {
 		options.sessionID = generateSessionID()
@@ -387,7 +387,7 @@ func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
 func (s *persistentSession) MaxTokens() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// Query the current chat for max tokens dynamically
 	return s.chat.MaxTokens()
 }
@@ -532,7 +532,7 @@ func (s *persistentSession) compactNowLocked(ctx context.Context) error {
 		Content:      fmt.Sprintf("[Previous conversation summary]\n%s", summary),
 		Live:         true,
 		Status:       string(RecordStatusSuccess), // Summaries are successful
-		InputTokens:  0, // Summary tokens will be counted with next message
+		InputTokens:  0,                           // Summary tokens will be counted with next message
 		OutputTokens: 0,
 		Timestamp:    time.Now(),
 	})

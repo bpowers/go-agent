@@ -578,7 +578,7 @@ func TestRecordStatus(t *testing.T) {
 
 	// Check that records have success status
 	records := session.LiveRecords()
-	assert.Len(t, records, 3) // System, user, assistant
+	assert.Len(t, records, 3)                               // System, user, assistant
 	assert.Equal(t, RecordStatusSuccess, records[0].Status) // System
 	assert.Equal(t, RecordStatusSuccess, records[1].Status) // User
 	assert.Equal(t, RecordStatusSuccess, records[2].Status) // Assistant

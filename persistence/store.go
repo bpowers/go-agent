@@ -94,12 +94,12 @@ func NewMemoryStore() *MemoryStore {
 func (m *MemoryStore) AddRecord(sessionID string, record Record) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Default to success if status not specified
 	if record.Status == "" {
 		record.Status = "success"
 	}
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	record.ID = sess.nextID
 	sess.nextID++
@@ -124,7 +124,7 @@ func (m *MemoryStore) getOrCreateSessionLocked(sessionID string) *sessionData {
 func (m *MemoryStore) GetAllRecords(sessionID string) ([]Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	result := make([]Record, len(sess.records))
 	copy(result, sess.records)
@@ -135,7 +135,7 @@ func (m *MemoryStore) GetAllRecords(sessionID string) ([]Record, error) {
 func (m *MemoryStore) GetLiveRecords(sessionID string) ([]Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	var live []Record
 	for _, r := range sess.records {
@@ -150,7 +150,7 @@ func (m *MemoryStore) GetLiveRecords(sessionID string) ([]Record, error) {
 func (m *MemoryStore) UpdateRecord(sessionID string, id int64, record Record) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	for i, r := range sess.records {
 		if r.ID == id {
@@ -166,7 +166,7 @@ func (m *MemoryStore) UpdateRecord(sessionID string, id int64, record Record) er
 func (m *MemoryStore) MarkRecordDead(sessionID string, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	for i, r := range sess.records {
 		if r.ID == id {
@@ -181,7 +181,7 @@ func (m *MemoryStore) MarkRecordDead(sessionID string, id int64) error {
 func (m *MemoryStore) MarkRecordLive(sessionID string, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	for i, r := range sess.records {
 		if r.ID == id {
@@ -196,7 +196,7 @@ func (m *MemoryStore) MarkRecordLive(sessionID string, id int64) error {
 func (m *MemoryStore) DeleteRecord(sessionID string, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	for i, r := range sess.records {
 		if r.ID == id {
@@ -211,7 +211,7 @@ func (m *MemoryStore) DeleteRecord(sessionID string, id int64) error {
 func (m *MemoryStore) Clear(sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if sess, ok := m.sessions[sessionID]; ok {
 		sess.records = sess.records[:0]
 		sess.nextID = 1
@@ -230,7 +230,7 @@ func (m *MemoryStore) Close() error {
 func (m *MemoryStore) SaveMetrics(sessionID string, metrics SessionMetrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	sess.metrics = metrics
 	return nil
@@ -240,7 +240,7 @@ func (m *MemoryStore) SaveMetrics(sessionID string, metrics SessionMetrics) erro
 func (m *MemoryStore) LoadMetrics(sessionID string) (SessionMetrics, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sess := m.getOrCreateSessionLocked(sessionID)
 	return sess.metrics, nil
 }
@@ -249,7 +249,7 @@ func (m *MemoryStore) LoadMetrics(sessionID string) (SessionMetrics, error) {
 func (m *MemoryStore) ListSessions() ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	var sessions []string
 	for id := range m.sessions {
 		sessions = append(sessions, id)
@@ -261,7 +261,7 @@ func (m *MemoryStore) ListSessions() ([]string, error) {
 func (m *MemoryStore) DeleteSession(sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	delete(m.sessions, sessionID)
 	return nil
 }
