@@ -5,61 +5,170 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+# Security: This workflow runs with API keys, so we restrict when it runs:
+# - Always runs for pushes to main (trusted)
+# - Always runs for manual workflow_dispatch (requires write permissions)
+# - Only runs for PRs from existing contributors (COLLABORATOR, MEMBER, or OWNER)
+# - First-time contributors and external users must have their PRs manually approved
 
 jobs:
-  lint:
-    name: Lint
+  formatting:
+    name: Check Formatting
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association))
     steps:
       - uses: actions/checkout@v4
       
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: true
+      
+      - name: Install gofumpt
+        run: go install mvdan.cc/gofumpt@latest
       
       - name: Check formatting
         run: |
-          go install mvdan.cc/gofumpt@latest
-          if [ -n "$(gofumpt -l .)" ]; then
-            echo "The following files need formatting:"
+          if ! gofumpt -l . | grep -q .; then
+            echo "✓ Code is properly formatted"
+          else
+            echo "✗ The following files need formatting:"
             gofumpt -l .
-            echo "Run 'gofumpt -w .' to fix"
+            echo "Run 'gofumpt -w .' to fix formatting"
             exit 1
           fi
-      
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout 5m
 
-  test:
-    name: Test
+  go-generate:
+    name: Check go generate
     runs-on: ubuntu-latest
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association))
     steps:
       - uses: actions/checkout@v4
       
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: true
       
-      - name: Check go generate
+      - name: Install gofumpt
+        run: go install mvdan.cc/gofumpt@latest
+      
+      - name: Check if go generate is up to date
         run: |
+          # Save current state
+          TEMP_DIR=$(mktemp -d)
+          trap "rm -rf $TEMP_DIR" EXIT
+          
+          # Find all generated files
+          find . -name "*.go" -exec grep -l "Code generated" {} \; > "$TEMP_DIR/generated_files.txt" || true
+          
+          # Copy current generated files
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              mkdir -p "$TEMP_DIR/$(dirname "$file")"
+              cp "$file" "$TEMP_DIR/$file"
+            fi
+          done < "$TEMP_DIR/generated_files.txt"
+          
+          # Run go generate
           go generate ./...
-          go install mvdan.cc/gofumpt@latest
-          find . -name "*.go" -exec grep -l "Code generated" {} \; | xargs -r gofumpt -w
-          if [ -n "$(git diff --name-only)" ]; then
-            echo "Generated files are out of date:"
-            git diff --name-only
-            echo "Run 'go generate ./...' locally and commit the changes"
+          
+          # Format any newly generated files
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              gofumpt -w "$file"
+            fi
+          done < "$TEMP_DIR/generated_files.txt"
+          
+          # Check if any generated files changed
+          CHANGED=false
+          while IFS= read -r file; do
+            if [ -f "$file" ] && [ -f "$TEMP_DIR/$file" ]; then
+              if ! cmp -s "$file" "$TEMP_DIR/$file"; then
+                CHANGED=true
+                echo "File changed: $file"
+                diff -u "$TEMP_DIR/$file" "$file" || true
+                break
+              fi
+            elif [ -f "$file" ]; then
+              # New generated file that didn't exist before
+              CHANGED=true
+              echo "New generated file: $file"
+              break
+            fi
+          done < "$TEMP_DIR/generated_files.txt"
+          
+          if [ "$CHANGED" = true ]; then
+            echo "✗ Generated files are out of date"
+            echo "Run 'go generate ./... && gofumpt -w .' to update generated files"
+            exit 1
+          else
+            echo "✓ Generated files are up to date"
+          fi
+
+  staticcheck:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association))
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      
+      - name: Run staticcheck
+        run: |
+          if staticcheck ./...; then
+            echo "✓ Static analysis passed"
+          else
+            echo "✗ Static analysis failed"
             exit 1
           fi
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association))
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
       
-      - name: Run tests
-        run: go test -race -shuffle on ./...
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      
+      - name: Run tests with race detector
+        run: |
+          if go test -race -shuffle on ./...; then
+            echo "✓ All tests passed"
+          else
+            echo "✗ Tests failed"
+            exit 1
+          fi
