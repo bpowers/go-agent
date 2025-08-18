@@ -42,7 +42,7 @@ func getAPIKey() string {
 }
 
 func TestGeminiIntegration_Streaming(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
 	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
@@ -54,7 +54,7 @@ func TestGeminiIntegration_Streaming(t *testing.T) {
 }
 
 func TestGeminiIntegration_ToolCalling(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
 	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
@@ -66,7 +66,7 @@ func TestGeminiIntegration_ToolCalling(t *testing.T) {
 }
 
 func TestGeminiIntegration_ToolCallingWithContext(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
 	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
@@ -78,7 +78,7 @@ func TestGeminiIntegration_ToolCallingWithContext(t *testing.T) {
 }
 
 func TestGeminiIntegration_TokenUsage(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
 	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
@@ -118,7 +118,7 @@ func TestGeminiIntegration_TokenUsage(t *testing.T) {
 }
 
 func TestGeminiIntegration_TokenUsageCumulative(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
 	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
@@ -130,7 +130,7 @@ func TestGeminiIntegration_TokenUsageCumulative(t *testing.T) {
 }
 
 func TestGeminiIntegration_ToolCallStreamEvents(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
 	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
@@ -142,7 +142,7 @@ func TestGeminiIntegration_ToolCallStreamEvents(t *testing.T) {
 }
 
 func TestGeminiIntegration_ToolRegistration(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
 	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
@@ -186,7 +186,8 @@ func TestGeminiIntegration_ToolRegistration(t *testing.T) {
 }
 
 func TestGeminiIntegration_MaxTokensByModel(t *testing.T) {
-	// Not parallel - helps with rate limiting
+	t.Parallel()
+
 	tests := []struct {
 		model       string
 		expectedMax int
