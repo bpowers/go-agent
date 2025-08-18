@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/persistence"
 )
 
 // estimateTokens provides a simple token count estimate for testing
@@ -465,13 +466,41 @@ func TestCompactionThreshold(t *testing.T) {
 
 	// Test setting valid thresholds
 	session.SetCompactionThreshold(0.5)
-	// Verify it doesn't panic
+	// The threshold is not exposed in metrics, but we can verify it doesn't panic
 
 	// Test boundary values
-	session.SetCompactionThreshold(0.0)
+	session.SetCompactionThreshold(0.0) // Should allow "never compact"
 	session.SetCompactionThreshold(1.0)
 
 	// Test out of range values (should be clamped)
 	session.SetCompactionThreshold(-0.5)
 	session.SetCompactionThreshold(1.5)
+}
+
+func TestCompactionThresholdZeroPersistence(t *testing.T) {
+	// Test that a threshold of 0.0 can be persisted and isn't overwritten
+	client := &mockClient{}
+	store := persistence.NewMemoryStore()
+
+	// Create first session and set threshold to 0
+	session1 := NewSession(client, "System", WithStore(store))
+	session1.SetCompactionThreshold(0.0)
+
+	// Create second session with same store
+	session2 := NewSession(client, "System", WithStore(store))
+
+	// Send messages to test that compaction doesn't occur
+	ctx := context.Background()
+	for i := 0; i < 20; i++ {
+		_, err := session2.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: strings.Repeat("Long message ", 100),
+		})
+		require.NoError(t, err)
+	}
+
+	// With threshold 0.0, no compaction should occur
+	metrics := session2.Metrics()
+	assert.Equal(t, 0, metrics.CompactionCount, "No compaction should occur with threshold 0.0")
+	assert.Equal(t, 41, metrics.RecordsLive) // System + 20*(user+assistant)
 }

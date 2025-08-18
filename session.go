@@ -105,9 +105,6 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 
 	// Load existing metrics if available
 	metrics, _ := options.store.LoadMetrics()
-	if metrics.CompactionThreshold == 0 {
-		metrics.CompactionThreshold = 0.8
-	}
 
 	// Check if we have existing records in the store
 	existingRecords, _ := options.store.GetAllRecords()
@@ -155,13 +152,21 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		}
 	}
 
+	// Use loaded threshold if valid, otherwise default to 0.8
+	// A threshold of 0.0 is valid (means never compact)
+	compactionThreshold := metrics.CompactionThreshold
+	if !hasExistingRecords && compactionThreshold == 0 {
+		// Only set default for new sessions without explicit threshold
+		compactionThreshold = 0.8
+	}
+
 	return &persistentSession{
 		chat:                baseChat,
 		client:              client,
 		systemPrompt:        actualSystemPrompt,
 		store:               options.store,
 		summarizer:          options.summarizer,
-		compactionThreshold: metrics.CompactionThreshold,
+		compactionThreshold: compactionThreshold,
 		compactionCount:     metrics.CompactionCount,
 		lastCompaction:      metrics.LastCompaction,
 		cumulativeTokens:    metrics.CumulativeTokens,
@@ -537,6 +542,11 @@ func (s *persistentSession) Metrics() SessionMetrics {
 
 // shouldCompactLocked checks if compaction is needed (mutex must be held).
 func (s *persistentSession) shouldCompactLocked() bool {
+	// Threshold of 0.0 means never compact
+	if s.compactionThreshold == 0.0 {
+		return false
+	}
+
 	liveTokens := s.calculateLiveTokensLocked()
 	if s.maxTokens <= 0 {
 		return false
