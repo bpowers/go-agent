@@ -158,19 +158,31 @@ func TestTokenUsageCumulative(t testing.TB, client chat.Client) {
 		t.Fatalf("Failed to get token usage after first message: %v", err)
 	}
 
-	// Validate first usage has tokens
-	if usage1.InputTokens <= 0 {
-		t.Errorf("Expected positive input tokens after first message, got %d", usage1.InputTokens)
+	// Validate first usage has tokens - both LastMessage and Cumulative
+	if usage1.LastMessage.InputTokens <= 0 {
+		t.Errorf("Expected positive LastMessage input tokens after first message, got %d", usage1.LastMessage.InputTokens)
 	}
-	if usage1.OutputTokens <= 0 {
-		t.Errorf("Expected positive output tokens after first message, got %d", usage1.OutputTokens)
+	if usage1.LastMessage.OutputTokens <= 0 {
+		t.Errorf("Expected positive LastMessage output tokens after first message, got %d", usage1.LastMessage.OutputTokens)
 	}
-	if usage1.TotalTokens <= 0 {
-		t.Errorf("Expected positive total tokens after first message, got %d", usage1.TotalTokens)
+	if usage1.LastMessage.TotalTokens <= 0 {
+		t.Errorf("Expected positive LastMessage total tokens after first message, got %d", usage1.LastMessage.TotalTokens)
 	}
 
-	t.Logf("First message usage - Input: %d, Output: %d, Total: %d",
-		usage1.InputTokens, usage1.OutputTokens, usage1.TotalTokens)
+	if usage1.Cumulative.InputTokens <= 0 {
+		t.Errorf("Expected positive cumulative input tokens after first message, got %d", usage1.Cumulative.InputTokens)
+	}
+	if usage1.Cumulative.OutputTokens <= 0 {
+		t.Errorf("Expected positive cumulative output tokens after first message, got %d", usage1.Cumulative.OutputTokens)
+	}
+	if usage1.Cumulative.TotalTokens <= 0 {
+		t.Errorf("Expected positive cumulative total tokens after first message, got %d", usage1.Cumulative.TotalTokens)
+	}
+
+	t.Logf("First message LastMessage usage - Input: %d, Output: %d, Total: %d",
+		usage1.LastMessage.InputTokens, usage1.LastMessage.OutputTokens, usage1.LastMessage.TotalTokens)
+	t.Logf("First message Cumulative usage - Input: %d, Output: %d, Total: %d",
+		usage1.Cumulative.InputTokens, usage1.Cumulative.OutputTokens, usage1.Cumulative.TotalTokens)
 
 	// Second message: request a very short response (1 word)
 	_, err = chatSession.Message(context.Background(), chat.Message{
@@ -187,32 +199,51 @@ func TestTokenUsageCumulative(t testing.TB, client chat.Client) {
 		t.Fatalf("Failed to get token usage after second message: %v", err)
 	}
 
-	t.Logf("Second message usage - Input: %d, Output: %d, Total: %d",
-		usage2.InputTokens, usage2.OutputTokens, usage2.TotalTokens)
+	// Validate second message LastMessage tokens
+	if usage2.LastMessage.InputTokens <= 0 {
+		t.Errorf("Expected positive LastMessage input tokens after second message, got %d", usage2.LastMessage.InputTokens)
+	}
+	if usage2.LastMessage.OutputTokens <= 0 {
+		t.Errorf("Expected positive LastMessage output tokens after second message, got %d", usage2.LastMessage.OutputTokens)
+	}
+	if usage2.LastMessage.TotalTokens <= 0 {
+		t.Errorf("Expected positive LastMessage total tokens after second message, got %d", usage2.LastMessage.TotalTokens)
+	}
+
+	// The second response should be much shorter than the first (it's 1 word vs 4 paragraphs)
+	if usage2.LastMessage.OutputTokens >= usage1.LastMessage.OutputTokens {
+		t.Errorf("Expected second message output tokens (%d) to be less than first message (%d) since it's just 1 word",
+			usage2.LastMessage.OutputTokens, usage1.LastMessage.OutputTokens)
+	}
+
+	t.Logf("Second message LastMessage usage - Input: %d, Output: %d, Total: %d",
+		usage2.LastMessage.InputTokens, usage2.LastMessage.OutputTokens, usage2.LastMessage.TotalTokens)
+	t.Logf("Second message Cumulative usage - Input: %d, Output: %d, Total: %d",
+		usage2.Cumulative.InputTokens, usage2.Cumulative.OutputTokens, usage2.Cumulative.TotalTokens)
 
 	// Check for monotonic behavior - usage should be cumulative
 	// Input tokens should increase (includes conversation history)
-	if usage2.InputTokens <= usage1.InputTokens {
+	if usage2.Cumulative.InputTokens <= usage1.Cumulative.InputTokens {
 		t.Errorf("Expected input tokens to increase (cumulative): first=%d, second=%d",
-			usage1.InputTokens, usage2.InputTokens)
+			usage1.Cumulative.InputTokens, usage2.Cumulative.InputTokens)
 	}
 
 	// Output tokens should increase (cumulative across responses)
-	if usage2.OutputTokens <= usage1.OutputTokens {
+	if usage2.Cumulative.OutputTokens <= usage1.Cumulative.OutputTokens {
 		t.Errorf("Expected output tokens to increase (cumulative): first=%d, second=%d",
-			usage1.OutputTokens, usage2.OutputTokens)
+			usage1.Cumulative.OutputTokens, usage2.Cumulative.OutputTokens)
 	}
 
 	// Total tokens should increase
-	if usage2.TotalTokens <= usage1.TotalTokens {
+	if usage2.Cumulative.TotalTokens <= usage1.Cumulative.TotalTokens {
 		t.Errorf("Expected total tokens to increase (cumulative): first=%d, second=%d",
-			usage1.TotalTokens, usage2.TotalTokens)
+			usage1.Cumulative.TotalTokens, usage2.Cumulative.TotalTokens)
 	}
 
 	// The second response should be much shorter than the first
 	// But if usage is cumulative, the difference in output tokens should be small relative to the first response
-	outputDiff := usage2.OutputTokens - usage1.OutputTokens
-	if outputDiff > usage1.OutputTokens/4 {
+	outputDiff := usage2.Cumulative.OutputTokens - usage1.Cumulative.OutputTokens
+	if outputDiff > usage1.Cumulative.OutputTokens/4 {
 		t.Logf("Warning: second response added %d output tokens, which seems high for a 1-word response", outputDiff)
 	}
 }

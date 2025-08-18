@@ -32,84 +32,91 @@ func TestParseFlags(t *testing.T) {
 			name: "Default values",
 			args: []string{"agent-cli"},
 			expected: &Config{
-				Model:        "gpt-4o-mini",
-				APIKey:       "",
-				Temperature:  -1,
-				MaxTokens:    0,
-				SystemPrompt: "You are a helpful assistant.",
-				Debug:        false,
+				Model:            "gpt-4o-mini",
+				APIKey:           "",
+				Temperature:      -1,
+				MaxTokens:        0,
+				SystemPrompt:     "You are a helpful assistant.",
+				Debug:            false,
+				CompactThreshold: 0.8,
 			},
 		},
 		{
 			name: "Custom model",
 			args: []string{"agent-cli", "-model", "claude-3-opus"},
 			expected: &Config{
-				Model:        "claude-3-opus",
-				APIKey:       "",
-				Temperature:  -1,
-				MaxTokens:    0,
-				SystemPrompt: "You are a helpful assistant.",
-				Debug:        false,
+				Model:            "claude-3-opus",
+				APIKey:           "",
+				Temperature:      -1,
+				MaxTokens:        0,
+				SystemPrompt:     "You are a helpful assistant.",
+				Debug:            false,
+				CompactThreshold: 0.8,
 			},
 		},
 		{
 			name: "With API key",
 			args: []string{"agent-cli", "-api-key", "test-key-123"},
 			expected: &Config{
-				Model:        "gpt-4o-mini",
-				APIKey:       "test-key-123",
-				Temperature:  -1,
-				MaxTokens:    0,
-				SystemPrompt: "You are a helpful assistant.",
-				Debug:        false,
+				Model:            "gpt-4o-mini",
+				APIKey:           "test-key-123",
+				Temperature:      -1,
+				MaxTokens:        0,
+				SystemPrompt:     "You are a helpful assistant.",
+				Debug:            false,
+				CompactThreshold: 0.8,
 			},
 		},
 		{
 			name: "Custom temperature",
 			args: []string{"agent-cli", "-temperature", "0.2"},
 			expected: &Config{
-				Model:        "gpt-4o-mini",
-				APIKey:       "",
-				Temperature:  0.2,
-				MaxTokens:    0,
-				SystemPrompt: "You are a helpful assistant.",
-				Debug:        false,
+				Model:            "gpt-4o-mini",
+				APIKey:           "",
+				Temperature:      0.2,
+				MaxTokens:        0,
+				SystemPrompt:     "You are a helpful assistant.",
+				Debug:            false,
+				CompactThreshold: 0.8,
 			},
 		},
 		{
 			name: "Custom max tokens",
 			args: []string{"agent-cli", "-max-tokens", "2048"},
 			expected: &Config{
-				Model:        "gpt-4o-mini",
-				APIKey:       "",
-				Temperature:  -1,
-				MaxTokens:    2048,
-				SystemPrompt: "You are a helpful assistant.",
-				Debug:        false,
+				Model:            "gpt-4o-mini",
+				APIKey:           "",
+				Temperature:      -1,
+				MaxTokens:        2048,
+				SystemPrompt:     "You are a helpful assistant.",
+				Debug:            false,
+				CompactThreshold: 0.8,
 			},
 		},
 		{
 			name: "Custom system prompt",
 			args: []string{"agent-cli", "-system", "You are a coding assistant."},
 			expected: &Config{
-				Model:        "gpt-4o-mini",
-				APIKey:       "",
-				Temperature:  -1,
-				MaxTokens:    0,
-				SystemPrompt: "You are a coding assistant.",
-				Debug:        false,
+				Model:            "gpt-4o-mini",
+				APIKey:           "",
+				Temperature:      -1,
+				MaxTokens:        0,
+				SystemPrompt:     "You are a coding assistant.",
+				Debug:            false,
+				CompactThreshold: 0.8,
 			},
 		},
 		{
 			name: "Debug mode",
 			args: []string{"agent-cli", "-debug"},
 			expected: &Config{
-				Model:        "gpt-4o-mini",
-				APIKey:       "",
-				Temperature:  -1,
-				MaxTokens:    0,
-				SystemPrompt: "You are a helpful assistant.",
-				Debug:        true,
+				Model:            "gpt-4o-mini",
+				APIKey:           "",
+				Temperature:      -1,
+				MaxTokens:        0,
+				SystemPrompt:     "You are a helpful assistant.",
+				Debug:            true,
+				CompactThreshold: 0.8,
 			},
 		},
 		{
@@ -124,12 +131,13 @@ func TestParseFlags(t *testing.T) {
 				"-debug",
 			},
 			expected: &Config{
-				Model:        "gemini-1.5-pro",
-				APIKey:       "secret-key",
-				Temperature:  0.9,
-				MaxTokens:    4096,
-				SystemPrompt: "Custom prompt",
-				Debug:        true,
+				Model:            "gemini-1.5-pro",
+				APIKey:           "secret-key",
+				Temperature:      0.9,
+				MaxTokens:        4096,
+				SystemPrompt:     "Custom prompt",
+				Debug:            true,
+				CompactThreshold: 0.8,
 			},
 		},
 	}
@@ -172,10 +180,13 @@ func (m *MockChat) MessageStream(ctx context.Context, msg chat.Message, callback
 	m.messages = append(m.messages, msg)
 
 	var resp chat.Message
+	// Debug: Print current state
+	// fmt.Printf("DEBUG: responseIdx=%d, len(responses)=%d, msg=%s\n", m.responseIdx, len(m.responses), msg.Content)
 	if m.responseIdx < len(m.responses) {
 		resp = m.responses[m.responseIdx]
 		m.responseIdx++
 	} else {
+		// Default response when no more predefined responses
 		resp = chat.Message{
 			Role:    chat.AssistantRole,
 			Content: "Mock response",
@@ -256,14 +267,11 @@ type MockClient struct {
 }
 
 func (m *MockClient) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.Chat {
-	if m.chat == nil {
-		m.chat = &MockChat{
-			systemPrompt: systemPrompt,
-			messages:     initialMsgs,
-		}
-	} else {
+	// Always return the same MockChat instance to preserve state
+	if m.chat != nil {
+		// Update system prompt and messages but preserve responses
 		m.chat.systemPrompt = systemPrompt
-		m.chat.messages = initialMsgs
+		// Don't reset messages - just update the history as needed
 	}
 	return m.chat
 }
@@ -280,9 +288,10 @@ func TestRun(t *testing.T) {
 		{
 			name: "Single message and exit",
 			config: &Config{
-				Model:        "gpt-4",
-				APIKey:       "test-key",
-				SystemPrompt: "Test assistant",
+				Model:            "gpt-4",
+				APIKey:           "test-key",
+				SystemPrompt:     "Test assistant",
+				CompactThreshold: 1.0, // Disable compaction for this test
 			},
 			input: "Hello\n\nexit\n",
 			responses: []chat.Message{
@@ -299,9 +308,10 @@ func TestRun(t *testing.T) {
 		{
 			name: "Multiple messages",
 			config: &Config{
-				Model:        "gpt-4",
-				APIKey:       "test-key",
-				SystemPrompt: "Test assistant",
+				Model:            "gpt-4",
+				APIKey:           "test-key",
+				SystemPrompt:     "Test assistant",
+				CompactThreshold: 1.0, // Disable compaction for this test
 			},
 			input: "First message\n\nSecond message\n\nexit\n",
 			responses: []chat.Message{

@@ -16,8 +16,8 @@ const (
 	AssistantRole Role = "assistant"
 )
 
-// TokenUsage represents token usage information for a chat session
-type TokenUsage struct {
+// TokenUsageDetails represents detailed token usage information
+type TokenUsageDetails struct {
 	// InputTokens is the number of tokens in the input/prompt
 	InputTokens int `json:"input_tokens"`
 	// OutputTokens is the number of tokens in the output/completion
@@ -26,6 +26,14 @@ type TokenUsage struct {
 	TotalTokens int `json:"total_tokens"`
 	// CachedTokens is the number of cached tokens used (if applicable)
 	CachedTokens int `json:"cached_tokens,omitzero"`
+}
+
+// TokenUsage represents token usage for both the last message and cumulative session
+type TokenUsage struct {
+	// LastMessage contains token counts for the most recent message exchange
+	LastMessage TokenUsageDetails `json:"last_message"`
+	// Cumulative contains total token counts for the entire conversation
+	Cumulative TokenUsageDetails `json:"cumulative"`
 }
 
 // TokenLimits represents the token limits for a given model
@@ -62,7 +70,7 @@ type Chat interface {
 	// History extracts the system prompt and history up to this point for a chat for storage and later Chat object re-initialization.
 	History() (systemPrompt string, msgs []Message)
 
-	// TokenUsage returns the token usage for the last message exchange
+	// TokenUsage returns token usage for both the last message and cumulative session
 	TokenUsage() (TokenUsage, error)
 	// MaxTokens returns the maximum token limit for the model
 	MaxTokens() int
@@ -81,8 +89,9 @@ type Chat interface {
 	//
 	// Context passing: The context provided to Message/MessageStream is propagated to tool handlers,
 	// allowing tools to access request-scoped resources like filesystems or databases.
-	// OpenAI's Responses API does not support tools and will automatically fall back to ChatCompletions
-	// when tools are registered.
+	//
+	// Note: OpenAI's Responses API doesn't support tools yet. When tools are registered,
+	// the OpenAI implementation automatically uses the ChatCompletions API instead.
 	RegisterTool(def ToolDef, fn func(context.Context, string) string) error
 	// DeregisterTool removes a tool by name
 	DeregisterTool(name string)

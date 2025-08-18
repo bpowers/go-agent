@@ -115,8 +115,9 @@ type chatClient struct {
 	msgs []chat.Message
 
 	// Token tracking
-	cumulativeUsage chat.TokenUsage
-	maxTokens       int
+	cumulativeUsage  chat.TokenUsageDetails
+	lastMessageUsage chat.TokenUsageDetails
+	maxTokens        int
 
 	// Tool support
 	tools     map[string]common.RegisteredTool
@@ -417,11 +418,12 @@ func (c *chatClient) MessageStream(ctx context.Context, msg chat.Message, callba
 		case "message_delta":
 			// Check for usage information in message delta
 			if event.Usage.InputTokens > 0 || event.Usage.OutputTokens > 0 {
-				usage := chat.TokenUsage{
+				usage := chat.TokenUsageDetails{
 					InputTokens:  int(event.Usage.InputTokens),
 					OutputTokens: int(event.Usage.OutputTokens),
 					TotalTokens:  int(event.Usage.InputTokens + event.Usage.OutputTokens),
 				}
+				c.lastMessageUsage = usage
 				c.cumulativeUsage.InputTokens += usage.InputTokens
 				c.cumulativeUsage.OutputTokens += usage.OutputTokens
 				c.cumulativeUsage.TotalTokens += usage.TotalTokens
@@ -477,11 +479,14 @@ func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {
 	return c.systemPrompt, msgs
 }
 
-// TokenUsage returns the token usage for the last message exchange
+// TokenUsage returns token usage for both the last message and cumulative session
 func (c *chatClient) TokenUsage() (chat.TokenUsage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.cumulativeUsage, nil
+	return chat.TokenUsage{
+		LastMessage: c.lastMessageUsage,
+		Cumulative:  c.cumulativeUsage,
+	}, nil
 }
 
 // MaxTokens returns the maximum token limit for the model
@@ -805,11 +810,12 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			case "message_delta":
 				// Check for usage information in follow-up message delta
 				if event.Usage.InputTokens > 0 || event.Usage.OutputTokens > 0 {
-					usage := chat.TokenUsage{
+					usage := chat.TokenUsageDetails{
 						InputTokens:  int(event.Usage.InputTokens),
 						OutputTokens: int(event.Usage.OutputTokens),
 						TotalTokens:  int(event.Usage.InputTokens + event.Usage.OutputTokens),
 					}
+					c.lastMessageUsage = usage
 					c.cumulativeUsage.InputTokens += usage.InputTokens
 					c.cumulativeUsage.OutputTokens += usage.OutputTokens
 					c.cumulativeUsage.TotalTokens += usage.TotalTokens

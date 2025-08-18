@@ -27,7 +27,6 @@ func (writeFileToolDefType) Description() string {
 // WriteFileToolDef is the MCP tool definition for the WriteFile function
 var WriteFileToolDef chat.ToolDef = writeFileToolDefType{}
 
-
 // WriteFileTool is a generic wrapper that accepts JSON input and returns JSON output
 func WriteFileTool(ctx context.Context, input string) string {
 	// Parse the input JSON

@@ -154,12 +154,12 @@ func TestOpenAIIntegration_TokenUsage(t *testing.T) {
 			require.NoError(t, err, "Failed to get token usage")
 
 			// Verify we have non-zero token usage
-			assert.Greater(t, usage.InputTokens, 0, "Expected input tokens to be greater than 0")
-			assert.Greater(t, usage.OutputTokens, 0, "Expected output tokens to be greater than 0")
-			assert.Greater(t, usage.TotalTokens, 0, "Expected total tokens to be greater than 0")
+			assert.Greater(t, usage.Cumulative.InputTokens, 0, "Expected input tokens to be greater than 0")
+			assert.Greater(t, usage.Cumulative.OutputTokens, 0, "Expected output tokens to be greater than 0")
+			assert.Greater(t, usage.Cumulative.TotalTokens, 0, "Expected total tokens to be greater than 0")
 
 			t.Logf("[%s] Token usage - Input: %d, Output: %d, Total: %d, Cached: %d",
-				tt.name, usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CachedTokens)
+				tt.name, usage.Cumulative.InputTokens, usage.Cumulative.OutputTokens, usage.Cumulative.TotalTokens, usage.Cumulative.CachedTokens)
 
 			// Check max tokens
 			maxTokens := chatSession.MaxTokens()

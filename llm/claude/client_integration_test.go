@@ -36,7 +36,7 @@ func (t *testToolDef) Description() string {
 const provider = "claude"
 
 func getTestModel() string {
-	return "claude-3-5-haiku-20241022"
+	return "claude-3-5-haiku-latest"
 }
 
 func getAPIKey() string {
@@ -106,12 +106,12 @@ func TestClaudeIntegration_TokenUsage(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify we have non-zero token usage
-	assert.Greater(t, usage.InputTokens, 0)
-	assert.Greater(t, usage.OutputTokens, 0)
-	assert.Greater(t, usage.TotalTokens, 0)
+	assert.Greater(t, usage.Cumulative.InputTokens, 0)
+	assert.Greater(t, usage.Cumulative.OutputTokens, 0)
+	assert.Greater(t, usage.Cumulative.TotalTokens, 0)
 
 	t.Logf("Token usage - Input: %d, Output: %d, Total: %d, Cached: %d",
-		usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CachedTokens)
+		usage.Cumulative.InputTokens, usage.Cumulative.OutputTokens, usage.Cumulative.TotalTokens, usage.Cumulative.CachedTokens)
 
 	// Check max tokens
 	maxTokens := chatSession.MaxTokens()
