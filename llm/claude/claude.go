@@ -295,7 +295,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				}
 				toolCallArgs.Reset()
 				if c.debug {
-					log.Printf( "[Claude] Tool use start: ID=%s, Name=%s, Input=%v\n",
+					log.Printf("[Claude] Tool use start: ID=%s, Name=%s, Input=%v\n",
 						event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
 				}
 
@@ -321,7 +321,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					if err == nil {
 						currentToolCall.Input = json.RawMessage(inputBytes)
 						if c.debug {
-							log.Printf( "[Claude] Set tool input from start event: %s\n", string(inputBytes))
+							log.Printf("[Claude] Set tool input from start event: %s\n", string(inputBytes))
 						}
 					}
 				}
@@ -382,7 +382,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				// Accumulate tool call arguments from streaming delta
 				if partialJSON := event.Delta.PartialJSON; partialJSON != "" {
 					if c.debug {
-						log.Printf( "[Claude] Got input_json_delta: %s\n", partialJSON)
+						log.Printf("[Claude] Got input_json_delta: %s\n", partialJSON)
 					}
 					toolCallArgs.WriteString(partialJSON)
 				}
@@ -410,11 +410,11 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				if toolCallArgs.Len() > 0 {
 					currentToolCall.Input = json.RawMessage(toolCallArgs.String())
 					if c.debug {
-						log.Printf( "[Claude] Set tool input from deltas: %s\n", toolCallArgs.String())
+						log.Printf("[Claude] Set tool input from deltas: %s\n", toolCallArgs.String())
 					}
 				}
 				if c.debug {
-					log.Printf( "[Claude] Finalizing tool call: ID=%s, Name=%s, Input=%s\n",
+					log.Printf("[Claude] Finalizing tool call: ID=%s, Name=%s, Input=%s\n",
 						currentToolCall.ID, currentToolCall.Name, string(currentToolCall.Input))
 				}
 				toolCalls = append(toolCalls, *currentToolCall)
@@ -434,7 +434,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				c.cumulativeUsage.OutputTokens += usage.OutputTokens
 				c.cumulativeUsage.TotalTokens += usage.TotalTokens
 				if c.debug {
-					log.Printf( "[Claude] Usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
+					log.Printf("[Claude] Usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
 						usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
 						c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
 				}
@@ -442,7 +442,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		case "message_stop":
 			// Message stream completed
 			if c.debug {
-				log.Printf( "[Claude] Stream completed via message_stop\n")
+				log.Printf("[Claude] Stream completed via message_stop\n")
 			}
 		}
 	}
@@ -602,7 +602,7 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 		result := tool.Handler(ctx, argsStr)
 
 		if c.debug {
-			log.Printf( "[Claude] Tool %s executed with args %s, result: %s\n",
+			log.Printf("[Claude] Tool %s executed with args %s, result: %s\n",
 				toolCall.Name, argsStr, result)
 		}
 
@@ -655,9 +655,9 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	for len(toolCalls) > 0 {
 		// Debug logging
 		if c.debug {
-			log.Printf( "[Claude] Tool execution with %d tool calls\n", len(toolCalls))
+			log.Printf("[Claude] Tool execution with %d tool calls\n", len(toolCalls))
 			for i, tc := range toolCalls {
-				log.Printf( "[Claude] Tool %d: %s with input: %s\n", i+1, tc.Name, string(tc.Input))
+				log.Printf("[Claude] Tool %d: %s with input: %s\n", i+1, tc.Name, string(tc.Input))
 			}
 		}
 		// Execute tool calls
@@ -758,7 +758,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					}
 					toolCallArgs.Reset()
 					if c.debug {
-						log.Printf( "[Claude] Follow-up tool use start: ID=%s, Name=%s, Input=%v\n",
+						log.Printf("[Claude] Follow-up tool use start: ID=%s, Name=%s, Input=%v\n",
 							event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
 					}
 
@@ -784,7 +784,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						if err == nil {
 							currentToolCall.Input = json.RawMessage(inputBytes)
 							if c.debug {
-								log.Printf( "[Claude] Follow-up set tool input from start event: %s\n", string(inputBytes))
+								log.Printf("[Claude] Follow-up set tool input from start event: %s\n", string(inputBytes))
 							}
 						}
 					}
@@ -818,11 +818,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					if toolCallArgs.Len() > 0 {
 						currentToolCall.Input = json.RawMessage(toolCallArgs.String())
 						if c.debug {
-							log.Printf( "[Claude] Follow-up set tool input from deltas: %s\n", toolCallArgs.String())
+							log.Printf("[Claude] Follow-up set tool input from deltas: %s\n", toolCallArgs.String())
 						}
 					}
 					if c.debug {
-						log.Printf( "[Claude] Follow-up finalizing tool call: ID=%s, Name=%s, Input=%s\n",
+						log.Printf("[Claude] Follow-up finalizing tool call: ID=%s, Name=%s, Input=%s\n",
 							currentToolCall.ID, currentToolCall.Name, string(currentToolCall.Input))
 					}
 					toolCalls = append(toolCalls, *currentToolCall)
@@ -842,7 +842,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					c.cumulativeUsage.OutputTokens += usage.OutputTokens
 					c.cumulativeUsage.TotalTokens += usage.TotalTokens
 					if c.debug {
-						log.Printf( "[Claude] Follow-up usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
+						log.Printf("[Claude] Follow-up usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
 							usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
 							c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
 					}
@@ -850,7 +850,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			case "message_stop":
 				// Follow-up message stream completed
 				if c.debug {
-					log.Printf( "[Claude] Follow-up stream completed via message_stop\n")
+					log.Printf("[Claude] Follow-up stream completed via message_stop\n")
 				}
 			}
 		}
@@ -862,13 +862,13 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// If we got more tool calls, continue the loop
 		if len(toolCalls) > 0 {
 			if c.debug {
-				log.Printf( "[Claude] Got %d more tool calls, continuing\n", len(toolCalls))
+				log.Printf("[Claude] Got %d more tool calls, continuing\n", len(toolCalls))
 			}
 			continue
 		}
 
 		if c.debug {
-			log.Printf( "[Claude] No more tool calls, got final response: %q\n", respContent.String())
+			log.Printf("[Claude] No more tool calls, got final response: %q\n", respContent.String())
 		}
 
 		// No more tool calls, we have the final response

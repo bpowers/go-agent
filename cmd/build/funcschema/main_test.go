@@ -166,6 +166,7 @@ func NestedFunc(ctx context.Context, req NestedRequest) NestedResult { return Ne
 				cfg := s.Properties["Config"]
 				if cfg == nil {
 					t.Error("expected Config property")
+					return
 				}
 				if cfg.Type != schema.Object {
 					t.Errorf("expected object type for Config")
@@ -457,6 +458,7 @@ func MapReturn(req Request) MapResult { return MapResult{} }`,
 				dataField := s.Properties["Data"]
 				if dataField == nil {
 					t.Error("expected Data property")
+					return
 				}
 				if dataField.Type != schema.Object {
 					t.Errorf("expected object type for map, got %v", dataField.Type)
@@ -486,6 +488,7 @@ func ArrayOfArrays(req Request) ArrayResult { return ArrayResult{} }`,
 				dataField := s.Properties["Data"]
 				if dataField == nil {
 					t.Error("expected Data property")
+					return
 				}
 				if dataField.Type != schema.Array {
 					t.Errorf("expected array type, got %v", dataField.Type)

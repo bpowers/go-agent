@@ -45,9 +45,11 @@ cmd/build/          # Code generation tools
 
 ## Development Workflow for LLM Agents
 
+It is CRITICAL that you NEVER use the `--no-verify` flag with `git commit`.
+
 When working on this codebase, follow this systematic approach:
 
-### 0, Problem-Solving Philosophy
+### 0. Problem-Solving Philosophy
 
 - **Write high-quality, general-purpose solutions**: Implement solutions that work correctly for all valid inputs, not just test cases. Do not hard-code values or create solutions that only work for specific test inputs.
 - **Prioritize the right approach over the first approach**: Research the proper way to implement features rather than implementing workarounds. For example, check if an API provides token usage directly before implementing token counting.

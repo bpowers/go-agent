@@ -647,19 +647,3 @@ func (s *persistentSession) saveMetricsLocked() {
 		CompactionThreshold: s.compactionThreshold,
 	})
 }
-
-// markUserMessageStatus updates the status of the last user message.
-// This method expects the mutex is NOT held and will handle locking internally.
-func (s *persistentSession) markUserMessageStatus(status RecordStatus) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.lastUserMessageID > 0 {
-		// Get the specific record to update
-		record, err := s.store.GetRecord(s.sessionID, s.lastUserMessageID)
-		if err == nil {
-			record.Status = string(status)
-			s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, record)
-		}
-	}
-}

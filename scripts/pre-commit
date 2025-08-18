@@ -7,15 +7,28 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Determine where go install puts binaries
+GOPATH=$(go env GOPATH)
+GOBIN=$(go env GOBIN)
+if [ -z "$GOBIN" ]; then
+    BIN_DIR="$GOPATH/bin"
+else
+    BIN_DIR="$GOBIN"
+fi
+
+# Set tool paths
+GOFUMPT="$BIN_DIR/gofumpt"
+STATICCHECK="$BIN_DIR/staticcheck"
+
 # Check for required tools
-if ! command -v gofumpt &> /dev/null; then
-    echo -e "${RED}Error: gofumpt is not installed${NC}"
+if [ ! -f "$GOFUMPT" ]; then
+    echo -e "${RED}Error: gofumpt is not installed at $GOFUMPT${NC}"
     echo "Run './scripts/install-hooks.sh' to install required tools"
     exit 1
 fi
 
-if ! command -v golangci-lint &> /dev/null; then
-    echo -e "${RED}Error: golangci-lint is not installed${NC}"
+if [ ! -f "$STATICCHECK" ]; then
+    echo -e "${RED}Error: staticcheck is not installed at $STATICCHECK${NC}"
     echo "Run './scripts/install-hooks.sh' to install required tools"
     exit 1
 fi
@@ -24,13 +37,13 @@ echo "Running pre-commit checks..."
 
 # 1. Check if gofumpt would make changes
 echo -n "Checking code formatting with gofumpt... "
-if ! gofumpt -l . | grep -q .; then
+if ! "$GOFUMPT" -l . | grep -q .; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
     echo -e "${RED}The following files need formatting:${NC}"
-    gofumpt -l .
-    echo -e "${YELLOW}Run 'gofumpt -w .' to fix formatting${NC}"
+    "$GOFUMPT" -l .
+    echo -e "${YELLOW}Run '$GOFUMPT -w .' to fix formatting${NC}"
     exit 1
 fi
 
@@ -57,7 +70,7 @@ go generate ./... 2>/dev/null
 # Format any newly generated files
 while IFS= read -r file; do
     if [ -f "$file" ]; then
-        gofumpt -w "$file"
+        "$GOFUMPT" -w "$file"
     fi
 done < "$TEMP_DIR/generated_files.txt"
 
@@ -88,18 +101,18 @@ if [ "$CHANGED" = false ]; then
 else
     echo -e "${RED}✗${NC}"
     echo -e "${RED}Generated files are out of date${NC}"
-    echo -e "${YELLOW}Run 'go generate ./... && gofumpt -w .' to update generated files${NC}"
+    echo -e "${YELLOW}Run 'go generate ./... && $GOFUMPT -w .' to update generated files${NC}"
     exit 1
 fi
 
-# 3. Run golangci-lint
-echo -n "Running golangci-lint... "
-if golangci-lint run --timeout 5m > /dev/null 2>&1; then
+# 3. Run staticcheck
+echo -n "Running staticcheck... "
+# Run staticcheck which detects SA2001 (empty critical sections) and SA2003 (deferred Lock instead of Unlock)
+if "$STATICCHECK" ./... > /dev/null 2>&1; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
-    echo -e "${RED}Linting failed. Run 'golangci-lint run' to see errors${NC}"
-    golangci-lint run --timeout 5m
+    echo -e "${RED}Static analysis failed. Run '$STATICCHECK ./...' to see errors${NC}"
     exit 1
 fi
 

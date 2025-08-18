@@ -985,7 +985,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		
+
 		if c.systemPrompt != "" {
 			conversationMessages = append(conversationMessages, openai.SystemMessage(c.systemPrompt))
 		}
@@ -1195,7 +1195,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		func() {
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			
+
 			c.msgs = append(c.msgs, finalMsg)
 			if lastUsage.TotalTokens > 0 {
 				c.lastMessageUsage = lastUsage

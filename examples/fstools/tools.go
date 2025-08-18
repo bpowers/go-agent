@@ -104,9 +104,7 @@ func ReadFile(ctx context.Context, req ReadFileRequest) ReadFileResult {
 	// directory traversal should be prevented with os.Root or the use of an in-memory FS,
 	// but still do our best to clean up the path.
 	fileName := path.Clean(req.FileName)
-	if strings.HasPrefix(fileName, "/") {
-		fileName = strings.TrimPrefix(fileName, "/")
-	}
+	fileName = strings.TrimPrefix(fileName, "/")
 
 	file, err := fileSystem.Open(fileName)
 	if err != nil {
@@ -148,9 +146,7 @@ func WriteFile(ctx context.Context, req WriteFileRequest) WriteFileResult {
 
 	// Clean the path to prevent directory traversal
 	fileName := path.Clean(req.FileName)
-	if strings.HasPrefix(fileName, "/") {
-		fileName = strings.TrimPrefix(fileName, "/")
-	}
+	fileName = strings.TrimPrefix(fileName, "/")
 
 	// Create directory if needed
 	dir := path.Dir(fileName)

@@ -11,21 +11,57 @@ NC='\033[0m' # No Color
 
 echo "Setting up development environment..."
 
-# 1. Install golangci-lint if not present
-if ! command -v golangci-lint &> /dev/null; then
-    echo "Installing golangci-lint..."
-    # Install the latest version
-    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-    echo -e "${GREEN}✓${NC} golangci-lint installed"
+# Determine where go install puts binaries
+GOPATH=$(go env GOPATH)
+GOBIN=$(go env GOBIN)
+if [ -z "$GOBIN" ]; then
+    INSTALL_DIR="$GOPATH/bin"
 else
-    echo -e "${GREEN}✓${NC} golangci-lint already installed ($(golangci-lint version))"
+    INSTALL_DIR="$GOBIN"
+fi
+
+# Check if install directory is in PATH
+if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+    echo -e "${YELLOW}Warning: $INSTALL_DIR is not in your PATH${NC}"
+    echo "Add this to your shell profile (.bashrc, .zshrc, etc.):"
+    echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
+    echo ""
+fi
+
+# 1. Install staticcheck if not present
+if ! command -v staticcheck &> /dev/null; then
+    echo "Installing staticcheck to $INSTALL_DIR..."
+    go install honnef.co/go/tools/cmd/staticcheck@latest
+    
+    # Check if it's now available
+    if [ -f "$INSTALL_DIR/staticcheck" ]; then
+        echo -e "${GREEN}✓${NC} staticcheck installed to $INSTALL_DIR"
+        if ! command -v staticcheck &> /dev/null; then
+            echo -e "${YELLOW}   Note: You may need to add $INSTALL_DIR to your PATH or restart your shell${NC}"
+        fi
+    else
+        echo -e "${RED}Failed to install staticcheck${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✓${NC} staticcheck already installed"
 fi
 
 # 2. Install gofumpt if not present
 if ! command -v gofumpt &> /dev/null; then
-    echo "Installing gofumpt..."
+    echo "Installing gofumpt to $INSTALL_DIR..."
     go install mvdan.cc/gofumpt@latest
-    echo -e "${GREEN}✓${NC} gofumpt installed"
+    
+    # Check if it's now available
+    if [ -f "$INSTALL_DIR/gofumpt" ]; then
+        echo -e "${GREEN}✓${NC} gofumpt installed to $INSTALL_DIR"
+        if ! command -v gofumpt &> /dev/null; then
+            echo -e "${YELLOW}   Note: You may need to add $INSTALL_DIR to your PATH or restart your shell${NC}"
+        fi
+    else
+        echo -e "${RED}Failed to install gofumpt${NC}"
+        exit 1
+    fi
 else
     echo -e "${GREEN}✓${NC} gofumpt already installed"
 fi
