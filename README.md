@@ -75,13 +75,13 @@ func main() {
 
 ```go
 // Stream responses with a callback
-_, err := session.MessageStream(
+_, err := session.Message(
     context.Background(),
     chat.Message{
         Role:    chat.UserRole,
         Content: "Explain quantum computing",
     },
-    func(event chat.StreamEvent) error {
+    chat.WithStreamingCb(func(event chat.StreamEvent) error {
         switch event.Type {
         case chat.StreamEventTypeContent:
             fmt.Print(event.Content) // Print as it arrives
@@ -92,7 +92,7 @@ _, err := session.MessageStream(
             }
         }
         return nil
-    },
+    }),
 )
 ```
 
@@ -222,7 +222,7 @@ All providers support tool calling but with different approaches:
 
 The multi-round pattern (implemented in all providers):
 1. Detect tool calls in the streaming response
-2. Execute tools with the provided context (context must flow from Message/MessageStream to handlers)
+2. Execute tools with the provided context (context must flow from Message to handlers)
 3. Format results according to provider requirements
 4. Make follow-up API calls with tool results
 5. Repeat until no more tool calls (max 10 rounds to prevent infinite loops)

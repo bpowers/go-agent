@@ -168,11 +168,9 @@ type MockChat struct {
 }
 
 func (m *MockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
-	// Just call MessageStream with nil callback
-	return m.MessageStream(ctx, msg, nil, opts...)
-}
-
-func (m *MockChat) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
+	// Apply options to get callback if provided
+	appliedOpts := chat.ApplyOptions(opts...)
+	callback := appliedOpts.StreamingCb
 	if m.err != nil {
 		return chat.Message{}, m.err
 	}

@@ -84,10 +84,6 @@ func (m *mockSummarizerChat) Message(ctx context.Context, msg chat.Message, opts
 	}, nil
 }
 
-func (m *mockSummarizerChat) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
-	return m.Message(ctx, msg, opts...)
-}
-
 func (m *mockSummarizerChat) History() (systemPrompt string, msgs []chat.Message) {
 	return m.systemPrompt, nil
 }

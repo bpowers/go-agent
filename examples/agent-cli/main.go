@@ -286,7 +286,9 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 			return nil
 		}
 
-		_, err := session.MessageStream(ctx, userMsg, callback, opts...)
+		// Add streaming callback to the options
+		opts = append(opts, chat.WithStreamingCb(callback))
+		_, err := session.Message(ctx, userMsg, opts...)
 		if err != nil {
 			_, _ = fmt.Fprintf(errOutput, "\nError: %v\n", err)
 			continue

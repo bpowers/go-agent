@@ -61,12 +61,8 @@ type ToolDef interface {
 // Chat is the stateful interface used to interact with an LLM in a turn-based way (including single-turn use).
 type Chat interface {
 	// Message sends a new message, as well as all previous messages, to an LLM returning the result.
+	// Use WithStreamingCb option to receive streaming events during the call.
 	Message(ctx context.Context, msg Message, opts ...Option) (Message, error)
-	// MessageStream sends a message and streams the response through the callback.
-	// The callback is called with StreamEvent objects containing content chunks,
-	// thinking status updates, and other streaming events.
-	// The complete message is also returned after streaming completes.
-	MessageStream(ctx context.Context, msg Message, callback StreamCallback, opts ...Option) (Message, error)
 	// History extracts the system prompt and history up to this point for a chat for storage and later Chat object re-initialization.
 	History() (systemPrompt string, msgs []Message)
 
@@ -119,6 +115,7 @@ type requestOpts struct {
 	maxTokens       int
 	reasoningEffort string
 	responseFormat  *JsonSchema
+	streamingCb     StreamCallback
 }
 
 // Options shouldn't be used directly, but is public so that LLM implementations can reference it.
@@ -127,6 +124,7 @@ type Options struct {
 	MaxTokens       int
 	ReasoningEffort string
 	ResponseFormat  *JsonSchema
+	StreamingCb     StreamCallback
 }
 
 // JsonSchema represents a requested schema that an LLM's response should conform to.
@@ -173,6 +171,13 @@ func WithResponseFormat(name string, strict bool, schema *schema.JSON) Option {
 	}
 }
 
+// WithStreamingCb specifies a callback to receive streaming events during message processing.
+func WithStreamingCb(callback StreamCallback) Option {
+	return func(opts *requestOpts) {
+		opts.streamingCb = callback
+	}
+}
+
 // ApplyOptions is for use by LLM implementations, not users of the library.
 func ApplyOptions(opts ...Option) Options {
 	var options requestOpts
@@ -185,6 +190,7 @@ func ApplyOptions(opts ...Option) Options {
 		MaxTokens:       options.maxTokens,
 		ReasoningEffort: options.reasoningEffort,
 		ResponseFormat:  options.responseFormat,
+		StreamingCb:     options.streamingCb,
 	}
 }
 

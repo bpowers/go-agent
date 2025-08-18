@@ -161,7 +161,30 @@ type chatClient struct {
 	toolsLock sync.RWMutex
 }
 
-func (c *chatClient) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
+func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
+	// Apply options to get callback if provided
+	appliedOpts := chat.ApplyOptions(opts...)
+	callback := appliedOpts.StreamingCb
+
+	// For debug mode, wrap or create callback to stream to stderr
+	if c.debug {
+		origCallback := callback
+		callback = func(event chat.StreamEvent) error {
+			switch event.Type {
+			case chat.StreamEventTypeContent:
+				fmt.Fprint(os.Stderr, event.Content)
+			case chat.StreamEventTypeThinking:
+				if event.ThinkingStatus != nil && event.ThinkingStatus.IsThinking {
+					fmt.Fprint(os.Stderr, "[Thinking...] ")
+				}
+			}
+			if origCallback != nil {
+				return origCallback(event)
+			}
+			return nil
+		}
+	}
+
 	// Route to appropriate API based on model type
 	// Note: The Responses API doesn't support tools yet, so we fall back to ChatCompletions when tools are registered
 	if c.api == Responses && len(c.tools) == 0 {
@@ -1243,31 +1266,6 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.Cha
 	}
 
 	return toolResults, nil
-}
-
-func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
-	// For debug mode, stream to stderr
-	if c.debug {
-		callback := func(event chat.StreamEvent) error {
-			switch event.Type {
-			case chat.StreamEventTypeContent:
-				fmt.Fprint(os.Stderr, event.Content)
-			case chat.StreamEventTypeThinking:
-				if event.ThinkingStatus != nil && event.ThinkingStatus.IsThinking {
-					fmt.Fprint(os.Stderr, "[Thinking...] ")
-				}
-			}
-			return nil
-		}
-		result, err := c.MessageStream(ctx, msg, callback, opts...)
-		if c.debug && result.Content != "" {
-			fmt.Fprintln(os.Stderr)
-		}
-		return result, err
-	}
-
-	// For non-debug mode, use MessageStream with nil callback
-	return c.MessageStream(ctx, msg, nil, opts...)
 }
 
 func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {

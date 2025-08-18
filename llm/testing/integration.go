@@ -98,19 +98,19 @@ func TestStreamingResponse(t testing.TB, client chat.Client) {
 	var streamedContent strings.Builder
 	var chunkCount int
 
-	streamResponse, err := chatSession.MessageStream(
+	streamResponse, err := chatSession.Message(
 		context.Background(),
 		chat.Message{
 			Role:    chat.UserRole,
 			Content: "Now explain reinforcement loops in one paragraph.",
 		},
-		func(event chat.StreamEvent) error {
+		chat.WithStreamingCb(func(event chat.StreamEvent) error {
 			if event.Type == chat.StreamEventTypeContent {
 				streamedContent.WriteString(event.Content)
 				chunkCount++
 			}
 			return nil
-		},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("Failed to get streaming response: %v", err)
@@ -286,13 +286,13 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 	var contentEvents []chat.StreamEvent
 	streamedContent := strings.Builder{}
 
-	_, err = chatSession.MessageStream(
+	_, err = chatSession.Message(
 		context.Background(),
 		chat.Message{
 			Role:    chat.UserRole,
 			Content: "Please use the echo tool to echo the message 'Hello World'",
 		},
-		func(event chat.StreamEvent) error {
+		chat.WithStreamingCb(func(event chat.StreamEvent) error {
 			switch event.Type {
 			case chat.StreamEventTypeToolCall:
 				toolCallEvents = append(toolCallEvents, event)
@@ -302,7 +302,7 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 				streamedContent.WriteString(event.Content)
 			}
 			return nil
-		},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("Failed to get streaming response: %v", err)

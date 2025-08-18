@@ -34,13 +34,33 @@ type mockChat struct {
 
 func (m *mockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
 	m.messageCalls++
-	m.messages = append(m.messages, msg)
+	appliedOpts := chat.ApplyOptions(opts...)
+	callback := appliedOpts.StreamingCb
 
 	// Simple mock response
 	response := chat.Message{
 		Role:    chat.AssistantRole,
 		Content: fmt.Sprintf("Response to: %s", msg.Content),
 	}
+
+	// If callback is provided, simulate streaming
+	if callback != nil {
+		m.messageStreamCalls++
+		for _, word := range strings.Fields(response.Content) {
+			if err := callback(chat.StreamEvent{
+				Type:    chat.StreamEventTypeContent,
+				Content: word + " ",
+			}); err != nil {
+				return chat.Message{}, err
+			}
+		}
+		// Send done event
+		callback(chat.StreamEvent{
+			Type: chat.StreamEventTypeDone,
+		})
+	}
+
+	m.messages = append(m.messages, msg)
 	m.messages = append(m.messages, response)
 
 	// Update token usage - new format with LastMessage and Cumulative
@@ -58,50 +78,6 @@ func (m *mockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.O
 	m.tokenUsage.Cumulative.TotalTokens = m.tokenUsage.Cumulative.InputTokens + m.tokenUsage.Cumulative.OutputTokens
 
 	return response, nil
-}
-
-func (m *mockChat) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
-	m.messageStreamCalls++
-
-	// Simulate streaming
-	response := fmt.Sprintf("Response to: %s", msg.Content)
-	for _, word := range strings.Fields(response) {
-		if err := callback(chat.StreamEvent{
-			Type:    chat.StreamEventTypeContent,
-			Content: word + " ",
-		}); err != nil {
-			return chat.Message{}, err
-		}
-	}
-
-	// Send done event
-	callback(chat.StreamEvent{
-		Type: chat.StreamEventTypeDone,
-	})
-
-	fullResponse := chat.Message{
-		Role:    chat.AssistantRole,
-		Content: response,
-	}
-
-	m.messages = append(m.messages, msg)
-	m.messages = append(m.messages, fullResponse)
-
-	// Update token usage - new format with LastMessage and Cumulative
-	inputTokens := estimateTokens(msg.Content)
-	outputTokens := estimateTokens(response)
-
-	m.tokenUsage.LastMessage = chat.TokenUsageDetails{
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		TotalTokens:  inputTokens + outputTokens,
-	}
-
-	m.tokenUsage.Cumulative.InputTokens += inputTokens
-	m.tokenUsage.Cumulative.OutputTokens += outputTokens
-	m.tokenUsage.Cumulative.TotalTokens = m.tokenUsage.Cumulative.InputTokens + m.tokenUsage.Cumulative.OutputTokens
-
-	return fullResponse, nil
 }
 
 func (m *mockChat) History() (systemPrompt string, msgs []chat.Message) {
@@ -208,15 +184,15 @@ func TestSessionStreaming(t *testing.T) {
 	ctx := context.Background()
 	var streamedContent strings.Builder
 
-	response, err := session.MessageStream(ctx, chat.Message{
+	response, err := session.Message(ctx, chat.Message{
 		Role:    chat.UserRole,
 		Content: "Stream test",
-	}, func(event chat.StreamEvent) error {
+	}, chat.WithStreamingCb(func(event chat.StreamEvent) error {
 		if event.Type == chat.StreamEventTypeContent {
 			streamedContent.WriteString(event.Content)
 		}
 		return nil
-	})
+	}))
 
 	require.NoError(t, err)
 	assert.Contains(t, response.Content, "Stream test")

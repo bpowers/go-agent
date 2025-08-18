@@ -124,7 +124,10 @@ type chatClient struct {
 	toolsLock sync.RWMutex
 }
 
-func (c *chatClient) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
+func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
+	// Apply options to get callback if provided
+	appliedOpts := chat.ApplyOptions(opts...)
+	callback := appliedOpts.StreamingCb
 	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
@@ -462,11 +465,6 @@ func (c *chatClient) MessageStream(ctx context.Context, msg chat.Message, callba
 	// Token usage is extracted from message_delta events during streaming
 
 	return respMsg, nil
-}
-
-func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
-	// Use MessageStream with nil callback
-	return c.MessageStream(ctx, msg, nil, opts...)
 }
 
 func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {

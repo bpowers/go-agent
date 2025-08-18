@@ -269,14 +269,10 @@ func (m *MockChat) Message(ctx context.Context, msg Message, opts ...Option) (Me
 		return Message{}, m.err
 	}
 	m.messages = append(m.messages, msg)
-	return m.nextResponse, nil
-}
 
-func (m *MockChat) MessageStream(ctx context.Context, msg Message, callback StreamCallback, opts ...Option) (Message, error) {
-	if m.err != nil {
-		return Message{}, m.err
-	}
-	m.messages = append(m.messages, msg)
+	// Apply options to get callback if provided
+	appliedOpts := ApplyOptions(opts...)
+	callback := appliedOpts.StreamingCb
 	m.streamCallback = callback
 
 	// Simulate streaming if callback provided
@@ -360,7 +356,7 @@ func TestChatInterface(t *testing.T) {
 		assert.Len(t, mock.messages, 1)
 	})
 
-	t.Run("MessageStream method", func(t *testing.T) {
+	t.Run("Message with streaming callback", func(t *testing.T) {
 		t.Parallel()
 		mock := &MockChat{
 			systemPrompt: "You are a helpful assistant",
@@ -382,7 +378,7 @@ func TestChatInterface(t *testing.T) {
 			return nil
 		}
 
-		resp, err := mock.MessageStream(ctx, userMsg, callback)
+		resp, err := mock.Message(ctx, userMsg, WithStreamingCb(callback))
 		assert.NoError(t, err)
 		assert.Equal(t, AssistantRole, resp.Role)
 		assert.Equal(t, "I can help with that!", resp.Content)

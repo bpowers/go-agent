@@ -220,25 +220,6 @@ func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts 
 	return response, nil
 }
 
-// MessageStream implements chat.Chat
-func (s *persistentSession) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
-	// Add user message and check compaction
-	tempChat, err := s.prepareForMessage(ctx, msg)
-	if err != nil {
-		return chat.Message{}, err
-	}
-
-	// Send message with streaming
-	response, err := tempChat.MessageStream(ctx, msg, callback, opts...)
-	if err != nil {
-		return response, err
-	}
-
-	// Track response
-	s.trackResponse(tempChat, response)
-	return response, nil
-}
-
 // prepareForMessage adds the user message, checks for compaction, and returns a prepared chat.
 // This method expects the mutex is NOT held and will handle locking internally.
 func (s *persistentSession) prepareForMessage(ctx context.Context, msg chat.Message) (chat.Chat, error) {
