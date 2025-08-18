@@ -34,7 +34,7 @@ func (t *testToolDef) Description() string {
 const provider = "gemini"
 
 func getTestModel() string {
-	return "gemini-2.0-flash-exp"
+	return "gemini-2.5-flash"
 }
 
 func getAPIKey() string {

@@ -45,13 +45,13 @@ func (m *mockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.O
 	// Update token usage - new format with LastMessage and Cumulative
 	inputTokens := estimateTokens(msg.Content)
 	outputTokens := estimateTokens(response.Content)
-	
+
 	m.tokenUsage.LastMessage = chat.TokenUsageDetails{
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		TotalTokens:  inputTokens + outputTokens,
 	}
-	
+
 	m.tokenUsage.Cumulative.InputTokens += inputTokens
 	m.tokenUsage.Cumulative.OutputTokens += outputTokens
 	m.tokenUsage.Cumulative.TotalTokens = m.tokenUsage.Cumulative.InputTokens + m.tokenUsage.Cumulative.OutputTokens
@@ -89,13 +89,13 @@ func (m *mockChat) MessageStream(ctx context.Context, msg chat.Message, callback
 	// Update token usage - new format with LastMessage and Cumulative
 	inputTokens := estimateTokens(msg.Content)
 	outputTokens := estimateTokens(response)
-	
+
 	m.tokenUsage.LastMessage = chat.TokenUsageDetails{
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		TotalTokens:  inputTokens + outputTokens,
 	}
-	
+
 	m.tokenUsage.Cumulative.InputTokens += inputTokens
 	m.tokenUsage.Cumulative.OutputTokens += outputTokens
 	m.tokenUsage.Cumulative.TotalTokens = m.tokenUsage.Cumulative.InputTokens + m.tokenUsage.Cumulative.OutputTokens
@@ -177,7 +177,7 @@ func TestSessionBasics(t *testing.T) {
 	// Test initial state
 	assert.Equal(t, 4096, session.MaxTokens())
 
-	metrics := session.SessionMetrics()
+	metrics := session.Metrics()
 	assert.Equal(t, 0, metrics.TotalTokens)
 	assert.Equal(t, 1, metrics.RecordsLive) // System prompt
 	assert.Equal(t, 1, metrics.RecordsTotal)
@@ -296,7 +296,7 @@ func TestSessionMetrics(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	metrics := session.SessionMetrics()
+	metrics := session.Metrics()
 	assert.Equal(t, 7, metrics.RecordsLive) // System + 3*(user+assistant)
 	assert.Equal(t, 7, metrics.RecordsTotal)
 	assert.Greater(t, metrics.LiveTokens, 0)
@@ -328,7 +328,7 @@ func TestSessionCompaction(t *testing.T) {
 	assert.Greater(t, len(allRecords), len(liveRecords))
 
 	// Check metrics show compaction occurred
-	metrics := session.SessionMetrics()
+	metrics := session.Metrics()
 	assert.Greater(t, metrics.CompactionCount, 0)
 	assert.False(t, metrics.LastCompaction.IsZero())
 }
@@ -353,7 +353,7 @@ func TestManualCompaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Check that compaction occurred
-	metrics := session.SessionMetrics()
+	metrics := session.Metrics()
 	assert.Equal(t, 1, metrics.CompactionCount)
 
 	// Verify some records are dead

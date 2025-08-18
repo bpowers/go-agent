@@ -10,23 +10,20 @@ import (
 	"github.com/bpowers/go-agent/persistence"
 )
 
-// Session manages conversation lifecycle with automatic context compaction.
+// Session manages the conversation lifecycle with automatic context compaction.
 // It embeds chat.Chat for full compatibility while adding persistence and
 // automatic summarization capabilities. When the context window approaches
 // capacity (default 80%), older messages are automatically compacted into
 // summaries to maintain conversation continuity.
 type Session interface {
-	// Embeds chat.Chat for full compatibility
-	chat.Chat
+	chat.Chat // a session is a chat that has been enhanced with context window management.
 
-	// Session-specific methods
 	LiveRecords() []Record          // Get active context window records
 	TotalRecords() []Record         // Get all records (live + dead)
 	CompactNow() error              // Manually trigger compaction
 	SetCompactionThreshold(float64) // Set when to compact (0.0-1.0, default 0.8)
 
-	// Metrics
-	SessionMetrics() SessionMetrics // Token usage, compaction stats, etc.
+	Metrics() SessionMetrics // Token usage, compaction stats, etc.
 }
 
 // Record represents a conversation turn in the session history.
@@ -513,7 +510,7 @@ func (s *persistentSession) SetCompactionThreshold(threshold float64) {
 }
 
 // SessionMetrics returns usage statistics for the session.
-func (s *persistentSession) SessionMetrics() SessionMetrics {
+func (s *persistentSession) Metrics() SessionMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

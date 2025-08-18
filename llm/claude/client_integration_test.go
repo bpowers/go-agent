@@ -36,7 +36,7 @@ func (t *testToolDef) Description() string {
 const provider = "claude"
 
 func getTestModel() string {
-	return "claude-3-5-haiku-20241022"
+	return "claude-3-5-haiku-latest"
 }
 
 func getAPIKey() string {

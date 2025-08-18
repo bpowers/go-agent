@@ -27,7 +27,6 @@ func (readFileToolDefType) Description() string {
 // ReadFileToolDef is the MCP tool definition for the ReadFile function
 var ReadFileToolDef chat.ToolDef = readFileToolDefType{}
 
-
 // ReadFileTool is a generic wrapper that accepts JSON input and returns JSON output
 func ReadFileTool(ctx context.Context, input string) string {
 	// Parse the input JSON

@@ -148,7 +148,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 				_, _ = fmt.Fprintln(output, "\nGoodbye!")
 
 				// Show session metrics
-				metrics := session.SessionMetrics()
+				metrics := session.Metrics()
 				_, _ = fmt.Fprintf(output, "\nSession Stats:\n")
 				_, _ = fmt.Fprintf(output, "  Total tokens used: %d\n", metrics.TotalTokens)
 				_, _ = fmt.Fprintf(output, "  Live context: %d/%d tokens (%.1f%% full)\n",
@@ -174,7 +174,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 					return nil
 				} else if line == "/status" {
 					// Show session status
-					metrics := session.SessionMetrics()
+					metrics := session.Metrics()
 					_, _ = fmt.Fprintf(output, "\n📊 Session Status:\n")
 					_, _ = fmt.Fprintf(output, "  Context: %d/%d tokens (%.1f%% full)\n",
 						metrics.LiveTokens, metrics.MaxTokens, metrics.PercentFull*100)

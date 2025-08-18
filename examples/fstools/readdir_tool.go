@@ -27,11 +27,10 @@ func (readDirToolDefType) Description() string {
 // ReadDirToolDef is the MCP tool definition for the ReadDir function
 var ReadDirToolDef chat.ToolDef = readDirToolDefType{}
 
-
 // ReadDirTool is a generic wrapper that accepts JSON input and returns JSON output
 func ReadDirTool(ctx context.Context, input string) string {
 	// No input parameters needed, ignore input JSON
-	
+
 	// Call the actual function with context only
 	result := ReadDir(ctx)
 

@@ -41,7 +41,7 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	assert.Len(t, records, 3) // System, user, assistant
 
 	// Get metrics
-	metrics := session.SessionMetrics()
+	metrics := session.Metrics()
 	assert.Equal(t, 3, metrics.RecordsLive)
 	assert.Greater(t, metrics.TotalTokens, 0)
 
@@ -79,7 +79,7 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	metrics1 := session1.SessionMetrics()
+	metrics1 := session1.Metrics()
 	tokens1 := metrics1.TotalTokens
 
 	// Close first store
@@ -97,7 +97,7 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 	assert.Equal(t, 7, len(records)) // System + 3*(user+assistant)
 
 	// Metrics should be preserved
-	metrics2 := session2.SessionMetrics()
+	metrics2 := session2.Metrics()
 	assert.Equal(t, tokens1, metrics2.TotalTokens)
 }
 
@@ -134,7 +134,7 @@ func TestSessionCompactionWithSQLite(t *testing.T) {
 	assert.Greater(t, len(allRecords), len(liveRecords))
 
 	// Verify compaction metrics were saved
-	metrics := session.SessionMetrics()
+	metrics := session.Metrics()
 	assert.Equal(t, 1, metrics.CompactionCount)
 	assert.False(t, metrics.LastCompaction.IsZero())
 }
