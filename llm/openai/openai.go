@@ -981,24 +981,27 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	// Keep track of all messages for the conversation
 	var conversationMessages []openai.ChatCompletionMessageParamUnion
 
-	// Snapshot system prompt and history under lock
-	c.mu.Lock()
-	if c.systemPrompt != "" {
-		conversationMessages = append(conversationMessages, openai.SystemMessage(c.systemPrompt))
-	}
-	for _, m := range c.msgs {
-		switch m.Role {
-		case chat.UserRole:
-			conversationMessages = append(conversationMessages, openai.UserMessage(m.Content))
-		case chat.AssistantRole:
-			conversationMessages = append(conversationMessages, openai.AssistantMessage(m.Content))
-		default:
-			conversationMessages = append(conversationMessages, openai.SystemMessage(m.Content))
+	// Build conversation messages and update history
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		
+		if c.systemPrompt != "" {
+			conversationMessages = append(conversationMessages, openai.SystemMessage(c.systemPrompt))
 		}
-	}
-	// Add the initial user message to history
-	c.msgs = append(c.msgs, initialMsg)
-	c.mu.Unlock()
+		for _, m := range c.msgs {
+			switch m.Role {
+			case chat.UserRole:
+				conversationMessages = append(conversationMessages, openai.UserMessage(m.Content))
+			case chat.AssistantRole:
+				conversationMessages = append(conversationMessages, openai.AssistantMessage(m.Content))
+			default:
+				conversationMessages = append(conversationMessages, openai.SystemMessage(m.Content))
+			}
+		}
+		// Add the initial user message to history
+		c.msgs = append(c.msgs, initialMsg)
+	}()
 
 	conversationMessages = append(conversationMessages, openai.UserMessage(initialMsg.Content))
 
@@ -1189,15 +1192,18 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Update history with the final response under lock
-		c.mu.Lock()
-		c.msgs = append(c.msgs, finalMsg)
-		if lastUsage.TotalTokens > 0 {
-			c.lastMessageUsage = lastUsage
-			c.cumulativeUsage.InputTokens += lastUsage.InputTokens
-			c.cumulativeUsage.OutputTokens += lastUsage.OutputTokens
-			c.cumulativeUsage.TotalTokens += lastUsage.TotalTokens
-		}
-		c.mu.Unlock()
+		func() {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			
+			c.msgs = append(c.msgs, finalMsg)
+			if lastUsage.TotalTokens > 0 {
+				c.lastMessageUsage = lastUsage
+				c.cumulativeUsage.InputTokens += lastUsage.InputTokens
+				c.cumulativeUsage.OutputTokens += lastUsage.OutputTokens
+				c.cumulativeUsage.TotalTokens += lastUsage.TotalTokens
+			}
+		}()
 
 		return finalMsg, nil
 	}

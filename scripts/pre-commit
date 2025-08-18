@@ -1,0 +1,117 @@
+#!/bin/bash
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check for required tools
+if ! command -v gofumpt &> /dev/null; then
+    echo -e "${RED}Error: gofumpt is not installed${NC}"
+    echo "Run './scripts/install-hooks.sh' to install required tools"
+    exit 1
+fi
+
+if ! command -v golangci-lint &> /dev/null; then
+    echo -e "${RED}Error: golangci-lint is not installed${NC}"
+    echo "Run './scripts/install-hooks.sh' to install required tools"
+    exit 1
+fi
+
+echo "Running pre-commit checks..."
+
+# 1. Check if gofumpt would make changes
+echo -n "Checking code formatting with gofumpt... "
+if ! gofumpt -l . | grep -q .; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${RED}✗${NC}"
+    echo -e "${RED}The following files need formatting:${NC}"
+    gofumpt -l .
+    echo -e "${YELLOW}Run 'gofumpt -w .' to fix formatting${NC}"
+    exit 1
+fi
+
+# 2. Check if go generate would make changes
+echo -n "Checking if go generate is up to date... "
+# Save current state
+TEMP_DIR=$(mktemp -d)
+trap "rm -rf $TEMP_DIR" EXIT
+
+# Find all generated files (typically have a comment like "Code generated")
+find . -name "*.go" -exec grep -l "Code generated" {} \; > "$TEMP_DIR/generated_files.txt" || true
+
+# Copy current generated files
+while IFS= read -r file; do
+    if [ -f "$file" ]; then
+        mkdir -p "$TEMP_DIR/$(dirname "$file")"
+        cp "$file" "$TEMP_DIR/$file"
+    fi
+done < "$TEMP_DIR/generated_files.txt"
+
+# Run go generate
+go generate ./... 2>/dev/null
+
+# Format any newly generated files
+while IFS= read -r file; do
+    if [ -f "$file" ]; then
+        gofumpt -w "$file"
+    fi
+done < "$TEMP_DIR/generated_files.txt"
+
+# Check if any generated files changed
+CHANGED=false
+while IFS= read -r file; do
+    if [ -f "$file" ] && [ -f "$TEMP_DIR/$file" ]; then
+        if ! cmp -s "$file" "$TEMP_DIR/$file"; then
+            CHANGED=true
+            break
+        fi
+    elif [ -f "$file" ]; then
+        # New generated file that didn't exist before
+        CHANGED=true
+        break
+    fi
+done < "$TEMP_DIR/generated_files.txt"
+
+# Restore original files
+while IFS= read -r file; do
+    if [ -f "$TEMP_DIR/$file" ]; then
+        cp "$TEMP_DIR/$file" "$file"
+    fi
+done < "$TEMP_DIR/generated_files.txt"
+
+if [ "$CHANGED" = false ]; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${RED}✗${NC}"
+    echo -e "${RED}Generated files are out of date${NC}"
+    echo -e "${YELLOW}Run 'go generate ./... && gofumpt -w .' to update generated files${NC}"
+    exit 1
+fi
+
+# 3. Run golangci-lint
+echo -n "Running golangci-lint... "
+if golangci-lint run --timeout 5m > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${RED}✗${NC}"
+    echo -e "${RED}Linting failed. Run 'golangci-lint run' to see errors${NC}"
+    golangci-lint run --timeout 5m
+    exit 1
+fi
+
+# 4. Run tests with race detector
+echo -n "Running tests with race detector... "
+if ./with_api_keys.sh go test -race -shuffle on ./... > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${RED}✗${NC}"
+    echo -e "${RED}Tests failed${NC}"
+    echo -e "${YELLOW}Run './with_api_keys.sh go test -race -shuffle on ./...' to see failures${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}All pre-commit checks passed!${NC}"

@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      
+      - name: Check formatting
+        run: |
+          go install mvdan.cc/gofumpt@latest
+          if [ -n "$(gofumpt -l .)" ]; then
+            echo "The following files need formatting:"
+            gofumpt -l .
+            echo "Run 'gofumpt -w .' to fix"
+            exit 1
+          fi
+      
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout 5m
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      
+      - name: Check go generate
+        run: |
+          go generate ./...
+          go install mvdan.cc/gofumpt@latest
+          find . -name "*.go" -exec grep -l "Code generated" {} \; | xargs -r gofumpt -w
+          if [ -n "$(git diff --name-only)" ]; then
+            echo "Generated files are out of date:"
+            git diff --name-only
+            echo "Run 'go generate ./...' locally and commit the changes"
+            exit 1
+          fi
+      
+      - name: Run tests
+        run: go test -race -shuffle on ./...

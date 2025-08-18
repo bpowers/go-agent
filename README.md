@@ -174,13 +174,41 @@ This section contains important information for developers and AI agents working
 - **No special casing in tests**: Tests should hold all implementations to the same standard. Never add conditional logic in tests that allows certain implementations to skip requirements.
 - **Complete all aspects of a task**: When fixing bugs or implementing features, ensure the fix works for all code paths, not just the primary one.
 
+### Development Setup
+
+#### Required Tools
+
+Run the setup script to install development tools and git hooks:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+This will:
+- Install `golangci-lint` for comprehensive Go linting
+- Install `gofumpt` for code formatting
+- Set up a pre-commit hook that runs all checks
+
+#### Pre-commit Checks
+
+The pre-commit hook automatically runs:
+1. **Code formatting check** - Ensures all code is formatted with `gofumpt`
+2. **Generated code check** - Verifies `go generate` output is committed
+3. **Linting** - Runs `golangci-lint` with our configuration
+4. **Tests** - Runs all tests with race detection enabled
+
+To bypass the pre-commit hook in exceptional cases:
+```bash
+git commit --no-verify  # Not recommended
+```
+
 ### Go Development Standards
 
 #### Code Style and Safety
 - Use `omitzero` instead of `omitempty` in JSON struct tags
 - Run `gofumpt -w .` before committing to ensure proper formatting
 - Write concurrency-safe code by default. Favor immutability; use mutexes for shared mutable state
-- ALWAYS call Unlock()/RUnlock() in a defer statement, never synchronously
+- **ALWAYS call Unlock()/RUnlock() in a defer statement**, never synchronously (enforced by golangci-lint)
 - Use `go doc` to inspect and understand third-party APIs before implementing
 
 #### Testing
