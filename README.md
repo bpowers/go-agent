@@ -36,26 +36,30 @@ import (
     "context"
     "fmt"
     "log"
+    "os"
     
     "github.com/bpowers/go-agent/chat"
-    "github.com/bpowers/go-agent/llm"
+    "github.com/bpowers/go-agent/llm/openai"
+    // Or: "github.com/bpowers/go-agent/llm/claude"
+    // Or: "github.com/bpowers/go-agent/llm/gemini"
 )
 
 func main() {
     // Create a client for your preferred provider
-    client, err := llm.NewClient(&llm.Config{
-        Model: "gpt-4o-mini",  // or "claude-3-5-sonnet-20241022", "gemini-1.5-flash"
-        // API key defaults to environment variable based on provider
-    })
+    client, err := openai.NewClient(
+        openai.OpenAIURL,
+        os.Getenv("OPENAI_API_KEY"),
+        openai.WithModel("gpt-5-mini"),
+    )
     if err != nil {
         log.Fatal(err)
     }
     
     // Create a chat session
-    chatSession := client.NewChat("You are a helpful assistant.")
+    session := client.NewChat("You are a helpful assistant.")
     
     // Send a message
-    response, err := chatSession.Message(context.Background(), chat.Message{
+    response, err := session.Message(context.Background(), chat.Message{
         Role:    chat.UserRole,
         Content: "Hello! What can you help me with?",
     })
@@ -71,7 +75,7 @@ func main() {
 
 ```go
 // Stream responses with a callback
-_, err := chatSession.MessageStream(
+_, err := session.MessageStream(
     context.Background(),
     chat.Message{
         Role:    chat.UserRole,
@@ -94,33 +98,42 @@ _, err := chatSession.MessageStream(
 
 ### Tool Calling Example
 
+TODO
+
+## Session Management and Persistence
+
+The library includes a Session interface that extends Chat with automatic context window management:
+
 ```go
-// Register a tool
-err := chatSession.RegisterTool(
-    `{
-        "name": "get_weather",
-        "description": "Get current weather",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "location": {"type": "string"}
-            },
-            "required": ["location"]
-        }
-    }`,
-    func(ctx context.Context, args string) string {
-        // Parse args and return weather data
-        return `{"temperature": 72, "condition": "sunny"}`
-    },
+import (
+    agent "github.com/bpowers/go-agent"
+    "github.com/bpowers/go-agent/persistence/sqlitestore"
 )
 
-// Tools are automatically called when the LLM requests them
-response, _ := chatSession.Message(ctx, chat.Message{
+// Create a session with automatic context compaction
+session := agent.NewSession(
+    client,
+    "You are a helpful assistant",
+    agent.WithStore(sqlitestore.New("chat.db")),           // Optional: persist to SQLite
+    agent.WithCompactionThreshold(0.8),                    // Compact at 80% full (default)
+)
+
+// Use it like a regular Chat
+response, err := session.Message(ctx, chat.Message{
     Role:    chat.UserRole,
-    Content: "What's the weather in San Francisco?",
+    Content: "Hello!",
 })
-// The LLM will call get_weather("San Francisco") and use the result
+
+// Access session-specific features
+metrics := session.SessionMetrics()  // Token usage, compaction stats
+records := session.LiveRecords()     // Current context window
+session.CompactNow()                 // Manual compaction
 ```
+
+When the context window approaches capacity, the Session automatically:
+1. Summarizes older messages to preserve context
+2. Marks old records as "dead" (kept for history but not sent to LLM)
+3. Creates a summary record to maintain conversation continuity
 
 ## Examples
 
@@ -129,7 +142,7 @@ See the `examples/agent-cli` directory for a complete command-line chat applicat
 - Real-time streaming responses
 - Tool registration and execution
 - Thinking/reasoning display for supported models
-- Conversation history management
+- Conversation history management with Session interface
 
 ## Architecture
 
@@ -147,8 +160,6 @@ schema/             # JSON schema utilities
 cmd/build/          # Code generation tools
   funcschema/       # Generate MCP tool definitions from Go functions
   jsonschema/       # Generate JSON schemas from Go types
-third_party/        # Third-party libraries
-  contextwindow/    # Context window management utilities
 ```
 
 ## Development Guide

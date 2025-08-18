@@ -11,8 +11,10 @@ import (
 )
 
 // Session manages conversation lifecycle with automatic context compaction.
-// It wraps a chat.Chat instance and provides additional features like
-// token tracking, record management, and automatic summarization.
+// It embeds chat.Chat for full compatibility while adding persistence and
+// automatic summarization capabilities. When the context window approaches
+// capacity (default 80%), older messages are automatically compacted into
+// summaries to maintain conversation continuity.
 type Session interface {
 	// Embeds chat.Chat for full compatibility
 	chat.Chat

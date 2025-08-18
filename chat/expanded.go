@@ -86,6 +86,8 @@ type StreamCallback func(event StreamEvent) error
 type StreamHandler func(event StreamEvent) error
 
 // AdvancedMessage extends Message with tool-related fields.
+// This type is primarily used for advanced scenarios involving tool calls
+// and their results. Most users should use the standard Message type.
 type AdvancedMessage struct {
 	Message
 	// ToolCalls contains any tool invocations requested by the assistant.
@@ -94,7 +96,9 @@ type AdvancedMessage struct {
 	ToolResults []ToolResult `json:"tool_results,omitempty"`
 }
 
-// AdvancedChat extends the Chat interface with tool support.
+// AdvancedChat extends the Chat interface with explicit tool support methods.
+// Note: The standard Chat interface already includes tool support via RegisterTool.
+// This interface provides lower-level control for advanced use cases.
 type AdvancedChat interface {
 	Chat
 	// MessageWithTools sends a message with available tools and returns the response.
@@ -107,6 +111,8 @@ type AdvancedChat interface {
 }
 
 // AdvancedClient extends Client to create AdvancedChat instances.
+// This interface is for providers that need explicit tool management
+// beyond the standard RegisterTool mechanism.
 type AdvancedClient interface {
 	Client
 	// NewAdvancedChat returns an AdvancedChat instance with enhanced capabilities.
@@ -116,6 +122,8 @@ type AdvancedClient interface {
 // Additional options for advanced features
 
 // WithTools specifies available tools for the LLM to use.
+// Note: This is a placeholder for future API expansion.
+// Currently, tools should be registered using Chat.RegisterTool().
 func WithTools(tools []Tool) Option {
 	return func(opts *requestOpts) {
 		// This would need to be added to requestOpts
@@ -124,6 +132,8 @@ func WithTools(tools []Tool) Option {
 }
 
 // WithStreamHandler specifies a handler for streaming responses.
+// Note: This is a placeholder for future API expansion.
+// Currently, use MessageStream with a callback parameter.
 func WithStreamHandler(handler StreamHandler) Option {
 	return func(opts *requestOpts) {
 		// This would need to be added to requestOpts
@@ -133,6 +143,7 @@ func WithStreamHandler(handler StreamHandler) Option {
 
 // WithToolChoice specifies how the model should use tools.
 // Values can be "auto", "none", or a specific tool name.
+// Note: This is a placeholder for future API expansion.
 func WithToolChoice(choice string) Option {
 	return func(opts *requestOpts) {
 		// This would need to be added to requestOpts

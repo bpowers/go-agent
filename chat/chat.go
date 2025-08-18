@@ -89,8 +89,9 @@ type Chat interface {
 	//
 	// Context passing: The context provided to Message/MessageStream is propagated to tool handlers,
 	// allowing tools to access request-scoped resources like filesystems or databases.
-	// OpenAI's Responses API does not support tools and will automatically fall back to ChatCompletions
-	// when tools are registered.
+	//
+	// Note: OpenAI's Responses API doesn't support tools yet. When tools are registered,
+	// the OpenAI implementation automatically uses the ChatCompletions API instead.
 	RegisterTool(def ToolDef, fn func(context.Context, string) string) error
 	// DeregisterTool removes a tool by name
 	DeregisterTool(name string)
