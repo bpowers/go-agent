@@ -477,9 +477,9 @@ func (s *persistentSession) compactNowLocked() error {
 		}
 	}
 
-	// Add summary as new record
+	// Add summary as assistant message with tag (safer than system message)
 	s.store.AddRecord(persistence.Record{
-		Role:         "system",
+		Role:         "assistant",
 		Content:      fmt.Sprintf("[Previous conversation summary]\n%s", summary),
 		Live:         true,
 		InputTokens:  0, // Summary tokens will be counted with next message
