@@ -32,11 +32,24 @@ const (
 	Responses
 )
 
+// set is a simple set type for tracking unique values
+type set[T comparable] map[T]struct{}
+
+func (s set[T]) Add(v T) {
+	s[v] = struct{}{}
+}
+
+func (s set[T]) Contains(v T) bool {
+	_, ok := s[v]
+	return ok
+}
+
 type client struct {
 	openaiClient openai.Client
 	modelName    string
 	api          API
 	debug        bool
+	apiSet       bool // true if WithAPI was explicitly provided
 }
 
 var _ chat.Client = &client{}
@@ -52,6 +65,7 @@ func WithModel(modelName string) Option {
 func WithAPI(api API) Option {
 	return func(c *client) {
 		c.api = api
+		c.apiSet = true
 	}
 }
 
@@ -74,6 +88,11 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 
 	if c.modelName == "" {
 		return nil, fmt.Errorf("WithModel is a required option")
+	}
+
+	// Auto-select Responses API for reasoning-first models unless explicitly overridden
+	if !c.apiSet && isNoTemperatureModel(c.modelName) {
+		c.api = Responses
 	}
 
 	// Build OpenAI client options
@@ -132,7 +151,9 @@ func getModelMaxTokens(model string) int {
 		}
 	}
 
-	panic(fmt.Errorf("unknown model %q", model))
+	// Conservative default for unknown models instead of panic
+	log.Printf("[OpenAI] Unknown model %q; using conservative default output token limit", model)
+	return 4096
 }
 
 // isNoTemperatureModel checks if a model doesn't support custom temperature
@@ -161,6 +182,34 @@ type chatClient struct {
 	toolsLock sync.RWMutex
 }
 
+// snapshotState returns a copy of the system prompt and message history.
+// This allows streaming operations to work with a consistent view of the state
+// without holding locks during long-running operations.
+func (c *chatClient) snapshotState() (systemPrompt string, history []chat.Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	systemPrompt = c.systemPrompt
+	history = make([]chat.Message, len(c.msgs))
+	copy(history, c.msgs)
+	return systemPrompt, history
+}
+
+// updateHistoryAndUsage appends messages to history and updates token usage.
+// It properly manages locks using defer to ensure they're always released.
+func (c *chatClient) updateHistoryAndUsage(msgs []chat.Message, usage chat.TokenUsageDetails) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.msgs = append(c.msgs, msgs...)
+	if usage.TotalTokens > 0 {
+		c.lastMessageUsage = usage
+		c.cumulativeUsage.InputTokens += usage.InputTokens
+		c.cumulativeUsage.OutputTokens += usage.OutputTokens
+		c.cumulativeUsage.TotalTokens += usage.TotalTokens
+	}
+}
+
 func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
 	// Apply options to get callback if provided
 	appliedOpts := chat.ApplyOptions(opts...)
@@ -185,9 +234,12 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		}
 	}
 
-	// Route to appropriate API based on model type
+	// Determine route to appropriate API based on model type and whether tools are registered
+	c.toolsLock.RLock()
+	nTools := len(c.tools)
+	c.toolsLock.RUnlock()
 	// Note: The Responses API doesn't support tools yet, so we fall back to ChatCompletions when tools are registered
-	if c.api == Responses && len(c.tools) == 0 {
+	if c.api == Responses && nTools == 0 {
 		return c.messageStreamResponses(ctx, msg, callback, opts...)
 	}
 	return c.messageStreamChatCompletions(ctx, msg, callback, opts...)
@@ -198,8 +250,8 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// Snapshot state without holding lock during streaming
+	systemPrompt, history := c.snapshotState()
 
 	// Check if debug logging is enabled
 	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
@@ -208,17 +260,17 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 	var inputItems []responses.ResponseInputItemUnionParam
 
 	// Add system prompt as a system message if present
-	if c.systemPrompt != "" {
+	if systemPrompt != "" {
 		inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 			OfMessage: &responses.EasyInputMessageParam{
 				Role:    responses.EasyInputMessageRoleDeveloper, // Use developer role for system prompts
-				Content: responses.EasyInputMessageContentUnionParam{OfString: param.NewOpt(c.systemPrompt)},
+				Content: responses.EasyInputMessageContentUnionParam{OfString: param.NewOpt(systemPrompt)},
 			},
 		})
 	}
 
 	// Add history messages
-	for _, m := range c.msgs {
+	for _, m := range history {
 		var role responses.EasyInputMessageRole
 		switch m.Role {
 		case chat.UserRole:
@@ -283,6 +335,7 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 	var reasoningContent strings.Builder
 	var inReasoning bool
 	eventCount := 0
+	var lastUsage chat.TokenUsageDetails
 
 	for stream.Next() {
 		event := stream.Current()
@@ -294,7 +347,7 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 
 		// Handle different event types
 		switch event.Type {
-		case "response.reasoning_summary.delta":
+		case "response.reasoning.delta", "response.thinking.delta", "response.reasoning_summary.delta", "response.reasoning_summary_text.delta":
 			// Reasoning content is being streamed
 			if !inReasoning && callback != nil {
 				inReasoning = true
@@ -328,58 +381,11 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 				}
 			}
 
-		case "response.reasoning_summary.done":
+		case "response.reasoning.done", "response.thinking.done", "response.reasoning_summary.done", "response.reasoning_summary_text.done":
 			// Reasoning is complete
 			if inReasoning && callback != nil {
 				inReasoning = false
 				// Send thinking summary event
-				thinkingSummaryEvent := chat.StreamEvent{
-					Type: chat.StreamEventTypeThinkingSummary,
-					ThinkingStatus: &chat.ThinkingStatus{
-						IsThinking: false,
-						Summary:    reasoningContent.String(),
-					},
-				}
-				if err := callback(thinkingSummaryEvent); err != nil {
-					return chat.Message{}, err
-				}
-			}
-
-		case "response.reasoning_summary_text.delta":
-			// Alternative reasoning text delta
-			if !inReasoning && callback != nil {
-				inReasoning = true
-				thinkingEvent := chat.StreamEvent{
-					Type: chat.StreamEventTypeThinking,
-					ThinkingStatus: &chat.ThinkingStatus{
-						IsThinking: true,
-					},
-				}
-				if err := callback(thinkingEvent); err != nil {
-					return chat.Message{}, err
-				}
-			}
-
-			if deltaStr := event.Delta.OfString; deltaStr != "" {
-				reasoningContent.WriteString(deltaStr)
-				if callback != nil {
-					thinkingEvent := chat.StreamEvent{
-						Type:    chat.StreamEventTypeThinking,
-						Content: deltaStr,
-						ThinkingStatus: &chat.ThinkingStatus{
-							IsThinking: true,
-						},
-					}
-					if err := callback(thinkingEvent); err != nil {
-						return chat.Message{}, err
-					}
-				}
-			}
-
-		case "response.reasoning_summary_text.done":
-			// Alternative reasoning complete
-			if inReasoning && callback != nil {
-				inReasoning = false
 				thinkingSummaryEvent := chat.StreamEvent{
 					Type: chat.StreamEventTypeThinkingSummary,
 					ThinkingStatus: &chat.ThinkingStatus{
@@ -432,14 +438,10 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 					OutputTokens: int(event.Response.Usage.OutputTokens),
 					TotalTokens:  int(event.Response.Usage.TotalTokens),
 				}
-				c.lastMessageUsage = usage
-				c.cumulativeUsage.InputTokens += usage.InputTokens
-				c.cumulativeUsage.OutputTokens += usage.OutputTokens
-				c.cumulativeUsage.TotalTokens += usage.TotalTokens
+				lastUsage = usage
 				if debugSSE {
-					log.Printf("[OpenAI Responses API] Usage from completed event - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-						usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-						c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
+					log.Printf("[OpenAI Responses API] Usage from completed event - Input: %d, Output: %d, Total: %d\n",
+						usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
 				}
 			}
 			if debugSSE {
@@ -469,9 +471,8 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		Content: respContent.String(),
 	}
 
-	// Update history
-	c.msgs = append(c.msgs, reqMsg)
-	c.msgs = append(c.msgs, respMsg)
+	// Update history and usage under lock
+	c.updateHistoryAndUsage([]chat.Message{reqMsg, respMsg}, lastUsage)
 
 	return respMsg, nil
 }
@@ -481,8 +482,8 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// Snapshot state without holding lock during streaming
+	systemPrompt, history := c.snapshotState()
 
 	// Check if debug logging is enabled via environment variable
 	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
@@ -491,12 +492,12 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	var messages []openai.ChatCompletionMessageParamUnion
 
 	// Add system prompt if present
-	if c.systemPrompt != "" {
-		messages = append(messages, openai.SystemMessage(c.systemPrompt))
+	if systemPrompt != "" {
+		messages = append(messages, openai.SystemMessage(systemPrompt))
 	}
 
 	// Add history
-	for _, m := range c.msgs {
+	for _, m := range history {
 		switch m.Role {
 		case chat.UserRole:
 			messages = append(messages, openai.UserMessage(m.Content))
@@ -587,6 +588,8 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	chunkCount := 0
 	var toolCalls []openai.ChatCompletionMessageToolCall
 	var toolCallArgs map[int]strings.Builder = make(map[int]strings.Builder)
+	toolCallEmitted := make(set[int])
+	var lastUsage chat.TokenUsageDetails
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -600,14 +603,10 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 				OutputTokens: int(chunk.Usage.CompletionTokens),
 				TotalTokens:  int(chunk.Usage.TotalTokens),
 			}
-			c.lastMessageUsage = usage
-			c.cumulativeUsage.InputTokens += usage.InputTokens
-			c.cumulativeUsage.OutputTokens += usage.OutputTokens
-			c.cumulativeUsage.TotalTokens += usage.TotalTokens
+			lastUsage = usage
 			if debugSSE {
-				log.Printf("[OpenAI SSE] Usage chunk received - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-					usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-					c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
+				log.Printf("[OpenAI SSE] Usage chunk received - Input: %d, Output: %d, Total: %d\n",
+					usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
 			}
 		}
 
@@ -717,8 +716,8 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 						toolCalls[idx].Function.Arguments = builder.String()
 					}
 
-					// Emit tool call event when we have enough information
-					if callback != nil && toolCalls[idx].Function.Name != "" && tc.ID != "" {
+					// Emit tool call event only once per index when arguments are valid JSON
+					if callback != nil && !toolCallEmitted.Contains(idx) && toolCalls[idx].ID != "" && toolCalls[idx].Function.Name != "" && isValidJSON(toolCalls[idx].Function.Arguments) {
 						toolCallEvent := chat.StreamEvent{
 							Type: chat.StreamEventTypeToolCall,
 							ToolCalls: []chat.ToolCall{
@@ -729,6 +728,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 								},
 							},
 						}
+						toolCallEmitted.Add(idx)
 						if err := callback(toolCallEvent); err != nil {
 							return chat.Message{}, err
 						}
@@ -840,6 +840,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 			thinkingContent.Reset()
 			inThinking = false
 			chunkCount = 0
+			lastUsage = chat.TokenUsageDetails{}
 
 			for stream.Next() {
 				chunk := stream.Current()
@@ -852,14 +853,10 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 						OutputTokens: int(chunk.Usage.CompletionTokens),
 						TotalTokens:  int(chunk.Usage.TotalTokens),
 					}
-					c.lastMessageUsage = usage
-					c.cumulativeUsage.InputTokens += usage.InputTokens
-					c.cumulativeUsage.OutputTokens += usage.OutputTokens
-					c.cumulativeUsage.TotalTokens += usage.TotalTokens
+					lastUsage = usage
 					if debugSSE {
-						log.Printf("[OpenAI SSE Retry] Usage chunk received - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-							usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-							c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
+						log.Printf("[OpenAI SSE Retry] Usage chunk received - Input: %d, Output: %d, Total: %d\n",
+							usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
 					}
 				}
 
@@ -965,12 +962,11 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 		Content: respContent.String(),
 	}
 
-	// Update history
-	c.msgs = append(c.msgs, reqMsg)
-	c.msgs = append(c.msgs, respMsg)
+	// Update history and usage under lock
+	c.updateHistoryAndUsage([]chat.Message{reqMsg, respMsg}, lastUsage)
 
 	// Update last usage
-	if c.cumulativeUsage.TotalTokens == 0 && debugSSE {
+	if lastUsage.TotalTokens == 0 && debugSSE {
 		log.Printf("[OpenAI] Warning: No token usage information received")
 	}
 
@@ -985,12 +981,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	// Keep track of all messages for the conversation
 	var conversationMessages []openai.ChatCompletionMessageParamUnion
 
-	// Build initial conversation with system prompt and history
+	// Snapshot system prompt and history under lock
+	c.mu.Lock()
 	if c.systemPrompt != "" {
 		conversationMessages = append(conversationMessages, openai.SystemMessage(c.systemPrompt))
 	}
-
-	// Add history
 	for _, m := range c.msgs {
 		switch m.Role {
 		case chat.UserRole:
@@ -1001,9 +996,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			conversationMessages = append(conversationMessages, openai.SystemMessage(m.Content))
 		}
 	}
-
-	// Add the initial user message
+	// Add the initial user message to history
 	c.msgs = append(c.msgs, initialMsg)
+	c.mu.Unlock()
+
 	conversationMessages = append(conversationMessages, openai.UserMessage(initialMsg.Content))
 
 	// Process tool calls in a loop until we get a final response
@@ -1085,6 +1081,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		var respContent strings.Builder
 		toolCalls = nil // Reset for next round
 		var toolCallArgs map[int]strings.Builder = make(map[int]strings.Builder)
+		toolCallEmitted := make(set[int])
+		var lastUsage chat.TokenUsageDetails
 
 		for followUpStream.Next() {
 			chunk := followUpStream.Current()
@@ -1096,10 +1094,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					OutputTokens: int(chunk.Usage.CompletionTokens),
 					TotalTokens:  int(chunk.Usage.TotalTokens),
 				}
-				c.lastMessageUsage = usage
-				c.cumulativeUsage.InputTokens += usage.InputTokens
-				c.cumulativeUsage.OutputTokens += usage.OutputTokens
-				c.cumulativeUsage.TotalTokens += usage.TotalTokens
+				lastUsage = usage
 			}
 
 			if len(chunk.Choices) > 0 {
@@ -1131,8 +1126,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 							toolCalls[idx].Function.Arguments = builder.String()
 						}
 
-						// Emit tool call event when we have enough information
-						if callback != nil && toolCalls[idx].Function.Name != "" && tc.ID != "" {
+						// Emit tool call event only once per index when arguments are valid JSON
+						if callback != nil && !toolCallEmitted.Contains(idx) && toolCalls[idx].ID != "" && toolCalls[idx].Function.Name != "" && isValidJSON(toolCalls[idx].Function.Arguments) {
 							toolCallEvent := chat.StreamEvent{
 								Type: chat.StreamEventTypeToolCall,
 								ToolCalls: []chat.ToolCall{
@@ -1143,6 +1138,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 									},
 								},
 							}
+							toolCallEmitted.Add(idx)
 							if err := callback(toolCallEvent); err != nil {
 								return chat.Message{}, err
 							}
@@ -1192,8 +1188,16 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			log.Printf("[OpenAI] Warning: Final response after tool execution has empty content")
 		}
 
-		// Update history with the final response
+		// Update history with the final response under lock
+		c.mu.Lock()
 		c.msgs = append(c.msgs, finalMsg)
+		if lastUsage.TotalTokens > 0 {
+			c.lastMessageUsage = lastUsage
+			c.cumulativeUsage.InputTokens += lastUsage.InputTokens
+			c.cumulativeUsage.OutputTokens += lastUsage.OutputTokens
+			c.cumulativeUsage.TotalTokens += lastUsage.TotalTokens
+		}
+		c.mu.Unlock()
 
 		return finalMsg, nil
 	}
@@ -1327,4 +1331,13 @@ func (c *chatClient) ListTools() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// isValidJSON returns true if s is a complete valid JSON value
+func isValidJSON(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	var v interface{}
+	return json.Unmarshal([]byte(s), &v) == nil
 }
