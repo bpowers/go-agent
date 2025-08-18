@@ -636,12 +636,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
-	maxRounds := 10 // Prevent infinite loops
 
-	for round := 0; round < maxRounds && len(toolCalls) > 0; round++ {
+	for len(toolCalls) > 0 {
 		// Debug logging
 		if c.debug {
-			fmt.Fprintf(os.Stderr, "[Claude] Tool execution round %d with %d tool calls\n", round+1, len(toolCalls))
+			fmt.Fprintf(os.Stderr, "[Claude] Tool execution with %d tool calls\n", len(toolCalls))
 			for i, tc := range toolCalls {
 				fmt.Fprintf(os.Stderr, "[Claude] Tool %d: %s with input: %s\n", i+1, tc.Name, string(tc.Input))
 			}
@@ -838,7 +837,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// If we got more tool calls, continue the loop
 		if len(toolCalls) > 0 {
 			if c.debug {
-				fmt.Fprintf(os.Stderr, "[Claude] Got %d more tool calls in round %d, continuing\n", len(toolCalls), round+1)
+				fmt.Fprintf(os.Stderr, "[Claude] Got %d more tool calls, continuing\n", len(toolCalls))
 			}
 			continue
 		}
@@ -859,6 +858,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		return finalMsg, nil
 	}
 
-	// If we get here, we exceeded maxRounds
-	return chat.Message{}, fmt.Errorf("exceeded maximum rounds of tool calls (%d)", maxRounds)
+	// This should never be reached since the loop continues until no tool calls
+	return chat.Message{}, fmt.Errorf("unexpected end of tool call processing")
 }

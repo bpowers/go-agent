@@ -518,9 +518,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Process tool calls in a loop until we get a final response
 	functionCalls := initialFunctionCalls
-	maxRounds := 10 // Prevent infinite loops
 
-	for round := 0; round < maxRounds && len(functionCalls) > 0; round++ {
+	for len(functionCalls) > 0 {
 		// Execute tool calls
 		functionResults, err := c.handleFunctionCalls(ctx, functionCalls)
 		if err != nil {
@@ -678,8 +677,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		return finalMsg, nil
 	}
 
-	// If we get here, we exceeded maxRounds
-	return chat.Message{}, fmt.Errorf("exceeded maximum rounds of function calls (%d)", maxRounds)
+	// This should never be reached since the loop continues until no function calls
+	return chat.Message{}, fmt.Errorf("unexpected end of function call processing")
 }
 
 // handleFunctionCalls processes function calls from the model and returns function results

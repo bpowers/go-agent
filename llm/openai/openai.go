@@ -1008,11 +1008,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
-	maxRounds := 10 // Prevent infinite loops
 
-	for round := 0; round < maxRounds && len(toolCalls) > 0; round++ {
+	for len(toolCalls) > 0 {
 		if debugSSE {
-			log.Printf("[OpenAI] Processing tool call round %d with %d tool calls", round+1, len(toolCalls))
+			log.Printf("[OpenAI] Processing %d tool calls", len(toolCalls))
 		}
 
 		// Execute tool calls
@@ -1177,7 +1176,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// If we got more tool calls, continue the loop
 		if len(toolCalls) > 0 {
 			if debugSSE {
-				log.Printf("[OpenAI] Got %d more tool calls in round %d", len(toolCalls), round+1)
+				log.Printf("[OpenAI] Got %d more tool calls", len(toolCalls))
 			}
 			continue
 		}
@@ -1199,8 +1198,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		return finalMsg, nil
 	}
 
-	// If we get here, we exceeded maxRounds
-	return chat.Message{}, fmt.Errorf("exceeded maximum rounds of tool calls (%d)", maxRounds)
+	// This should never be reached since the loop continues until no tool calls
+	return chat.Message{}, fmt.Errorf("unexpected end of tool call processing")
 }
 
 // mcpToOpenAITool converts an MCP tool definition to OpenAI format
