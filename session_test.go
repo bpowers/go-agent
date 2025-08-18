@@ -590,3 +590,42 @@ func TestRecordStatus(t *testing.T) {
 	assert.Equal(t, RecordStatus("success"), RecordStatusSuccess)
 	assert.Equal(t, RecordStatus("failed"), RecordStatusFailed)
 }
+
+func TestGetRecordEfficiency(t *testing.T) {
+	// Test that GetRecord works efficiently without O(N) scanning
+	store := persistence.NewMemoryStore()
+	sessionID := "test-get-record"
+
+	// Add multiple records
+	var ids []int64
+	for i := 0; i < 100; i++ {
+		id, err := store.AddRecord(sessionID, persistence.Record{
+			Role:    "user",
+			Content: fmt.Sprintf("Message %d", i),
+			Live:    true,
+		})
+		require.NoError(t, err)
+		ids = append(ids, id)
+	}
+
+	// Test retrieving various records by ID
+	// Should work efficiently even with many records
+	for i := 0; i < 10; i++ {
+		idx := i * 10 // Test every 10th record
+		record, err := store.GetRecord(sessionID, ids[idx])
+		require.NoError(t, err)
+		assert.Equal(t, ids[idx], record.ID)
+		assert.Equal(t, fmt.Sprintf("Message %d", idx), record.Content)
+	}
+
+	// Test retrieving the last record (best case for backwards iteration)
+	lastRecord, err := store.GetRecord(sessionID, ids[99])
+	require.NoError(t, err)
+	assert.Equal(t, ids[99], lastRecord.ID)
+	assert.Equal(t, "Message 99", lastRecord.Content)
+
+	// Test non-existent record
+	_, err = store.GetRecord(sessionID, 99999)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "record not found")
+}

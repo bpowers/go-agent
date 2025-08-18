@@ -89,6 +89,24 @@ func (s *SQLiteStore) AddRecord(sessionID string, record persistence.Record) (in
 	return id, nil
 }
 
+// GetRecord implements persistence.Store.
+func (s *SQLiteStore) GetRecord(sessionID string, id int64) (persistence.Record, error) {
+	var r persistence.Record
+	var roleStr string
+	err := s.db.QueryRow(
+		`SELECT id, role, content, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND id = ?`,
+		sessionID, id,
+	).Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.Status, &r.InputTokens, &r.OutputTokens, &r.Timestamp)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return persistence.Record{}, fmt.Errorf("record not found: %d", id)
+		}
+		return persistence.Record{}, fmt.Errorf("query record: %w", err)
+	}
+	r.Role = chat.Role(roleStr)
+	return r, nil
+}
+
 // GetAllRecords implements persistence.Store.
 func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, error) {
 	rows, err := s.db.Query(

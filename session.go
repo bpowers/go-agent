@@ -328,18 +328,13 @@ func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Mess
 	s.cumulativeTokens += usage.LastMessage.TotalTokens
 
 	// Update the user message with actual input tokens
-	// Since we know the ID, we can update directly without scanning
 	if s.lastUserMessageID > 0 && usage.LastMessage.InputTokens > 0 {
-		// Get the specific record to update (most stores can optimize this)
-		records, _ := s.store.GetAllRecords(s.sessionID)
-		// Start from end since we just added it
-		for i := len(records) - 1; i >= 0; i-- {
-			if records[i].ID == s.lastUserMessageID {
-				records[i].InputTokens = usage.LastMessage.InputTokens
-				records[i].Status = string(RecordStatusSuccess) // Mark as successful
-				s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, records[i])
-				break
-			}
+		// Get the specific record to update
+		record, err := s.store.GetRecord(s.sessionID, s.lastUserMessageID)
+		if err == nil {
+			record.InputTokens = usage.LastMessage.InputTokens
+			record.Status = string(RecordStatusSuccess) // Mark as successful
+			s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, record)
 		}
 	}
 
@@ -661,14 +656,10 @@ func (s *persistentSession) markUserMessageStatus(status RecordStatus) {
 
 	if s.lastUserMessageID > 0 {
 		// Get the specific record to update
-		records, _ := s.store.GetAllRecords(s.sessionID)
-		// Start from end since we just added it
-		for i := len(records) - 1; i >= 0; i-- {
-			if records[i].ID == s.lastUserMessageID {
-				records[i].Status = string(status)
-				s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, records[i])
-				break
-			}
+		record, err := s.store.GetRecord(s.sessionID, s.lastUserMessageID)
+		if err == nil {
+			record.Status = string(status)
+			s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, record)
 		}
 	}
 }

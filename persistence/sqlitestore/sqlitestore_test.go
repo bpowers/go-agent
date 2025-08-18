@@ -35,6 +35,19 @@ func TestSQLiteStoreBasics(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, id, int64(0))
 
+	// Test getting a single record by ID
+	retrieved, err := store.GetRecord(sessionID, id)
+	require.NoError(t, err)
+	assert.Equal(t, id, retrieved.ID)
+	assert.Equal(t, "Test message", retrieved.Content)
+	assert.Equal(t, chat.UserRole, retrieved.Role)
+	assert.True(t, retrieved.Live)
+
+	// Test getting non-existent record
+	_, err = store.GetRecord(sessionID, 99999)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "record not found")
+
 	// Test getting all records
 	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)

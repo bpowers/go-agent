@@ -2,6 +2,7 @@
 package persistence
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -24,6 +25,9 @@ type Record struct {
 type Store interface {
 	// AddRecord inserts a new record into the store.
 	AddRecord(sessionID string, record Record) (int64, error)
+
+	// GetRecord retrieves a single record by ID.
+	GetRecord(sessionID string, id int64) (Record, error)
 
 	// GetAllRecords retrieves all records in chronological order.
 	GetAllRecords(sessionID string) ([]Record, error)
@@ -105,6 +109,21 @@ func (m *MemoryStore) AddRecord(sessionID string, record Record) (int64, error) 
 	sess.nextID++
 	sess.records = append(sess.records, record)
 	return record.ID, nil
+}
+
+// GetRecord retrieves a single record by ID.
+func (m *MemoryStore) GetRecord(sessionID string, id int64) (Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess := m.getOrCreateSessionLocked(sessionID)
+	// Iterate backwards since recent records are more likely to be accessed
+	for i := len(sess.records) - 1; i >= 0; i-- {
+		if sess.records[i].ID == id {
+			return sess.records[i], nil
+		}
+	}
+	return Record{}, fmt.Errorf("record not found: %d", id)
 }
 
 // getOrCreateSessionLocked gets or creates a session (mutex must be held)
