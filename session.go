@@ -295,12 +295,15 @@ func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Mess
 	s.cumulativeTokens += usage.LastMessage.TotalTokens
 
 	// Update the user message with actual input tokens
-	if s.lastUserMessageID > 0 {
-		userRec, _ := s.store.GetAllRecords()
-		for i := len(userRec) - 2; i >= 0 && i < len(userRec); i++ {
-			if userRec[i].ID == s.lastUserMessageID {
-				userRec[i].InputTokens = usage.LastMessage.InputTokens
-				s.store.UpdateRecord(s.lastUserMessageID, userRec[i])
+	// Since we know the ID, we can update directly without scanning
+	if s.lastUserMessageID > 0 && usage.LastMessage.InputTokens > 0 {
+		// Get the specific record to update (most stores can optimize this)
+		records, _ := s.store.GetAllRecords()
+		// Start from end since we just added it
+		for i := len(records) - 1; i >= 0; i-- {
+			if records[i].ID == s.lastUserMessageID {
+				records[i].InputTokens = usage.LastMessage.InputTokens
+				s.store.UpdateRecord(s.lastUserMessageID, records[i])
 				break
 			}
 		}
