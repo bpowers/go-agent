@@ -20,30 +20,29 @@ type Summarizer interface {
 	SetPrompt(prompt string)
 }
 
-// LLMSummarizer uses an LLM to create intelligent conversation summaries.
-type LLMSummarizer struct {
-	client chat.Client
-	model  string
+// llmSummarizer uses an LLM to create intelligent conversation summaries.
+type llmSummarizer struct {
+	client chat.Client // client configured with the model to use for summarization
 	prompt string
 }
 
-// NewLLMSummarizer creates a new LLM-based summarizer.
-// The model parameter can specify a different (usually cheaper) model for summarization.
-func NewLLMSummarizer(client chat.Client, model string) *LLMSummarizer {
-	return &LLMSummarizer{
+// NewSummarizer creates a new LLM-based summarizer.
+// The client should be configured with the desired model for summarization (often a cheaper model).
+// If nil, a default client will be used when the summarizer is needed.
+func NewSummarizer(client chat.Client) Summarizer {
+	return &llmSummarizer{
 		client: client,
-		model:  model,
 		prompt: defaultSummarizationPrompt,
 	}
 }
 
 // SetPrompt updates the summarization prompt.
-func (s *LLMSummarizer) SetPrompt(prompt string) {
+func (s *llmSummarizer) SetPrompt(prompt string) {
 	s.prompt = prompt
 }
 
 // Summarize uses an LLM to create a concise summary of the conversation.
-func (s *LLMSummarizer) Summarize(ctx context.Context, records []Record) (string, error) {
+func (s *llmSummarizer) Summarize(ctx context.Context, records []Record) (string, error) {
 	if len(records) == 0 {
 		return "", nil
 	}
@@ -81,7 +80,7 @@ Focus on:
 - Important context that affects future conversation
 - Any unresolved questions or action items
 
-The summary must be in markdown format.
+The summary must be in markdown format and should be **at most 500 words**.
 
 Provide only the summary, no additional commentary, relying **strictly** on the provided text.`
 

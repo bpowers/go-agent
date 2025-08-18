@@ -115,7 +115,7 @@ func TestLLMSummarizer(t *testing.T) {
 		response: "The user asked about Go and received information about its concurrency features.",
 	}
 
-	summarizer := NewLLMSummarizer(mockClient, "")
+	summarizer := NewSummarizer(mockClient)
 
 	records := []Record{
 		{Role: chat.UserRole, Content: "Tell me about Go"},
@@ -132,7 +132,7 @@ func TestLLMSummarizerCustomPrompt(t *testing.T) {
 		response: "Brief summary",
 	}
 
-	summarizer := NewLLMSummarizer(mockClient, "")
+	summarizer := NewSummarizer(mockClient)
 	customPrompt := "Make it very brief"
 	summarizer.SetPrompt(customPrompt)
 
@@ -151,7 +151,7 @@ func TestLLMSummarizerEmptyRecords(t *testing.T) {
 		response: "",
 	}
 
-	summarizer := NewLLMSummarizer(mockClient, "")
+	summarizer := NewSummarizer(mockClient)
 
 	summary, err := summarizer.Summarize(context.Background(), []Record{})
 	assert.NoError(t, err)

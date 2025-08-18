@@ -98,8 +98,9 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 
 	// Default to LLM summarizer if not specified
 	if options.summarizer == nil {
-		// Use same client but could specify a cheaper model here
-		options.summarizer = NewLLMSummarizer(client, "")
+		// Use the same client - users can provide WithSummarizer() with a client
+		// configured for a cheaper model if desired
+		options.summarizer = NewSummarizer(client)
 	}
 
 	// Load existing metrics if available
