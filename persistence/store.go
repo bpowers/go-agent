@@ -22,37 +22,43 @@ type Record struct {
 // Store defines the interface for persisting session records.
 type Store interface {
 	// AddRecord inserts a new record into the store.
-	AddRecord(record Record) (int64, error)
+	AddRecord(sessionID string, record Record) (int64, error)
 
 	// GetAllRecords retrieves all records in chronological order.
-	GetAllRecords() ([]Record, error)
+	GetAllRecords(sessionID string) ([]Record, error)
 
 	// GetLiveRecords retrieves only live records in chronological order.
-	GetLiveRecords() ([]Record, error)
+	GetLiveRecords(sessionID string) ([]Record, error)
 
 	// UpdateRecord updates an existing record by ID.
-	UpdateRecord(id int64, record Record) error
+	UpdateRecord(sessionID string, id int64, record Record) error
 
 	// MarkRecordDead marks a record as not live.
-	MarkRecordDead(id int64) error
+	MarkRecordDead(sessionID string, id int64) error
 
 	// MarkRecordLive marks a record as live.
-	MarkRecordLive(id int64) error
+	MarkRecordLive(sessionID string, id int64) error
 
 	// DeleteRecord removes a record by ID.
-	DeleteRecord(id int64) error
+	DeleteRecord(sessionID string, id int64) error
 
-	// Clear removes all records.
-	Clear() error
+	// Clear removes all records for a session.
+	Clear(sessionID string) error
 
 	// Close closes the store and releases resources.
 	Close() error
 
 	// SaveMetrics persists session metrics.
-	SaveMetrics(metrics SessionMetrics) error
+	SaveMetrics(sessionID string, metrics SessionMetrics) error
 
 	// LoadMetrics retrieves saved session metrics.
-	LoadMetrics() (SessionMetrics, error)
+	LoadMetrics(sessionID string) (SessionMetrics, error)
+
+	// ListSessions returns all session IDs in the store.
+	ListSessions() ([]string, error)
+
+	// DeleteSession removes all data for a session.
+	DeleteSession(sessionID string) error
 }
 
 // SessionMetrics represents session statistics that can be persisted.
@@ -63,47 +69,70 @@ type SessionMetrics struct {
 	CompactionThreshold float64   `json:"compaction_threshold"`
 }
 
-// MemoryStore provides an in-memory implementation of Store.
-type MemoryStore struct {
-	mu      sync.Mutex
+// sessionData holds data for a single session
+type sessionData struct {
 	records []Record
 	nextID  int64
 	metrics SessionMetrics
 }
 
+// MemoryStore provides an in-memory implementation of Store.
+type MemoryStore struct {
+	mu       sync.Mutex
+	sessions map[string]*sessionData
+}
+
 // NewMemoryStore creates a new in-memory store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		records: make([]Record, 0),
-		nextID:  1,
+		sessions: make(map[string]*sessionData),
 	}
 }
 
 // AddRecord adds a new record to the in-memory store and returns its assigned ID.
-func (m *MemoryStore) AddRecord(record Record) (int64, error) {
+func (m *MemoryStore) AddRecord(sessionID string, record Record) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	record.ID = m.nextID
-	m.nextID++
-	m.records = append(m.records, record)
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	record.ID = sess.nextID
+	sess.nextID++
+	sess.records = append(sess.records, record)
 	return record.ID, nil
 }
 
+// getOrCreateSessionLocked gets or creates a session (mutex must be held)
+func (m *MemoryStore) getOrCreateSessionLocked(sessionID string) *sessionData {
+	if sess, ok := m.sessions[sessionID]; ok {
+		return sess
+	}
+	sess := &sessionData{
+		records: make([]Record, 0),
+		nextID:  1,
+	}
+	m.sessions[sessionID] = sess
+	return sess
+}
+
 // GetAllRecords returns a copy of all records in the store, both live and dead.
-func (m *MemoryStore) GetAllRecords() ([]Record, error) {
+func (m *MemoryStore) GetAllRecords(sessionID string) ([]Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	result := make([]Record, len(m.records))
-	copy(result, m.records)
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	result := make([]Record, len(sess.records))
+	copy(result, sess.records)
 	return result, nil
 }
 
 // GetLiveRecords returns only the records marked as live in the current context window.
-func (m *MemoryStore) GetLiveRecords() ([]Record, error) {
+func (m *MemoryStore) GetLiveRecords(sessionID string) ([]Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
 	var live []Record
-	for _, r := range m.records {
+	for _, r := range sess.records {
 		if r.Live {
 			live = append(live, r)
 		}
@@ -112,13 +141,15 @@ func (m *MemoryStore) GetLiveRecords() ([]Record, error) {
 }
 
 // UpdateRecord updates an existing record with the given ID in the store.
-func (m *MemoryStore) UpdateRecord(id int64, record Record) error {
+func (m *MemoryStore) UpdateRecord(sessionID string, id int64, record Record) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i, r := range m.records {
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	for i, r := range sess.records {
 		if r.ID == id {
 			record.ID = id // Preserve ID
-			m.records[i] = record
+			sess.records[i] = record
 			return nil
 		}
 	}
@@ -126,10 +157,14 @@ func (m *MemoryStore) UpdateRecord(id int64, record Record) error {
 }
 
 // MarkRecordDead marks a record as dead, removing it from the active context window.
-func (m *MemoryStore) MarkRecordDead(id int64) error {
-	for i, r := range m.records {
+func (m *MemoryStore) MarkRecordDead(sessionID string, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	for i, r := range sess.records {
 		if r.ID == id {
-			m.records[i].Live = false
+			sess.records[i].Live = false
 			return nil
 		}
 	}
@@ -137,10 +172,14 @@ func (m *MemoryStore) MarkRecordDead(id int64) error {
 }
 
 // MarkRecordLive marks a record as live, adding it back to the active context window.
-func (m *MemoryStore) MarkRecordLive(id int64) error {
-	for i, r := range m.records {
+func (m *MemoryStore) MarkRecordLive(sessionID string, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	for i, r := range sess.records {
 		if r.ID == id {
-			m.records[i].Live = true
+			sess.records[i].Live = true
 			return nil
 		}
 	}
@@ -148,21 +187,30 @@ func (m *MemoryStore) MarkRecordLive(id int64) error {
 }
 
 // DeleteRecord permanently removes a record with the given ID from the store.
-func (m *MemoryStore) DeleteRecord(id int64) error {
-	for i, r := range m.records {
+func (m *MemoryStore) DeleteRecord(sessionID string, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	for i, r := range sess.records {
 		if r.ID == id {
-			m.records = append(m.records[:i], m.records[i+1:]...)
+			sess.records = append(sess.records[:i], sess.records[i+1:]...)
 			return nil
 		}
 	}
 	return nil
 }
 
-// Clear removes all records and resets the store to its initial state.
-func (m *MemoryStore) Clear() error {
-	m.records = m.records[:0]
-	m.nextID = 1
-	m.metrics = SessionMetrics{}
+// Clear removes all records for a session.
+func (m *MemoryStore) Clear(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	if sess, ok := m.sessions[sessionID]; ok {
+		sess.records = sess.records[:0]
+		sess.nextID = 1
+		sess.metrics = SessionMetrics{}
+	}
 	return nil
 }
 
@@ -173,12 +221,41 @@ func (m *MemoryStore) Close() error {
 }
 
 // SaveMetrics stores the session metrics in memory for later retrieval.
-func (m *MemoryStore) SaveMetrics(metrics SessionMetrics) error {
-	m.metrics = metrics
+func (m *MemoryStore) SaveMetrics(sessionID string, metrics SessionMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	sess.metrics = metrics
 	return nil
 }
 
 // LoadMetrics retrieves the previously saved session metrics from memory.
-func (m *MemoryStore) LoadMetrics() (SessionMetrics, error) {
-	return m.metrics, nil
+func (m *MemoryStore) LoadMetrics(sessionID string) (SessionMetrics, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	sess := m.getOrCreateSessionLocked(sessionID)
+	return sess.metrics, nil
+}
+
+// ListSessions returns all session IDs in the store.
+func (m *MemoryStore) ListSessions() ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	var sessions []string
+	for id := range m.sessions {
+		sessions = append(sessions, id)
+	}
+	return sessions, nil
+}
+
+// DeleteSession removes all data for a session.
+func (m *MemoryStore) DeleteSession(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	delete(m.sessions, sessionID)
+	return nil
 }

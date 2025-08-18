@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sync"
@@ -10,6 +12,16 @@ import (
 	"github.com/bpowers/go-agent/chat"
 	"github.com/bpowers/go-agent/persistence"
 )
+
+// generateSessionID creates a unique session identifier
+func generateSessionID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp if random fails
+		return fmt.Sprintf("session-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
 
 // Session manages the conversation lifecycle with automatic context compaction.
 // It embeds chat.Chat for full compatibility while adding persistence and
@@ -54,9 +66,18 @@ type SessionMetrics struct {
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
+	sessionID       string
 	store           persistence.Store
 	initialMessages []chat.Message
 	summarizer      Summarizer
+}
+
+// WithSessionID sets a custom session ID.
+// If not provided, a UUID will be generated.
+func WithSessionID(id string) SessionOption {
+	return func(opts *sessionOptions) {
+		opts.sessionID = id
+	}
 }
 
 // WithStore sets a custom persistence store for the session.
@@ -91,6 +112,11 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 			opt(&options)
 		}
 	}
+	
+	// Generate session ID if not provided
+	if options.sessionID == "" {
+		options.sessionID = generateSessionID()
+	}
 
 	// Default to memory store if not specified
 	if options.store == nil {
@@ -105,10 +131,10 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 	}
 
 	// Load existing metrics if available
-	metrics, _ := options.store.LoadMetrics()
+	metrics, _ := options.store.LoadMetrics(options.sessionID)
 
 	// Check if we have existing records in the store
-	existingRecords, _ := options.store.GetAllRecords()
+	existingRecords, _ := options.store.GetAllRecords(options.sessionID)
 	hasExistingRecords := len(existingRecords) > 0
 
 	// If we have existing records, use the system prompt from the store
@@ -131,7 +157,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 	if !hasExistingRecords {
 		// Create initial records from system prompt and initial messages
 		if systemPrompt != "" {
-			options.store.AddRecord(persistence.Record{
+			options.store.AddRecord(options.sessionID, persistence.Record{
 				Role:         "system",
 				Content:      systemPrompt,
 				Live:         true,
@@ -142,7 +168,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		}
 
 		for _, msg := range options.initialMessages {
-			options.store.AddRecord(persistence.Record{
+			options.store.AddRecord(options.sessionID, persistence.Record{
 				Role:         chat.Role(msg.Role),
 				Content:      msg.Content,
 				Live:         true,
@@ -162,6 +188,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 	}
 
 	return &persistentSession{
+		sessionID:           options.sessionID,
 		chat:                baseChat,
 		client:              client,
 		systemPrompt:        actualSystemPrompt,
@@ -178,6 +205,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 
 // persistentSession is the implementation of Session with pluggable storage.
 type persistentSession struct {
+	sessionID    string
 	chat         chat.Chat
 	client       chat.Client
 	systemPrompt string
@@ -228,7 +256,7 @@ func (s *persistentSession) prepareForMessage(ctx context.Context, msg chat.Mess
 	defer s.mu.Unlock()
 
 	// Add user message to records (tokens will be updated after response)
-	userMsgID, _ := s.store.AddRecord(persistence.Record{
+	userMsgID, _ := s.store.AddRecord(s.sessionID, persistence.Record{
 		Role:         chat.Role(msg.Role),
 		Content:      msg.Content,
 		Live:         true,
@@ -295,19 +323,19 @@ func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Mess
 	// Since we know the ID, we can update directly without scanning
 	if s.lastUserMessageID > 0 && usage.LastMessage.InputTokens > 0 {
 		// Get the specific record to update (most stores can optimize this)
-		records, _ := s.store.GetAllRecords()
+		records, _ := s.store.GetAllRecords(s.sessionID)
 		// Start from end since we just added it
 		for i := len(records) - 1; i >= 0; i-- {
 			if records[i].ID == s.lastUserMessageID {
 				records[i].InputTokens = usage.LastMessage.InputTokens
-				s.store.UpdateRecord(s.lastUserMessageID, records[i])
+				s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, records[i])
 				break
 			}
 		}
 	}
 
 	// Add response with actual output tokens
-	s.store.AddRecord(persistence.Record{
+	s.store.AddRecord(s.sessionID, persistence.Record{
 		Role:         chat.Role(response.Role),
 		Content:      response.Content,
 		Live:         true,
@@ -395,7 +423,7 @@ func (s *persistentSession) LiveRecords() []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	records, _ := s.store.GetLiveRecords()
+	records, _ := s.store.GetLiveRecords(s.sessionID)
 	var result []Record
 	for _, r := range records {
 		result = append(result, Record{
@@ -416,7 +444,7 @@ func (s *persistentSession) TotalRecords() []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	records, _ := s.store.GetAllRecords()
+	records, _ := s.store.GetAllRecords(s.sessionID)
 	var result []Record
 	for _, r := range records {
 		result = append(result, Record{
@@ -446,7 +474,7 @@ func (s *persistentSession) CompactNow() error {
 // compactNowLocked performs compaction with the mutex already held.
 func (s *persistentSession) compactNowLocked(ctx context.Context) error {
 	// Find live records to compact
-	liveRecords, _ := s.store.GetLiveRecords()
+	liveRecords, _ := s.store.GetLiveRecords(s.sessionID)
 
 	if len(liveRecords) < 3 { // Need at least a few messages to summarize
 		return nil
@@ -478,12 +506,12 @@ func (s *persistentSession) compactNowLocked(ctx context.Context) error {
 	// Mark old records as dead (except last 2)
 	for i, r := range liveRecords {
 		if i < len(liveRecords)-2 {
-			s.store.MarkRecordDead(r.ID)
+			s.store.MarkRecordDead(s.sessionID, r.ID)
 		}
 	}
 
 	// Add summary as assistant message with tag (safer than system message)
-	s.store.AddRecord(persistence.Record{
+	s.store.AddRecord(s.sessionID, persistence.Record{
 		Role:         "assistant",
 		Content:      fmt.Sprintf("[Previous conversation summary]\n%s", summary),
 		Live:         true,
@@ -521,8 +549,8 @@ func (s *persistentSession) Metrics() SessionMetrics {
 	defer s.mu.Unlock()
 
 	liveTokens := s.calculateLiveTokensLocked()
-	liveRecords, _ := s.store.GetLiveRecords()
-	allRecords, _ := s.store.GetAllRecords()
+	liveRecords, _ := s.store.GetLiveRecords(s.sessionID)
+	allRecords, _ := s.store.GetAllRecords(s.sessionID)
 
 	percentFull := 0.0
 	if s.maxTokens > 0 {
@@ -560,7 +588,7 @@ func (s *persistentSession) shouldCompactLocked() bool {
 
 // calculateLiveTokensLocked calculates live token count (mutex must be held).
 func (s *persistentSession) calculateLiveTokensLocked() int {
-	records, _ := s.store.GetLiveRecords()
+	records, _ := s.store.GetLiveRecords(s.sessionID)
 	total := 0
 	for _, r := range records {
 		// Count both input and output tokens
@@ -574,7 +602,7 @@ func (s *persistentSession) buildChatHistoryLocked() (string, []chat.Message) {
 	var systemPrompt string
 	var msgs []chat.Message
 
-	records, _ := s.store.GetLiveRecords()
+	records, _ := s.store.GetLiveRecords(s.sessionID)
 	for _, r := range records {
 		if r.Role == "system" {
 			if systemPrompt == "" {
@@ -596,7 +624,7 @@ func (s *persistentSession) buildChatHistoryLocked() (string, []chat.Message) {
 
 // saveMetricsLocked saves metrics to store (mutex must be held).
 func (s *persistentSession) saveMetricsLocked() {
-	s.store.SaveMetrics(persistence.SessionMetrics{
+	s.store.SaveMetrics(s.sessionID, persistence.SessionMetrics{
 		CompactionCount:     s.compactionCount,
 		LastCompaction:      s.lastCompaction,
 		CumulativeTokens:    s.cumulativeTokens,

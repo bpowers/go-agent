@@ -22,10 +22,14 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 
+	// Use a fixed session ID for persistence testing
+	sessionID := "test-session-persistence"
+
 	// Create session with SQLite persistence
 	client := &mockClient{}
 	session := NewSession(client, "Persistent assistant",
-		WithStore(store))
+		WithStore(store),
+		WithSessionID(sessionID))
 
 	// Test basic messaging
 	ctx := context.Background()
@@ -45,9 +49,10 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	assert.Equal(t, 3, metrics.RecordsLive)
 	assert.Greater(t, metrics.CumulativeTokens, 0)
 
-	// Create new session with same store to test persistence
+	// Create new session with same store and session ID to test persistence
 	session2 := NewSession(client, "Should be ignored", // System prompt already in store
-		WithStore(store))
+		WithStore(store),
+		WithSessionID(sessionID))
 
 	// Should have the same records
 	records2 := session2.LiveRecords()
@@ -60,13 +65,17 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "restart.db")
 
+	// Use a fixed session ID for persistence testing
+	sessionID := "test-session-restart"
+
 	// First session
 	store1, err := sqlitestore.New(dbPath)
 	require.NoError(t, err)
 
 	client := &mockClient{}
 	session1 := NewSession(client, "Persistent system",
-		WithStore(store1))
+		WithStore(store1),
+		WithSessionID(sessionID))
 
 	ctx := context.Background()
 
@@ -85,12 +94,14 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 	// Close first store
 	store1.Close()
 
-	// Create new store and session with same database
+	// Create new store and session with same database and session ID
 	store2, err := sqlitestore.New(dbPath)
 	require.NoError(t, err)
 	defer store2.Close()
 
-	session2 := NewSession(client, "Persistent system", WithStore(store2))
+	session2 := NewSession(client, "Persistent system",
+		WithStore(store2),
+		WithSessionID(sessionID))
 
 	// Should have the same history
 	records := session2.TotalRecords()

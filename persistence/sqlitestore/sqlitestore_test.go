@@ -19,6 +19,8 @@ func TestSQLiteStoreBasics(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 
+	sessionID := "test-session"
+
 	// Test adding a record
 	record := persistence.Record{
 		Role:         chat.UserRole,
@@ -29,12 +31,12 @@ func TestSQLiteStoreBasics(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	id, err := store.AddRecord(record)
+	id, err := store.AddRecord(sessionID, record)
 	require.NoError(t, err)
 	assert.Greater(t, id, int64(0))
 
 	// Test getting all records
-	records, err := store.GetAllRecords()
+	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
 	assert.Equal(t, "Test message", records[0].Content)
@@ -42,7 +44,7 @@ func TestSQLiteStoreBasics(t *testing.T) {
 	assert.True(t, records[0].Live)
 
 	// Test getting live records
-	liveRecords, err := store.GetLiveRecords()
+	liveRecords, err := store.GetLiveRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, liveRecords, 1)
 }
@@ -51,6 +53,8 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 	store, err := New(":memory:")
 	require.NoError(t, err)
 	defer store.Close()
+
+	sessionID := "test-session"
 
 	// Add a record
 	record := persistence.Record{
@@ -62,18 +66,18 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	id, err := store.AddRecord(record)
+	id, err := store.AddRecord(sessionID, record)
 	require.NoError(t, err)
 
 	// Update the record
 	record.Content = "Updated"
 	record.InputTokens = 5
 	record.OutputTokens = 2
-	err = store.UpdateRecord(id, record)
+	err = store.UpdateRecord(sessionID, id, record)
 	require.NoError(t, err)
 
 	// Verify update
-	records, err := store.GetAllRecords()
+	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
 	assert.Equal(t, "Updated", records[0].Content)
@@ -86,6 +90,8 @@ func TestSQLiteStoreMarkLiveDead(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 
+	sessionID := "test-session"
+
 	// Add multiple records
 	for i := 0; i < 3; i++ {
 		record := persistence.Record{
@@ -96,21 +102,21 @@ func TestSQLiteStoreMarkLiveDead(t *testing.T) {
 			OutputTokens: 4,
 			Timestamp:    time.Now(),
 		}
-		_, err := store.AddRecord(record)
+		_, err := store.AddRecord(sessionID, record)
 		require.NoError(t, err)
 	}
 
 	// Mark first record as dead
-	err = store.MarkRecordDead(1)
+	err = store.MarkRecordDead(sessionID, 1)
 	require.NoError(t, err)
 
 	// Check live records
-	liveRecords, err := store.GetLiveRecords()
+	liveRecords, err := store.GetLiveRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, liveRecords, 2)
 
 	// Check all records
-	allRecords, err := store.GetAllRecords()
+	allRecords, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, allRecords, 3)
 	assert.False(t, allRecords[0].Live)
@@ -118,10 +124,10 @@ func TestSQLiteStoreMarkLiveDead(t *testing.T) {
 	assert.True(t, allRecords[2].Live)
 
 	// Mark it live again
-	err = store.MarkRecordLive(1)
+	err = store.MarkRecordLive(sessionID, 1)
 	require.NoError(t, err)
 
-	liveRecords, err = store.GetLiveRecords()
+	liveRecords, err = store.GetLiveRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, liveRecords, 3)
 }
@@ -130,6 +136,8 @@ func TestSQLiteStoreDelete(t *testing.T) {
 	store, err := New(":memory:")
 	require.NoError(t, err)
 	defer store.Close()
+
+	sessionID := "test-session"
 
 	// Add records
 	for i := 0; i < 3; i++ {
@@ -141,16 +149,16 @@ func TestSQLiteStoreDelete(t *testing.T) {
 			OutputTokens: 4,
 			Timestamp:    time.Now(),
 		}
-		_, err := store.AddRecord(record)
+		_, err := store.AddRecord(sessionID, record)
 		require.NoError(t, err)
 	}
 
 	// Delete middle record
-	err = store.DeleteRecord(2)
+	err = store.DeleteRecord(sessionID, 2)
 	require.NoError(t, err)
 
 	// Check remaining records
-	records, err := store.GetAllRecords()
+	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 2)
 	assert.Equal(t, int64(1), records[0].ID)
@@ -162,6 +170,8 @@ func TestSQLiteStoreClear(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 
+	sessionID := "test-session"
+
 	// Add records
 	for i := 0; i < 5; i++ {
 		record := persistence.Record{
@@ -172,16 +182,16 @@ func TestSQLiteStoreClear(t *testing.T) {
 			OutputTokens: 4,
 			Timestamp:    time.Now(),
 		}
-		_, err := store.AddRecord(record)
+		_, err := store.AddRecord(sessionID, record)
 		require.NoError(t, err)
 	}
 
 	// Clear all records
-	err = store.Clear()
+	err = store.Clear(sessionID)
 	require.NoError(t, err)
 
 	// Check no records remain
-	records, err := store.GetAllRecords()
+	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 0)
 }
@@ -191,6 +201,8 @@ func TestSQLiteStoreMetrics(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 
+	sessionID := "test-session"
+
 	// Save metrics
 	metrics := persistence.SessionMetrics{
 		CompactionCount:     5,
@@ -199,11 +211,11 @@ func TestSQLiteStoreMetrics(t *testing.T) {
 		CompactionThreshold: 0.75,
 	}
 
-	err = store.SaveMetrics(metrics)
+	err = store.SaveMetrics(sessionID, metrics)
 	require.NoError(t, err)
 
 	// Load metrics
-	loaded, err := store.LoadMetrics()
+	loaded, err := store.LoadMetrics(sessionID)
 	require.NoError(t, err)
 
 	assert.Equal(t, metrics.CompactionCount, loaded.CompactionCount)
@@ -216,6 +228,8 @@ func TestSQLiteStorePersistence(t *testing.T) {
 	// Use a temporary file for this test
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
+
+	sessionID := "test-session"
 
 	// Create store and add records
 	store1, err := New(dbPath)
@@ -230,7 +244,7 @@ func TestSQLiteStorePersistence(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	id, err := store1.AddRecord(record)
+	id, err := store1.AddRecord(sessionID, record)
 	require.NoError(t, err)
 
 	// Save metrics
@@ -238,7 +252,7 @@ func TestSQLiteStorePersistence(t *testing.T) {
 		CompactionCount:  3,
 		CumulativeTokens: 500,
 	}
-	err = store1.SaveMetrics(metrics)
+	err = store1.SaveMetrics(sessionID, metrics)
 	require.NoError(t, err)
 
 	// Close first store
@@ -250,14 +264,14 @@ func TestSQLiteStorePersistence(t *testing.T) {
 	defer store2.Close()
 
 	// Check records persisted
-	records, err := store2.GetAllRecords()
+	records, err := store2.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
 	assert.Equal(t, "Persisted message", records[0].Content)
 	assert.Equal(t, id, records[0].ID)
 
 	// Check metrics persisted
-	loadedMetrics, err := store2.LoadMetrics()
+	loadedMetrics, err := store2.LoadMetrics(sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, 3, loadedMetrics.CompactionCount)
 	assert.Equal(t, 500, loadedMetrics.CumulativeTokens)
@@ -267,6 +281,8 @@ func TestSQLiteStoreOrdering(t *testing.T) {
 	store, err := New(":memory:")
 	require.NoError(t, err)
 	defer store.Close()
+
+	sessionID := "test-session"
 
 	// Add records with specific timestamps
 	baseTime := time.Now()
@@ -285,12 +301,12 @@ func TestSQLiteStoreOrdering(t *testing.T) {
 			OutputTokens: 4,
 			Timestamp:    baseTime.Add(duration),
 		}
-		_, err := store.AddRecord(record)
+		_, err := store.AddRecord(sessionID, record)
 		require.NoError(t, err)
 	}
 
 	// Get records - should be ordered by timestamp
-	records, err := store.GetAllRecords()
+	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 3)
 	assert.Equal(t, "B", records[0].Content) // 1 second
@@ -315,4 +331,80 @@ func TestSQLiteStoreFileCreation(t *testing.T) {
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err)
 	assert.Greater(t, info.Size(), int64(0))
+}
+
+func TestSQLiteStoreMultipleSessions(t *testing.T) {
+	store, err := New(":memory:")
+	require.NoError(t, err)
+	defer store.Close()
+
+	// Add records for multiple sessions
+	session1 := "session-1"
+	session2 := "session-2"
+
+	// Add records to session 1
+	for i := 0; i < 3; i++ {
+		record := persistence.Record{
+			Role:         chat.UserRole,
+			Content:      "Session 1 message",
+			Live:         true,
+			InputTokens:  5,
+			OutputTokens: 3,
+			Timestamp:    time.Now(),
+		}
+		_, err := store.AddRecord(session1, record)
+		require.NoError(t, err)
+	}
+
+	// Add records to session 2
+	for i := 0; i < 2; i++ {
+		record := persistence.Record{
+			Role:         chat.AssistantRole,
+			Content:      "Session 2 message",
+			Live:         true,
+			InputTokens:  4,
+			OutputTokens: 2,
+			Timestamp:    time.Now(),
+		}
+		_, err := store.AddRecord(session2, record)
+		require.NoError(t, err)
+	}
+
+	// Check sessions are isolated
+	records1, err := store.GetAllRecords(session1)
+	require.NoError(t, err)
+	assert.Len(t, records1, 3)
+	assert.Equal(t, "Session 1 message", records1[0].Content)
+
+	records2, err := store.GetAllRecords(session2)
+	require.NoError(t, err)
+	assert.Len(t, records2, 2)
+	assert.Equal(t, "Session 2 message", records2[0].Content)
+
+	// Test ListSessions
+	sessions, err := store.ListSessions()
+	require.NoError(t, err)
+	assert.Len(t, sessions, 2)
+	assert.Contains(t, sessions, session1)
+	assert.Contains(t, sessions, session2)
+
+	// Test DeleteSession
+	err = store.DeleteSession(session1)
+	require.NoError(t, err)
+
+	// Check session 1 is deleted
+	records1, err = store.GetAllRecords(session1)
+	require.NoError(t, err)
+	assert.Len(t, records1, 0)
+
+	// Check session 2 is still there
+	records2, err = store.GetAllRecords(session2)
+	require.NoError(t, err)
+	assert.Len(t, records2, 2)
+
+	// Check ListSessions now only returns session 2
+	sessions, err = store.ListSessions()
+	require.NoError(t, err)
+	assert.Len(t, sessions, 1)
+	assert.Equal(t, session2, sessions[0])
 }

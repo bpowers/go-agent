@@ -534,12 +534,15 @@ func TestCompactionThresholdZeroPersistence(t *testing.T) {
 	client := &mockClient{}
 	store := persistence.NewMemoryStore()
 
+	// Use the same session ID for both sessions to test persistence
+	sessionID := "test-zero-threshold"
+
 	// Create first session and set threshold to 0
-	session1 := NewSession(client, "System", WithStore(store))
+	session1 := NewSession(client, "System", WithStore(store), WithSessionID(sessionID))
 	session1.SetCompactionThreshold(0.0)
 
-	// Create second session with same store
-	session2 := NewSession(client, "System", WithStore(store))
+	// Create second session with same store and session ID
+	session2 := NewSession(client, "System", WithStore(store), WithSessionID(sessionID))
 
 	// Send messages to test that compaction doesn't occur
 	ctx := context.Background()

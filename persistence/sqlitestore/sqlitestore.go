@@ -40,6 +40,7 @@ func (s *SQLiteStore) initSchema() error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS records (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    TEXT NOT NULL,
     role          TEXT NOT NULL,
     content       TEXT NOT NULL,
     live          BOOLEAN NOT NULL,
@@ -48,30 +49,28 @@ CREATE TABLE IF NOT EXISTS records (
     timestamp     DATETIME NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_records_live ON records(live);
-CREATE INDEX IF NOT EXISTS idx_records_timestamp ON records(timestamp);
+CREATE INDEX IF NOT EXISTS idx_records_session ON records(session_id);
+CREATE INDEX IF NOT EXISTS idx_records_live ON records(session_id, live);
+CREATE INDEX IF NOT EXISTS idx_records_timestamp ON records(session_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS metrics (
-    id                    INTEGER PRIMARY KEY CHECK (id = 1),
+    session_id            TEXT PRIMARY KEY,
     compaction_count      INTEGER NOT NULL DEFAULT 0,
     last_compaction       DATETIME,
     cumulative_tokens     INTEGER NOT NULL DEFAULT 0,
     compaction_threshold  REAL NOT NULL DEFAULT 0.8,
     data                  TEXT
 );
-
--- Ensure metrics table has exactly one row
-INSERT OR IGNORE INTO metrics (id) VALUES (1);
 `
 	_, err := s.db.Exec(schema)
 	return err
 }
 
 // AddRecord implements persistence.Store.
-func (s *SQLiteStore) AddRecord(record persistence.Record) (int64, error) {
+func (s *SQLiteStore) AddRecord(sessionID string, record persistence.Record) (int64, error) {
 	result, err := s.db.Exec(
-		`INSERT INTO records (role, content, live, input_tokens, output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
-		string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp,
+		`INSERT INTO records (session_id, role, content, live, input_tokens, output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert record: %w", err)
@@ -86,9 +85,10 @@ func (s *SQLiteStore) AddRecord(record persistence.Record) (int64, error) {
 }
 
 // GetAllRecords implements persistence.Store.
-func (s *SQLiteStore) GetAllRecords() ([]persistence.Record, error) {
+func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records ORDER BY timestamp, id`,
+		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? ORDER BY timestamp, id`,
+		sessionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query records: %w", err)
@@ -114,9 +114,10 @@ func (s *SQLiteStore) GetAllRecords() ([]persistence.Record, error) {
 }
 
 // GetLiveRecords implements persistence.Store.
-func (s *SQLiteStore) GetLiveRecords() ([]persistence.Record, error) {
+func (s *SQLiteStore) GetLiveRecords(sessionID string) ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records WHERE live = 1 ORDER BY timestamp, id`,
+		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND live = 1 ORDER BY timestamp, id`,
+		sessionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query live records: %w", err)
@@ -142,10 +143,10 @@ func (s *SQLiteStore) GetLiveRecords() ([]persistence.Record, error) {
 }
 
 // UpdateRecord implements persistence.Store.
-func (s *SQLiteStore) UpdateRecord(id int64, record persistence.Record) error {
+func (s *SQLiteStore) UpdateRecord(sessionID string, id int64, record persistence.Record) error {
 	_, err := s.db.Exec(
-		`UPDATE records SET role = ?, content = ?, live = ?, input_tokens = ?, output_tokens = ?, timestamp = ? WHERE id = ?`,
-		string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp, id,
+		`UPDATE records SET role = ?, content = ?, live = ?, input_tokens = ?, output_tokens = ?, timestamp = ? WHERE session_id = ? AND id = ?`,
+		string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp, sessionID, id,
 	)
 	if err != nil {
 		return fmt.Errorf("update record: %w", err)
@@ -154,8 +155,8 @@ func (s *SQLiteStore) UpdateRecord(id int64, record persistence.Record) error {
 }
 
 // MarkRecordDead implements persistence.Store.
-func (s *SQLiteStore) MarkRecordDead(id int64) error {
-	_, err := s.db.Exec(`UPDATE records SET live = 0 WHERE id = ?`, id)
+func (s *SQLiteStore) MarkRecordDead(sessionID string, id int64) error {
+	_, err := s.db.Exec(`UPDATE records SET live = 0 WHERE session_id = ? AND id = ?`, sessionID, id)
 	if err != nil {
 		return fmt.Errorf("mark record dead: %w", err)
 	}
@@ -163,8 +164,8 @@ func (s *SQLiteStore) MarkRecordDead(id int64) error {
 }
 
 // MarkRecordLive implements persistence.Store.
-func (s *SQLiteStore) MarkRecordLive(id int64) error {
-	_, err := s.db.Exec(`UPDATE records SET live = 1 WHERE id = ?`, id)
+func (s *SQLiteStore) MarkRecordLive(sessionID string, id int64) error {
+	_, err := s.db.Exec(`UPDATE records SET live = 1 WHERE session_id = ? AND id = ?`, sessionID, id)
 	if err != nil {
 		return fmt.Errorf("mark record live: %w", err)
 	}
@@ -172,8 +173,8 @@ func (s *SQLiteStore) MarkRecordLive(id int64) error {
 }
 
 // DeleteRecord implements persistence.Store.
-func (s *SQLiteStore) DeleteRecord(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM records WHERE id = ?`, id)
+func (s *SQLiteStore) DeleteRecord(sessionID string, id int64) error {
+	_, err := s.db.Exec(`DELETE FROM records WHERE session_id = ? AND id = ?`, sessionID, id)
 	if err != nil {
 		return fmt.Errorf("delete record: %w", err)
 	}
@@ -181,16 +182,14 @@ func (s *SQLiteStore) DeleteRecord(id int64) error {
 }
 
 // Clear implements persistence.Store.
-func (s *SQLiteStore) Clear() error {
-	_, err := s.db.Exec(`DELETE FROM records`)
+func (s *SQLiteStore) Clear(sessionID string) error {
+	_, err := s.db.Exec(`DELETE FROM records WHERE session_id = ?`, sessionID)
 	if err != nil {
 		return fmt.Errorf("clear records: %w", err)
 	}
 
-	// Reset metrics
-	_, err = s.db.Exec(
-		`UPDATE metrics SET compaction_count = 0, last_compaction = NULL, cumulative_tokens = 0, compaction_threshold = 0.8 WHERE id = 1`,
-	)
+	// Reset metrics for this session
+	_, err = s.db.Exec(`DELETE FROM metrics WHERE session_id = ?`, sessionID)
 	if err != nil {
 		return fmt.Errorf("reset metrics: %w", err)
 	}
@@ -204,7 +203,7 @@ func (s *SQLiteStore) Close() error {
 }
 
 // SaveMetrics implements persistence.Store.
-func (s *SQLiteStore) SaveMetrics(metrics persistence.SessionMetrics) error {
+func (s *SQLiteStore) SaveMetrics(sessionID string, metrics persistence.SessionMetrics) error {
 	// Store as JSON for extensibility
 	data, err := json.Marshal(metrics)
 	if err != nil {
@@ -217,13 +216,15 @@ func (s *SQLiteStore) SaveMetrics(metrics persistence.SessionMetrics) error {
 	}
 
 	_, err = s.db.Exec(
-		`UPDATE metrics SET 
-			compaction_count = ?, 
-			last_compaction = ?, 
-			cumulative_tokens = ?, 
-			compaction_threshold = ?,
-			data = ?
-		WHERE id = 1`,
+		`INSERT INTO metrics (session_id, compaction_count, last_compaction, cumulative_tokens, compaction_threshold, data) 
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			compaction_count = excluded.compaction_count,
+			last_compaction = excluded.last_compaction,
+			cumulative_tokens = excluded.cumulative_tokens,
+			compaction_threshold = excluded.compaction_threshold,
+			data = excluded.data`,
+		sessionID,
 		metrics.CompactionCount,
 		lastCompaction,
 		metrics.CumulativeTokens,
@@ -238,13 +239,14 @@ func (s *SQLiteStore) SaveMetrics(metrics persistence.SessionMetrics) error {
 }
 
 // LoadMetrics implements persistence.Store.
-func (s *SQLiteStore) LoadMetrics() (persistence.SessionMetrics, error) {
+func (s *SQLiteStore) LoadMetrics(sessionID string) (persistence.SessionMetrics, error) {
 	var metrics persistence.SessionMetrics
 	var lastCompaction sql.NullTime
 	var data sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT compaction_count, last_compaction, cumulative_tokens, compaction_threshold, data FROM metrics WHERE id = 1`,
+		`SELECT compaction_count, last_compaction, cumulative_tokens, compaction_threshold, data FROM metrics WHERE session_id = ?`,
+		sessionID,
 	).Scan(&metrics.CompactionCount, &lastCompaction, &metrics.CumulativeTokens, &metrics.CompactionThreshold, &data)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -281,6 +283,52 @@ func (s *SQLiteStore) ExecInTransaction(fn func(*sql.Tx) error) error {
 	if err := fn(tx); err != nil {
 		tx.Rollback()
 		return err
+	}
+
+	return tx.Commit()
+}
+
+// ListSessions implements persistence.Store.
+func (s *SQLiteStore) ListSessions() ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT session_id FROM records ORDER BY session_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []string
+	for rows.Next() {
+		var sessionID string
+		if err := rows.Scan(&sessionID); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		sessions = append(sessions, sessionID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sessions: %w", err)
+	}
+
+	return sessions, nil
+}
+
+// DeleteSession implements persistence.Store.
+func (s *SQLiteStore) DeleteSession(sessionID string) error {
+	// Start a transaction to delete both records and metrics
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete records
+	if _, err := tx.Exec(`DELETE FROM records WHERE session_id = ?`, sessionID); err != nil {
+		return fmt.Errorf("delete records: %w", err)
+	}
+
+	// Delete metrics
+	if _, err := tx.Exec(`DELETE FROM metrics WHERE session_id = ?`, sessionID); err != nil {
+		return fmt.Errorf("delete metrics: %w", err)
 	}
 
 	return tx.Commit()
