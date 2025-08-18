@@ -362,11 +362,13 @@ func TestManualCompaction(t *testing.T) {
 	liveRecords := session.LiveRecords()
 	assert.Greater(t, len(allRecords), len(liveRecords))
 
-	// Verify there's a summary in the live records
+	// Verify there's a summary in the live records with assistant role
 	foundSummary := false
 	for _, r := range liveRecords {
 		if strings.Contains(r.Content, "[Previous conversation summary]") {
 			foundSummary = true
+			// Verify summary is assistant role, not system
+			assert.Equal(t, chat.AssistantRole, r.Role, "Summary should be assistant role")
 			break
 		}
 	}
@@ -390,6 +392,9 @@ func TestSessionTokenTracking(t *testing.T) {
 	usage, err := session.TokenUsage()
 	require.NoError(t, err)
 	assert.Greater(t, usage.Cumulative.TotalTokens, 0)
+	// LastMessage should have values from the mock
+	assert.Greater(t, usage.LastMessage.InputTokens, 0)
+	assert.Greater(t, usage.LastMessage.OutputTokens, 0)
 
 	// Send another message
 	_, err = session.Message(ctx, chat.Message{
@@ -402,6 +407,19 @@ func TestSessionTokenTracking(t *testing.T) {
 	newUsage, err := session.TokenUsage()
 	require.NoError(t, err)
 	assert.Greater(t, newUsage.Cumulative.TotalTokens, usage.Cumulative.TotalTokens)
+
+	// Verify input tokens are stored in records
+	records := session.LiveRecords()
+	// Find the user message we just sent
+	foundUserMsg := false
+	for _, r := range records {
+		if r.Role == chat.UserRole && r.Content == "Another test" {
+			foundUserMsg = true
+			assert.Greater(t, r.InputTokens, 0, "User message should have input tokens recorded")
+			break
+		}
+	}
+	assert.True(t, foundUserMsg, "Should find the user message in records")
 }
 
 func TestSessionRecordTimestamps(t *testing.T) {
@@ -475,6 +493,64 @@ func TestCompactionThreshold(t *testing.T) {
 	// Test out of range values (should be clamped)
 	session.SetCompactionThreshold(-0.5)
 	session.SetCompactionThreshold(1.5)
+}
+
+func TestSummarizerContextCancellation(t *testing.T) {
+	// Test that context cancellation propagates to summarizer
+	client := &mockClient{}
+
+	// Create a summarizer that checks for context cancellation
+	cancelCheckerSummarizer := &contextCheckingSummarizer{
+		t: t,
+	}
+
+	session := NewSession(client, "System", WithSummarizer(cancelCheckerSummarizer))
+
+	// Create a context that we'll cancel
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Add enough messages to trigger compaction
+	session.SetCompactionThreshold(0.1)
+	for i := 0; i < 5; i++ {
+		_, err := session.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: strings.Repeat("Message ", 100),
+		})
+		require.NoError(t, err)
+	}
+
+	// Cancel the context before the next message (which would trigger compaction)
+	cancel()
+
+	// This should fail because context is cancelled
+	_, err := session.Message(ctx, chat.Message{
+		Role:    chat.UserRole,
+		Content: strings.Repeat("Trigger compaction ", 200),
+	})
+
+	// Should get a context cancellation error
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context canceled")
+}
+
+// contextCheckingSummarizer is a test summarizer that verifies context propagation
+type contextCheckingSummarizer struct {
+	t *testing.T
+}
+
+func (s *contextCheckingSummarizer) Summarize(ctx context.Context, records []Record) (string, error) {
+	// Check if context is cancelled
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+		// Context is not cancelled, return a simple summary
+		return "Test summary", nil
+	}
+}
+
+func (s *contextCheckingSummarizer) SetPrompt(prompt string) {
+	// No-op for test
 }
 
 func TestCompactionThresholdZeroPersistence(t *testing.T) {
