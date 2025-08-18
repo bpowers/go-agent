@@ -204,7 +204,7 @@ type registeredTool struct {
 // Message implements chat.Chat
 func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
 	// Add user message and check compaction
-	tempChat, err := s.prepareForMessage(msg)
+	tempChat, err := s.prepareForMessage(ctx, msg)
 	if err != nil {
 		return chat.Message{}, err
 	}
@@ -223,7 +223,7 @@ func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts 
 // MessageStream implements chat.Chat
 func (s *persistentSession) MessageStream(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
 	// Add user message and check compaction
-	tempChat, err := s.prepareForMessage(msg)
+	tempChat, err := s.prepareForMessage(ctx, msg)
 	if err != nil {
 		return chat.Message{}, err
 	}
@@ -241,7 +241,7 @@ func (s *persistentSession) MessageStream(ctx context.Context, msg chat.Message,
 
 // prepareForMessage adds the user message, checks for compaction, and returns a prepared chat.
 // This method expects the mutex is NOT held and will handle locking internally.
-func (s *persistentSession) prepareForMessage(msg chat.Message) (chat.Chat, error) {
+func (s *persistentSession) prepareForMessage(ctx context.Context, msg chat.Message) (chat.Chat, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -262,7 +262,7 @@ func (s *persistentSession) prepareForMessage(msg chat.Message) (chat.Chat, erro
 	if s.shouldCompactLocked() {
 		// We need to compact, but CompactNow needs the lock too
 		// So we use a locked variant
-		if err := s.compactNowLocked(); err != nil {
+		if err := s.compactNowLocked(ctx); err != nil {
 			return nil, fmt.Errorf("auto-compaction failed: %w", err)
 		}
 	}
@@ -437,11 +437,14 @@ func (s *persistentSession) CompactNow() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.compactNowLocked()
+	// Use a reasonable timeout for manual compaction
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.compactNowLocked(ctx)
 }
 
 // compactNowLocked performs compaction with the mutex already held.
-func (s *persistentSession) compactNowLocked() error {
+func (s *persistentSession) compactNowLocked(ctx context.Context) error {
 	// Find live records to compact
 	liveRecords, _ := s.store.GetLiveRecords()
 
@@ -466,8 +469,8 @@ func (s *persistentSession) compactNowLocked() error {
 		})
 	}
 
-	// Use the configured summarizer
-	summary, err := s.summarizer.Summarize(context.Background(), agentRecords)
+	// Use the configured summarizer with context from the request
+	summary, err := s.summarizer.Summarize(ctx, agentRecords)
 	if err != nil {
 		return fmt.Errorf("summarization failed: %w", err)
 	}
