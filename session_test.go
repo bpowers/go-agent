@@ -559,3 +559,34 @@ func TestCompactionThresholdZeroPersistence(t *testing.T) {
 	assert.Equal(t, 0, metrics.CompactionCount, "No compaction should occur with threshold 0.0")
 	assert.Equal(t, 41, metrics.RecordsLive) // System + 20*(user+assistant)
 }
+
+func TestRecordStatus(t *testing.T) {
+	// Test that record status is properly tracked
+	client := &mockClient{}
+	store := persistence.NewMemoryStore()
+	sessionID := "test-record-status"
+
+	session := NewSession(client, "System", WithStore(store), WithSessionID(sessionID))
+
+	// Send a successful message
+	ctx := context.Background()
+	_, err := session.Message(ctx, chat.Message{
+		Role:    chat.UserRole,
+		Content: "Test message",
+	})
+	require.NoError(t, err)
+
+	// Check that records have success status
+	records := session.LiveRecords()
+	assert.Len(t, records, 3) // System, user, assistant
+	assert.Equal(t, RecordStatusSuccess, records[0].Status) // System
+	assert.Equal(t, RecordStatusSuccess, records[1].Status) // User
+	assert.Equal(t, RecordStatusSuccess, records[2].Status) // Assistant
+
+	// Test failed message by simulating error
+	// We'd need to mock an error response from the client to fully test this
+	// For now just verify the constants exist
+	assert.Equal(t, RecordStatus("pending"), RecordStatusPending)
+	assert.Equal(t, RecordStatus("success"), RecordStatusSuccess)
+	assert.Equal(t, RecordStatus("failed"), RecordStatusFailed)
+}

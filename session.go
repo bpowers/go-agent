@@ -39,15 +39,25 @@ type Session interface {
 	Metrics() SessionMetrics // Token usage, compaction stats, etc.
 }
 
+// RecordStatus represents the status of a record in the conversation.
+type RecordStatus string
+
+const (
+	RecordStatusPending RecordStatus = "pending" // Request sent, awaiting response
+	RecordStatusSuccess RecordStatus = "success" // Successfully processed
+	RecordStatusFailed  RecordStatus = "failed"  // Failed to process
+)
+
 // Record represents a conversation turn in the session history.
 type Record struct {
-	ID           int64     `json:"id,omitzero"`
-	Role         chat.Role `json:"role"`
-	Content      string    `json:"content"`
-	Live         bool      `json:"live"`          // In active context window
-	InputTokens  int       `json:"input_tokens"`  // Actual tokens from LLM
-	OutputTokens int       `json:"output_tokens"` // Actual tokens from LLM
-	Timestamp    time.Time `json:"timestamp"`
+	ID           int64        `json:"id,omitzero"`
+	Role         chat.Role    `json:"role"`
+	Content      string       `json:"content"`
+	Live         bool         `json:"live"`          // In active context window
+	Status       RecordStatus `json:"status"`        // Processing status
+	InputTokens  int          `json:"input_tokens"`  // Actual tokens from LLM
+	OutputTokens int          `json:"output_tokens"` // Actual tokens from LLM
+	Timestamp    time.Time    `json:"timestamp"`
 }
 
 // SessionMetrics provides usage statistics for the session.
@@ -328,6 +338,7 @@ func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Mess
 		for i := len(records) - 1; i >= 0; i-- {
 			if records[i].ID == s.lastUserMessageID {
 				records[i].InputTokens = usage.LastMessage.InputTokens
+				records[i].Status = string(RecordStatusSuccess) // Mark as successful
 				s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, records[i])
 				break
 			}
@@ -431,6 +442,7 @@ func (s *persistentSession) LiveRecords() []Record {
 			Role:         chat.Role(r.Role),
 			Content:      r.Content,
 			Live:         r.Live,
+			Status:       RecordStatus(r.Status),
 			InputTokens:  r.InputTokens,
 			OutputTokens: r.OutputTokens,
 			Timestamp:    r.Timestamp,
@@ -452,6 +464,7 @@ func (s *persistentSession) TotalRecords() []Record {
 			Role:         chat.Role(r.Role),
 			Content:      r.Content,
 			Live:         r.Live,
+			Status:       RecordStatus(r.Status),
 			InputTokens:  r.InputTokens,
 			OutputTokens: r.OutputTokens,
 			Timestamp:    r.Timestamp,
@@ -491,6 +504,7 @@ func (s *persistentSession) compactNowLocked(ctx context.Context) error {
 			Role:         chat.Role(r.Role),
 			Content:      r.Content,
 			Live:         r.Live,
+			Status:       RecordStatus(r.Status),
 			InputTokens:  r.InputTokens,
 			OutputTokens: r.OutputTokens,
 			Timestamp:    r.Timestamp,
@@ -515,6 +529,7 @@ func (s *persistentSession) compactNowLocked(ctx context.Context) error {
 		Role:         "assistant",
 		Content:      fmt.Sprintf("[Previous conversation summary]\n%s", summary),
 		Live:         true,
+		Status:       string(RecordStatusSuccess), // Summaries are successful
 		InputTokens:  0, // Summary tokens will be counted with next message
 		OutputTokens: 0,
 		Timestamp:    time.Now(),
@@ -630,4 +645,24 @@ func (s *persistentSession) saveMetricsLocked() {
 		CumulativeTokens:    s.cumulativeTokens,
 		CompactionThreshold: s.compactionThreshold,
 	})
+}
+
+// markUserMessageStatus updates the status of the last user message.
+// This method expects the mutex is NOT held and will handle locking internally.
+func (s *persistentSession) markUserMessageStatus(status RecordStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.lastUserMessageID > 0 {
+		// Get the specific record to update
+		records, _ := s.store.GetAllRecords(s.sessionID)
+		// Start from end since we just added it
+		for i := len(records) - 1; i >= 0; i-- {
+			if records[i].ID == s.lastUserMessageID {
+				records[i].Status = string(status)
+				s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, records[i])
+				break
+			}
+		}
+	}
 }

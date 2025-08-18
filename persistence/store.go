@@ -14,6 +14,7 @@ type Record struct {
 	Role         chat.Role `json:"role"`
 	Content      string    `json:"content"`
 	Live         bool      `json:"live"`
+	Status       string    `json:"status"`        // pending, success, failed
 	InputTokens  int       `json:"input_tokens"`  // Actual tokens from LLM
 	OutputTokens int       `json:"output_tokens"` // Actual tokens from LLM
 	Timestamp    time.Time `json:"timestamp"`
@@ -93,6 +94,11 @@ func NewMemoryStore() *MemoryStore {
 func (m *MemoryStore) AddRecord(sessionID string, record Record) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	
+	// Default to success if status not specified
+	if record.Status == "" {
+		record.Status = "success"
+	}
 	
 	sess := m.getOrCreateSessionLocked(sessionID)
 	record.ID = sess.nextID

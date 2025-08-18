@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS records (
     role          TEXT NOT NULL,
     content       TEXT NOT NULL,
     live          BOOLEAN NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'success',
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     timestamp     DATETIME NOT NULL
@@ -68,9 +69,13 @@ CREATE TABLE IF NOT EXISTS metrics (
 
 // AddRecord implements persistence.Store.
 func (s *SQLiteStore) AddRecord(sessionID string, record persistence.Record) (int64, error) {
+	// Default to success if status not specified
+	if record.Status == "" {
+		record.Status = "success"
+	}
 	result, err := s.db.Exec(
-		`INSERT INTO records (session_id, role, content, live, input_tokens, output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp,
+		`INSERT INTO records (session_id, role, content, live, status, input_tokens, output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, string(record.Role), record.Content, record.Live, record.Status, record.InputTokens, record.OutputTokens, record.Timestamp,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert record: %w", err)
@@ -87,7 +92,7 @@ func (s *SQLiteStore) AddRecord(sessionID string, record persistence.Record) (in
 // GetAllRecords implements persistence.Store.
 func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? ORDER BY timestamp, id`,
+		`SELECT id, role, content, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? ORDER BY timestamp, id`,
 		sessionID,
 	)
 	if err != nil {
@@ -99,7 +104,7 @@ func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, err
 	for rows.Next() {
 		var r persistence.Record
 		var roleStr string
-		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
+		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.Status, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)
 		}
 		r.Role = chat.Role(roleStr)
@@ -116,7 +121,7 @@ func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, err
 // GetLiveRecords implements persistence.Store.
 func (s *SQLiteStore) GetLiveRecords(sessionID string) ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, live, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND live = 1 ORDER BY timestamp, id`,
+		`SELECT id, role, content, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND live = 1 ORDER BY timestamp, id`,
 		sessionID,
 	)
 	if err != nil {
@@ -128,7 +133,7 @@ func (s *SQLiteStore) GetLiveRecords(sessionID string) ([]persistence.Record, er
 	for rows.Next() {
 		var r persistence.Record
 		var roleStr string
-		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
+		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &r.Live, &r.Status, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)
 		}
 		r.Role = chat.Role(roleStr)
@@ -145,8 +150,8 @@ func (s *SQLiteStore) GetLiveRecords(sessionID string) ([]persistence.Record, er
 // UpdateRecord implements persistence.Store.
 func (s *SQLiteStore) UpdateRecord(sessionID string, id int64, record persistence.Record) error {
 	_, err := s.db.Exec(
-		`UPDATE records SET role = ?, content = ?, live = ?, input_tokens = ?, output_tokens = ?, timestamp = ? WHERE session_id = ? AND id = ?`,
-		string(record.Role), record.Content, record.Live, record.InputTokens, record.OutputTokens, record.Timestamp, sessionID, id,
+		`UPDATE records SET role = ?, content = ?, live = ?, status = ?, input_tokens = ?, output_tokens = ?, timestamp = ? WHERE session_id = ? AND id = ?`,
+		string(record.Role), record.Content, record.Live, record.Status, record.InputTokens, record.OutputTokens, record.Timestamp, sessionID, id,
 	)
 	if err != nil {
 		return fmt.Errorf("update record: %w", err)
