@@ -208,7 +208,6 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		compactionCount:     metrics.CompactionCount,
 		lastCompaction:      metrics.LastCompaction,
 		cumulativeTokens:    metrics.CumulativeTokens,
-		maxTokens:           baseChat.MaxTokens(),
 		tools:               make(map[string]registeredTool),
 	}
 }
@@ -227,7 +226,6 @@ type persistentSession struct {
 	compactionCount     int
 	lastCompaction      time.Time
 	cumulativeTokens    int
-	maxTokens           int
 	lastUsage           chat.TokenUsageDetails
 
 	// Tool tracking - use single mutex for simplicity as per CLAUDE.md
@@ -387,7 +385,11 @@ func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
 
 // MaxTokens implements chat.Chat
 func (s *persistentSession) MaxTokens() int {
-	return s.maxTokens
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	// Query the current chat for max tokens dynamically
+	return s.chat.MaxTokens()
 }
 
 // RegisterTool implements chat.Chat
@@ -567,15 +569,17 @@ func (s *persistentSession) Metrics() SessionMetrics {
 	liveRecords, _ := s.store.GetLiveRecords(s.sessionID)
 	allRecords, _ := s.store.GetAllRecords(s.sessionID)
 
+	// Query max tokens dynamically from current chat
+	maxTokens := s.chat.MaxTokens()
 	percentFull := 0.0
-	if s.maxTokens > 0 {
-		percentFull = float64(liveTokens) / float64(s.maxTokens)
+	if maxTokens > 0 {
+		percentFull = float64(liveTokens) / float64(maxTokens)
 	}
 
 	return SessionMetrics{
 		CumulativeTokens: s.cumulativeTokens,
 		LiveTokens:       liveTokens,
-		MaxTokens:        s.maxTokens,
+		MaxTokens:        maxTokens,
 		CompactionCount:  s.compactionCount,
 		LastCompaction:   s.lastCompaction,
 		RecordsLive:      len(liveRecords),
@@ -594,10 +598,12 @@ func (s *persistentSession) shouldCompactLocked() bool {
 	}
 
 	liveTokens := s.calculateLiveTokensLocked()
-	if s.maxTokens <= 0 {
+	// Query max tokens dynamically from current chat
+	maxTokens := s.chat.MaxTokens()
+	if maxTokens <= 0 {
 		return false
 	}
-	percentFull := float64(liveTokens) / float64(s.maxTokens)
+	percentFull := float64(liveTokens) / float64(maxTokens)
 	return percentFull >= s.compactionThreshold
 }
 
