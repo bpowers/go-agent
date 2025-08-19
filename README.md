@@ -139,7 +139,15 @@ run `go generate ./...` then:
 		return fmt.Errorf("failed to register ReadDirTool: %w", err)
 	}
 
-
+    response, err := session.Message(context.Background(), chat.Message{
+        Role:    chat.UserRole,
+        Content: "Tell me about this repo",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    fmt.Println(response.Content)
 ```
 
 
