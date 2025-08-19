@@ -18,76 +18,10 @@ A flexible, multi-provider agent framework for Go that provides a unified interf
 go get github.com/bpowers/go-agent
 ```
 
-## Quick Start
 
-```go
-package main
+## Tool Calling Example
 
-import (
-    "context"
-    "fmt"
-    "log"
-    "os"
-    
-    "github.com/bpowers/go-agent/chat"
-    "github.com/bpowers/go-agent/llm/openai"
-    // Or: "github.com/bpowers/go-agent/llm/claude"
-    // Or: "github.com/bpowers/go-agent/llm/gemini"
-)
-
-func main() {
-    // Create a client for your preferred provider
-    client, err := openai.NewClient(
-        openai.OpenAIURL,
-        os.Getenv("OPENAI_API_KEY"),
-        openai.WithModel("gpt-5-mini"),
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // Create a chat session
-    session := client.NewChat("You are a helpful assistant.")
-    
-    // Send a message
-    response, err := session.Message(context.Background(), chat.Message{
-        Role:    chat.UserRole,
-        Content: "Hello! What can you help me with?",
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    fmt.Println(response.Content)
-}
-```
-
-### Streaming Example
-
-```go
-// Stream responses with a callback
-_, err := session.Message(
-    context.Background(),
-    chat.Message{
-        Role:    chat.UserRole,
-        Content: "Explain quantum computing",
-    },
-    chat.WithStreamingCb(func(event chat.StreamEvent) error {
-        switch event.Type {
-        case chat.StreamEventTypeContent:
-            fmt.Print(event.Content) // Print as it arrives
-        case chat.StreamEventTypeThinking:
-            // Handle thinking/reasoning events (Claude, OpenAI Responses)
-            if event.ThinkingStatus.IsThinking {
-                fmt.Println("AI is thinking...")
-            }
-        }
-        return nil
-    }),
-)
-```
-
-### Tool Calling Example
+Jump to [examples/agent-cli/main.go](./examples/agent-cli/main.go) for a full example with streaming response handling that works with OpenAI, Anthropic, or Gemini models (model is command line param).
 
 Define a tool:
 
