@@ -89,7 +89,41 @@ _, err := session.Message(
 
 ### Tool Calling Example
 
-TODO
+Define a tool:
+
+```go
+//go:generate go run ../../cmd/build/funcschema/main.go -func ReadDir -input tools.go
+
+// ReadDir reads the root directory of the test filesystem
+func ReadDir(ctx context.Context) ReadDirResult {
+	fileSystem, err := GetFS(ctx)
+	if err != nil {
+		errStr := err.Error()
+		return ReadDirResult{Error: &errStr}
+	}
+
+	entries, err := fs.ReadDir(fileSystem, ".")
+	if err != nil {
+		errStr := err.Error()
+		return ReadDirResult{Error: &errStr}
+	}
+
+	files := make([]FileInfo, 0, len(entries))
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, FileInfo{
+			Name:  entry.Name(),
+			IsDir: entry.IsDir(),
+			Size:  info.Size(),
+		})
+	}
+
+	return ReadDirResult{Files: files}
+}
+```
 
 ## Session Management and Persistence
 
