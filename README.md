@@ -61,27 +61,28 @@ func ReadDir(ctx context.Context) ReadDirResult {
 run `go generate ./...` then:
 
 ```go
-	root, err := os.OpenRoot(".")
-	if err != nil {
-		return fmt.Errorf("failed to open root directory: %w", err)
-	}
-	defer root.Close()
+root, err := os.OpenRoot(".")
+if err != nil {
+	return fmt.Errorf("failed to open root directory: %w", err)
+}
+defer root.Close()
 
-	ctx := fstools.WithFS(context.Background(), root.FS())
+// Used in session.Message (not at tool registration time)
+ctx := fstools.WithFS(context.Background(), root.FS())
 
-	if err := session.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool); err != nil {
-		return fmt.Errorf("failed to register ReadDirTool: %w", err)
-	}
+if err := session.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool); err != nil {
+	return fmt.Errorf("failed to register ReadDirTool: %w", err)
+}
 
-    response, err := session.Message(context.Background(), chat.Message{
-        Role:    chat.UserRole,
-        Content: "Tell me about this repo",
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
+response, err := session.Message(ctx, chat.Message{
+ Role:    chat.UserRole,
+ Content: "Tell me about this repo",
+})
+if err != nil {
+ log.Fatal(err)
+}
     
-    fmt.Println(response.Content)
+fmt.Println(response.Content)
 ```
 
 
