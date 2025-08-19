@@ -1,15 +1,7 @@
 # go-agent
 
-A flexible, multi-provider agent framework for Go that provides a unified interface for building LLM-powered applications.
+A flexible, multi-provider agent framework for Go that provides a unified interface for building LLM-powered agents and applications.
 
-## Why go-agent?
-
-Building LLM-powered applications requires dealing with multiple providers, each with their own SDKs, streaming protocols, and quirks. go-agent solves this by providing:
-
-- **One interface, multiple providers**: Write your code once, switch between OpenAI, Claude, and Gemini without changing your application logic
-- **Complexity abstracted**: Handle streaming, tool calling, and token tracking with a clean, simple API
-- **Provider quirks handled**: We deal with rate limits, retry logic, and provider-specific requirements so you don't have to
-- **Production-ready**: Comprehensive test coverage, concurrent-safe implementations, and battle-tested across all major providers
 
 ## Features
 
@@ -18,8 +10,7 @@ Building LLM-powered applications requires dealing with multiple providers, each
 - **Streaming Support**: Real-time streaming responses with thinking/reasoning support
 - **Tool Calling**: Comprehensive tool/function calling with multi-round support (up to 10 rounds)
 - **Token Usage Tracking**: Monitor token consumption across all providers
-- **Type-Safe**: Fully typed Go interfaces with compile-time safety
-- **Code Generation**: Built-in tools to generate JSON schemas and MCP tool definitions from Go types
+- **Dead Simple Tool Creation Through Code Generation**: Built-in tools to generate JSON schemas and MCP tool definitions from Go functions: write a Go function, run go generate, one line to register it for use by the LLM.  Write the tool once, use it with any LLM.
 
 ## Installation
 
