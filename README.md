@@ -124,6 +124,24 @@ func ReadDir(ctx context.Context) ReadDirResult {
 	return ReadDirResult{Files: files}
 }
 ```
+run `go generate ./...` then:
+
+```go
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return fmt.Errorf("failed to open root directory: %w", err)
+	}
+	defer root.Close()
+
+	ctx := fstools.WithFS(context.Background(), root.FS())
+
+	if err := session.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool); err != nil {
+		return fmt.Errorf("failed to register ReadDirTool: %w", err)
+	}
+
+
+```
+
 
 ## Session Management and Persistence
 
