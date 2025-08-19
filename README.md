@@ -75,11 +75,11 @@ if err := session.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool); err
 }
 
 response, err := session.Message(ctx, chat.Message{
- Role:    chat.UserRole,
- Content: "Tell me about this repo",
+        Role:    chat.UserRole,
+        Content: "Tell me about this repo",
 })
 if err != nil {
- log.Fatal(err)
+        log.Fatal(err)
 }
     
 fmt.Println(response.Content)
