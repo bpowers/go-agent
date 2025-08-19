@@ -121,6 +121,8 @@ When the context window approaches capacity, the Session automatically:
 2. Marks old records as "dead" (kept for history but not sent to LLM)
 3. Creates a summary record to maintain conversation continuity
 
+This is directly inspired by https://github.com/tqbf/contextwindow , as is the sqlite based persistence.  The implementation in go-agent is not yet good, but it exists.
+
 ## Examples
 
 See the `examples/agent-cli` directory for a complete command-line chat application that demonstrates:
