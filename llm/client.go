@@ -79,7 +79,7 @@ func NewClient(config *Config) (chat.Client, error) {
 		}
 
 		log.Printf("Using Claude client with model %q\n", config.Model)
-		return claude.NewClient(claude.ClaudeURL, apiKey, opts...)
+		return claude.NewClient(claude.AnthropicURL, apiKey, opts...)
 
 	case ProviderGemini:
 		if apiKey == "" {

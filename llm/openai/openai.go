@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -1332,11 +1334,7 @@ func (c *chatClient) ListTools() []string {
 	c.toolsLock.RLock()
 	defer c.toolsLock.RUnlock()
 
-	names := make([]string, 0, len(c.tools))
-	for name := range c.tools {
-		names = append(names, name)
-	}
-	return names
+	return slices.Sorted(maps.Keys(c.tools))
 }
 
 // isValidJSON returns true if s is a complete valid JSON value

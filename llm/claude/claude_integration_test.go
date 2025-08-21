@@ -47,7 +47,7 @@ func TestClaudeIntegration_Streaming(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -59,7 +59,7 @@ func TestClaudeIntegration_ToolCalling(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -71,7 +71,7 @@ func TestClaudeIntegration_ToolCallingWithContext(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -83,7 +83,7 @@ func TestClaudeIntegration_TokenUsage(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -123,7 +123,7 @@ func TestClaudeIntegration_TokenUsageCumulative(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -135,7 +135,7 @@ func TestClaudeIntegration_ToolCallStreamEvents(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -147,7 +147,7 @@ func TestClaudeIntegration_ToolRegistration(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -191,7 +191,7 @@ func TestClaudeIntegration_SimpleToolCall(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
 
-	client, err := NewClient(ClaudeURL, getAPIKey(), WithModel(getTestModel()))
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 

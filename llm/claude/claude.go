@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -17,7 +19,7 @@ import (
 )
 
 const (
-	ClaudeURL = "https://api.anthropic.com/v1"
+	AnthropicURL = "https://api.anthropic.com/v1"
 )
 
 type client struct {
@@ -65,7 +67,7 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 		option.WithAPIKey(apiKey),
 	}
 
-	if apiBase != "" && apiBase != ClaudeURL {
+	if apiBase != "" && apiBase != AnthropicURL {
 		clientOpts = append(clientOpts, option.WithBaseURL(apiBase))
 	}
 
@@ -86,6 +88,24 @@ func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.C
 		maxTokens:    maxTokens,
 		tools:        make(map[string]common.RegisteredTool),
 	}
+}
+
+var modelMaxOutputTokens = map[string]int64{
+	"claude-opus-4-1":   32000,
+	"claude-opus-4":     32000,
+	"claude-sonnet-4":   64000,
+	"claude-3-7-sonnet": 64000,
+	"claude-3-5-haiku":  8192,
+	"claude-3-haiku":    4096,
+}
+
+func getMaxOutputTokens(modelName string) int64 {
+	t, ok := modelMaxOutputTokens[modelName]
+	if !ok {
+		log.Printf("WARNING: model '%s' not found in model library", modelName)
+		t = 4096
+	}
+	return t
 }
 
 var modelLimits = []chat.ModelTokenLimits{
@@ -178,7 +198,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	params := anthropic.MessageNewParams{
 		Messages:  messages,
 		Model:     anthropic.Model(c.modelName),
-		MaxTokens: 4096, // Claude requires this
+		MaxTokens: getMaxOutputTokens(c.modelName), // Claude requires this
 	}
 
 	// Add tools if registered
@@ -533,11 +553,7 @@ func (c *chatClient) ListTools() []string {
 	c.toolsLock.RLock()
 	defer c.toolsLock.RUnlock()
 
-	names := make([]string, 0, len(c.tools))
-	for name := range c.tools {
-		names = append(names, name)
-	}
-	return names
+	return slices.Sorted(maps.Keys(c.tools))
 }
 
 // mcpToClaudeTool converts an MCP tool definition to Claude format
