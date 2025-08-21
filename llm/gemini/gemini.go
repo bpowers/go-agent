@@ -128,54 +128,60 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Build content for all messages
 	var contents []*genai.Content
+	var systemPrompt string
 
-	// Add system instruction as first content if present
-	if c.systemPrompt != "" {
-		systemText := c.systemPrompt
-		// Handle response format if provided
-		if reqOpts.ResponseFormat != nil && reqOpts.ResponseFormat.Schema != nil {
-			systemText += fmt.Sprintf("\n\nYou must respond with valid JSON that conforms to the schema named: %s", reqOpts.ResponseFormat.Name)
-		}
-		contents = append(contents, &genai.Content{
-			Role: "user",
-			Parts: []*genai.Part{
-				{Text: systemText},
-			},
-		})
-		// Add a placeholder assistant response to maintain conversation flow
-		contents = append(contents, &genai.Content{
-			Role: "model",
-			Parts: []*genai.Part{
-				{Text: "I understand and will follow these instructions."},
-			},
-		})
-	}
+	// Snapshot history with minimal lock
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 
-	// Add history messages
-	for _, m := range c.msgs {
-		var role string
-		switch m.Role {
-		case chat.UserRole:
-			role = "user"
-		case chat.AssistantRole:
-			role = "model"
-		default:
-			// Skip system messages as they're handled separately
-			continue
+		systemPrompt = c.systemPrompt
+
+		// Add system instruction as first content if present
+		if systemPrompt != "" {
+			systemText := systemPrompt
+			// Handle response format if provided
+			if reqOpts.ResponseFormat != nil && reqOpts.ResponseFormat.Schema != nil {
+				systemText += fmt.Sprintf("\n\nYou must respond with valid JSON that conforms to the schema named: %s", reqOpts.ResponseFormat.Name)
+			}
+			contents = append(contents, &genai.Content{
+				Role: "user",
+				Parts: []*genai.Part{
+					{Text: systemText},
+				},
+			})
+			// Add a placeholder assistant response to maintain conversation flow
+			contents = append(contents, &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{
+					{Text: "I understand and will follow these instructions."},
+				},
+			})
 		}
 
-		contents = append(contents, &genai.Content{
-			Role: role,
-			Parts: []*genai.Part{
-				{Text: m.Content},
-			},
-		})
-	}
+		// Add history messages
+		for _, m := range c.msgs {
+			var role string
+			switch m.Role {
+			case chat.UserRole:
+				role = "user"
+			case chat.AssistantRole:
+				role = "model"
+			default:
+				// Skip system messages as they're handled separately
+				continue
+			}
+
+			contents = append(contents, &genai.Content{
+				Role: role,
+				Parts: []*genai.Part{
+					{Text: m.Content},
+				},
+			})
+		}
+	}()
 
 	// Add current message
 	var currentRole string
@@ -299,11 +305,18 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					TotalTokens:  int(chunk.UsageMetadata.TotalTokenCount),
 					CachedTokens: int(chunk.UsageMetadata.CachedContentTokenCount),
 				}
-				c.lastMessageUsage = usage
-				c.cumulativeUsage.InputTokens += usage.InputTokens
-				c.cumulativeUsage.OutputTokens += usage.OutputTokens
-				c.cumulativeUsage.TotalTokens += usage.TotalTokens
-				c.cumulativeUsage.CachedTokens += usage.CachedTokens
+
+				// Update usage with lock
+				func() {
+					c.mu.Lock()
+					defer c.mu.Unlock()
+
+					c.lastMessageUsage = usage
+					c.cumulativeUsage.InputTokens += usage.InputTokens
+					c.cumulativeUsage.OutputTokens += usage.OutputTokens
+					c.cumulativeUsage.TotalTokens += usage.TotalTokens
+					c.cumulativeUsage.CachedTokens += usage.CachedTokens
+				}()
 			}
 		}
 	}
@@ -318,9 +331,14 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		Content: respContent.String(),
 	}
 
-	// Update history
-	c.msgs = append(c.msgs, reqMsg)
-	c.msgs = append(c.msgs, respMsg)
+	// Update history with lock
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		c.msgs = append(c.msgs, reqMsg)
+		c.msgs = append(c.msgs, respMsg)
+	}()
 
 	return respMsg, nil
 }
@@ -467,46 +485,54 @@ func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef chat.ToolDef) (*genai
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialFunctionCalls []*genai.FunctionCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all messages for the conversation
 	var conversationContents []*genai.Content
+	var systemPrompt string
 
 	// Build initial conversation with system prompt and history
-	if c.systemPrompt != "" {
-		conversationContents = append(conversationContents, &genai.Content{
-			Role: "user",
-			Parts: []*genai.Part{
-				{Text: c.systemPrompt},
-			},
-		})
-		// Add a placeholder assistant response to maintain conversation flow
-		conversationContents = append(conversationContents, &genai.Content{
-			Role: "model",
-			Parts: []*genai.Part{
-				{Text: "I understand and will follow these instructions."},
-			},
-		})
-	}
+	// Snapshot history with minimal lock
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 
-	// Add history messages
-	for _, m := range c.msgs {
-		var role string
-		switch m.Role {
-		case chat.UserRole:
-			role = "user"
-		case chat.AssistantRole:
-			role = "model"
-		default:
-			continue
+		systemPrompt = c.systemPrompt
+
+		if systemPrompt != "" {
+			conversationContents = append(conversationContents, &genai.Content{
+				Role: "user",
+				Parts: []*genai.Part{
+					{Text: systemPrompt},
+				},
+			})
+			// Add a placeholder assistant response to maintain conversation flow
+			conversationContents = append(conversationContents, &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{
+					{Text: "I understand and will follow these instructions."},
+				},
+			})
 		}
 
-		conversationContents = append(conversationContents, &genai.Content{
-			Role: role,
-			Parts: []*genai.Part{
-				{Text: m.Content},
-			},
-		})
-	}
+		// Add history messages
+		for _, m := range c.msgs {
+			var role string
+			switch m.Role {
+			case chat.UserRole:
+				role = "user"
+			case chat.AssistantRole:
+				role = "model"
+			default:
+				continue
+			}
+
+			conversationContents = append(conversationContents, &genai.Content{
+				Role: role,
+				Parts: []*genai.Part{
+					{Text: m.Content},
+				},
+			})
+		}
+	}()
 
 	// Add the initial user message
-	c.msgs = append(c.msgs, initialMsg)
 	conversationContents = append(conversationContents, &genai.Content{
 		Role: "user",
 		Parts: []*genai.Part{
@@ -649,11 +675,18 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						TotalTokens:  int(chunk.UsageMetadata.TotalTokenCount),
 						CachedTokens: int(chunk.UsageMetadata.CachedContentTokenCount),
 					}
-					c.lastMessageUsage = usage
-					c.cumulativeUsage.InputTokens += usage.InputTokens
-					c.cumulativeUsage.OutputTokens += usage.OutputTokens
-					c.cumulativeUsage.TotalTokens += usage.TotalTokens
-					c.cumulativeUsage.CachedTokens += usage.CachedTokens
+
+					// Update usage with lock
+					func() {
+						c.mu.Lock()
+						defer c.mu.Unlock()
+
+						c.lastMessageUsage = usage
+						c.cumulativeUsage.InputTokens += usage.InputTokens
+						c.cumulativeUsage.OutputTokens += usage.OutputTokens
+						c.cumulativeUsage.TotalTokens += usage.TotalTokens
+						c.cumulativeUsage.CachedTokens += usage.CachedTokens
+					}()
 				}
 			}
 		}
@@ -669,8 +702,13 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			Content: respContent.String(),
 		}
 
-		// Update history with the final response
-		c.msgs = append(c.msgs, finalMsg)
+		// Update history with lock - update both messages at once
+		func() {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+
+			c.msgs = append(c.msgs, initialMsg, finalMsg)
+		}()
 
 		return finalMsg, nil
 	}

@@ -154,28 +154,34 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Build message list for Claude
 	var messages []anthropic.MessageParam
+	var systemPrompt string
 
-	// Add history
-	for _, m := range c.msgs {
-		switch m.Role {
-		case chat.UserRole:
-			messages = append(messages, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
-		case chat.AssistantRole:
-			messages = append(messages, anthropic.NewAssistantMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
-		default:
-			// Claude doesn't support system role in messages, only as a separate field
-			continue
+	// Snapshot history with minimal lock
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		systemPrompt = c.systemPrompt
+
+		// Add history
+		for _, m := range c.msgs {
+			switch m.Role {
+			case chat.UserRole:
+				messages = append(messages, anthropic.NewUserMessage(
+					anthropic.NewTextBlock(m.Content),
+				))
+			case chat.AssistantRole:
+				messages = append(messages, anthropic.NewAssistantMessage(
+					anthropic.NewTextBlock(m.Content),
+				))
+			default:
+				// Claude doesn't support system role in messages, only as a separate field
+				continue
+			}
 		}
-	}
+	}()
 
 	// Add current message
 	switch msg.Role {
@@ -226,10 +232,10 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	}
 
 	// Add system prompt if present
-	if c.systemPrompt != "" {
+	if systemPrompt != "" {
 		params.System = []anthropic.TextBlockParam{
 			{
-				Text: c.systemPrompt,
+				Text: systemPrompt,
 				Type: "text",
 			},
 		}
@@ -247,7 +253,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	// Claude doesn't have a direct equivalent to OpenAI's response_format
 	// but we can append instructions to the system prompt
 	if reqOpts.ResponseFormat != nil && reqOpts.ResponseFormat.Schema != nil {
-		systemText := c.systemPrompt
+		systemText := systemPrompt
 		if systemText != "" {
 			systemText += "\n\n"
 		}
@@ -449,14 +455,26 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					OutputTokens: int(event.Usage.OutputTokens),
 					TotalTokens:  int(event.Usage.InputTokens + event.Usage.OutputTokens),
 				}
-				c.lastMessageUsage = usage
-				c.cumulativeUsage.InputTokens += usage.InputTokens
-				c.cumulativeUsage.OutputTokens += usage.OutputTokens
-				c.cumulativeUsage.TotalTokens += usage.TotalTokens
+
+				// Update usage with lock
+				func() {
+					c.mu.Lock()
+					defer c.mu.Unlock()
+
+					c.lastMessageUsage = usage
+					c.cumulativeUsage.InputTokens += usage.InputTokens
+					c.cumulativeUsage.OutputTokens += usage.OutputTokens
+					c.cumulativeUsage.TotalTokens += usage.TotalTokens
+				}()
+
 				if c.debug {
-					log.Printf("[Claude] Usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-						usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-						c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
+					func() {
+						c.mu.Lock()
+						defer c.mu.Unlock()
+						log.Printf("[Claude] Usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
+							usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
+							c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
+					}()
 				}
 			}
 		case "message_stop":
@@ -489,9 +507,14 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		Content: respContent.String(),
 	}
 
-	// Update history
-	c.msgs = append(c.msgs, reqMsg)
-	c.msgs = append(c.msgs, respMsg)
+	// Update history with lock
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		c.msgs = append(c.msgs, reqMsg)
+		c.msgs = append(c.msgs, respMsg)
+	}()
 
 	// Token usage is extracted from message_delta events during streaming
 
@@ -634,29 +657,37 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialContent string, initialToolCalls []anthropic.ToolUseBlock, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all content blocks for the conversation
 	var conversationMessages []anthropic.MessageParam
+	var systemPrompt string
 
 	// Build initial conversation with system prompt and history
-	// Add history
-	for _, m := range c.msgs {
-		switch m.Role {
-		case chat.UserRole:
-			conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
-		case chat.AssistantRole:
-			conversationMessages = append(conversationMessages, anthropic.NewAssistantMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
-		default:
-			// Convert system messages to user messages for Claude
-			conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
+	// Snapshot history with minimal lock
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		systemPrompt = c.systemPrompt
+
+		// Add history
+		for _, m := range c.msgs {
+			switch m.Role {
+			case chat.UserRole:
+				conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
+					anthropic.NewTextBlock(m.Content),
+				))
+			case chat.AssistantRole:
+				conversationMessages = append(conversationMessages, anthropic.NewAssistantMessage(
+					anthropic.NewTextBlock(m.Content),
+				))
+			default:
+				// Convert system messages to user messages for Claude
+				conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
+					anthropic.NewTextBlock(m.Content),
+				))
+			}
 		}
-	}
+	}()
 
 	// Add the initial user message
-	c.msgs = append(c.msgs, initialMsg)
 	conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
 		anthropic.NewTextBlock(initialMsg.Content),
 	))
@@ -710,10 +741,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Add system prompt if present
-		if c.systemPrompt != "" {
+		if systemPrompt != "" {
 			followUpParams.System = []anthropic.TextBlockParam{
 				{
-					Text: c.systemPrompt,
+					Text: systemPrompt,
 					Type: "text",
 				},
 			}
@@ -853,14 +884,26 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						OutputTokens: int(event.Usage.OutputTokens),
 						TotalTokens:  int(event.Usage.InputTokens + event.Usage.OutputTokens),
 					}
-					c.lastMessageUsage = usage
-					c.cumulativeUsage.InputTokens += usage.InputTokens
-					c.cumulativeUsage.OutputTokens += usage.OutputTokens
-					c.cumulativeUsage.TotalTokens += usage.TotalTokens
+
+					// Update usage with lock
+					func() {
+						c.mu.Lock()
+						defer c.mu.Unlock()
+
+						c.lastMessageUsage = usage
+						c.cumulativeUsage.InputTokens += usage.InputTokens
+						c.cumulativeUsage.OutputTokens += usage.OutputTokens
+						c.cumulativeUsage.TotalTokens += usage.TotalTokens
+					}()
+
 					if c.debug {
-						log.Printf("[Claude] Follow-up usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-							usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-							c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
+						func() {
+							c.mu.Lock()
+							defer c.mu.Unlock()
+							log.Printf("[Claude] Follow-up usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
+								usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
+								c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
+						}()
 					}
 				}
 			case "message_stop":
@@ -898,8 +941,13 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			log.Printf("[Claude] Returning final response from tool handler, content length: %d\n", len(finalMsg.Content))
 		}
 
-		// Update history with the final response
-		c.msgs = append(c.msgs, finalMsg)
+		// Update history with lock - update both messages at once
+		func() {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+
+			c.msgs = append(c.msgs, initialMsg, finalMsg)
+		}()
 
 		return finalMsg, nil
 	}
