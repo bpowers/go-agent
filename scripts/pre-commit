@@ -33,6 +33,8 @@ if [ ! -f "$STATICCHECK" ]; then
     exit 1
 fi
 
+echo "The project passed all pre-commit checks before your changes. Any failing checks reported are the result of your changes and need to be fixed by addressing their root cause." >&2
+
 echo "Running pre-commit checks..."
 
 # 1. Check if gofumpt would make changes
