@@ -574,7 +574,7 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 // handleToolCallRounds handles potentially multiple rounds of tool calls
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialContent string, initialToolCalls []anthropic.ToolUseBlock, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all content blocks for the conversation
-	var conversationMessages []anthropic.MessageParam
+	var msgs []anthropic.MessageParam
 
 	// Build initial conversation with system prompt and history
 	// Snapshot history with minimal lock
@@ -584,23 +584,23 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	for _, m := range history {
 		switch m.Role {
 		case chat.UserRole:
-			conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
+			msgs = append(msgs, anthropic.NewUserMessage(
 				anthropic.NewTextBlock(m.Content),
 			))
 		case chat.AssistantRole:
-			conversationMessages = append(conversationMessages, anthropic.NewAssistantMessage(
+			msgs = append(msgs, anthropic.NewAssistantMessage(
 				anthropic.NewTextBlock(m.Content),
 			))
 		default:
 			// Convert system messages to user messages for Claude
-			conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
+			msgs = append(msgs, anthropic.NewUserMessage(
 				anthropic.NewTextBlock(m.Content),
 			))
 		}
 	}
 
 	// Add the initial user message
-	conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
+	msgs = append(msgs, anthropic.NewUserMessage(
 		anthropic.NewTextBlock(initialMsg.Content),
 	))
 
@@ -639,15 +639,15 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// Add assistant message with tool calls and initial content
 		assistantMsg := anthropic.NewAssistantMessage(assistantContentBlocks...)
-		conversationMessages = append(conversationMessages, assistantMsg)
+		msgs = append(msgs, assistantMsg)
 
 		// Add tool results as user message
 		userMsg := anthropic.NewUserMessage(toolResults...)
-		conversationMessages = append(conversationMessages, userMsg)
+		msgs = append(msgs, userMsg)
 
 		// Make another API call with tool results
 		followUpParams := anthropic.MessageNewParams{
-			Messages:  conversationMessages,
+			Messages:  msgs,
 			Model:     anthropic.Model(c.modelName),
 			MaxTokens: 4096,
 		}

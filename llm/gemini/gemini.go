@@ -403,7 +403,7 @@ func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef chat.ToolDef) (*genai
 // handleToolCallRounds handles potentially multiple rounds of tool calls
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialFunctionCalls []*genai.FunctionCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all messages for the conversation
-	var conversationContents []*genai.Content
+	var msgs []*genai.Content
 	var systemPrompt string
 
 	// Build initial conversation with system prompt and history
@@ -411,7 +411,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	systemPrompt, history := c.state.Snapshot()
 
 	if systemPrompt != "" {
-		conversationContents = append(conversationContents, &genai.Content{
+		msgs = append(msgs, &genai.Content{
 			Role: "user",
 			Parts: []*genai.Part{
 				{Text: systemPrompt},
@@ -431,7 +431,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			continue
 		}
 
-		conversationContents = append(conversationContents, &genai.Content{
+		msgs = append(msgs, &genai.Content{
 			Role: role,
 			Parts: []*genai.Part{
 				{Text: m.Content},
@@ -440,7 +440,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	}
 
 	// Add the initial user message
-	conversationContents = append(conversationContents, &genai.Content{
+	msgs = append(msgs, &genai.Content{
 		Role: "user",
 		Parts: []*genai.Part{
 			{Text: initialMsg.Content},
@@ -465,7 +465,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			}
 		}
 
-		conversationContents = append(conversationContents, &genai.Content{
+		msgs = append(msgs, &genai.Content{
 			Role:  "model",
 			Parts: assistantParts,
 		})
@@ -478,7 +478,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			}
 		}
 
-		conversationContents = append(conversationContents, &genai.Content{
+		msgs = append(msgs, &genai.Content{
 			Role:  "function",
 			Parts: resultParts,
 		})
@@ -514,7 +514,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Create a new stream for the follow-up request
-		followUpStream := c.genaiClient.Models.GenerateContentStream(ctx, c.modelName, conversationContents, followUpConfig)
+		followUpStream := c.genaiClient.Models.GenerateContentStream(ctx, c.modelName, msgs, followUpConfig)
 
 		// Process the follow-up stream
 		var respContent strings.Builder
