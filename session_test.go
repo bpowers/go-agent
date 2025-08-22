@@ -538,11 +538,11 @@ func TestCompactionThresholdZeroPersistence(t *testing.T) {
 	sessionID := "test-zero-threshold"
 
 	// Create first session and set threshold to 0
-	session1 := NewSession(client, "System", WithStore(store), WithSessionID(sessionID))
+	session1 := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
 	session1.SetCompactionThreshold(0.0)
 
 	// Create second session with same store and session ID
-	session2 := NewSession(client, "System", WithStore(store), WithSessionID(sessionID))
+	session2 := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
 
 	// Send messages to test that compaction doesn't occur
 	ctx := context.Background()
@@ -566,7 +566,7 @@ func TestRecordStatus(t *testing.T) {
 	store := persistence.NewMemoryStore()
 	sessionID := "test-record-status"
 
-	session := NewSession(client, "System", WithStore(store), WithSessionID(sessionID))
+	session := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
 
 	// Send a successful message
 	ctx := context.Background()
