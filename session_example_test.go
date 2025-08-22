@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	agent "github.com/bpowers/go-agent"
 	"github.com/bpowers/go-agent/chat"
@@ -123,9 +124,7 @@ func ExampleSession_resumption() {
 		}
 
 		// Check if the assistant remembers Bobby from the earlier conversation
-		if len(response.Content) > 0 {
-			// In a real scenario, we'd parse the response to verify "Bobby" is mentioned
-			// For this example, we just verify we got a response
+		if strings.Contains(strings.ToLower(response.Content), "bobby") {
 			fmt.Println("Context preserved: true")
 		}
 	}()
