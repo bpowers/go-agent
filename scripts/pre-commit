@@ -67,7 +67,8 @@ while IFS= read -r file; do
 done < "$TEMP_DIR/generated_files.txt"
 
 # Run go generate
-go generate ./... 2>/dev/null
+GENERATE_OUTPUT="$TEMP_DIR/generate_output.txt"
+go generate ./... > "$GENERATE_OUTPUT" 2>&1
 
 # Format any newly generated files
 while IFS= read -r file; do
@@ -103,6 +104,10 @@ if [ "$CHANGED" = false ]; then
 else
     echo -e "${RED}✗${NC}"
     echo -e "${RED}Generated files are out of date${NC}"
+    # Display the go generate output to help debug
+    if [ -s "$GENERATE_OUTPUT" ]; then
+        cat "$GENERATE_OUTPUT"
+    fi
     echo -e "${YELLOW}Run 'go generate ./... && $GOFUMPT -w .' to update generated files${NC}"
     exit 1
 fi
@@ -110,21 +115,28 @@ fi
 # 3. Run staticcheck
 echo -n "Running staticcheck... "
 # Run staticcheck which detects SA2001 (empty critical sections) and SA2003 (deferred Lock instead of Unlock)
-if "$STATICCHECK" ./... > /dev/null 2>&1; then
+STATICCHECK_OUTPUT="$TEMP_DIR/staticcheck_output.txt"
+if "$STATICCHECK" ./... > "$STATICCHECK_OUTPUT" 2>&1; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
-    echo -e "${RED}Static analysis failed. Run '$STATICCHECK ./...' to see errors${NC}"
+    echo -e "${RED}Static analysis failed${NC}"
+    # Display the captured output
+    cat "$STATICCHECK_OUTPUT"
+    echo -e "${YELLOW}Run '$STATICCHECK ./...' to see errors${NC}"
     exit 1
 fi
 
 # 4. Run tests with race detector
 echo -n "Running tests with race detector... "
-if ./with_api_keys.sh go test -race -shuffle on ./... > /dev/null 2>&1; then
+TEST_OUTPUT="$TEMP_DIR/test_output.txt"
+if ./with_api_keys.sh go test -race -shuffle on ./... > "$TEST_OUTPUT" 2>&1; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
     echo -e "${RED}Tests failed${NC}"
+    # Display the captured output
+    cat "$TEST_OUTPUT"
     echo -e "${YELLOW}Run './with_api_keys.sh go test -race -shuffle on ./...' to see failures${NC}"
     exit 1
 fi
