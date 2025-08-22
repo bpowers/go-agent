@@ -18,6 +18,8 @@ import (
 	"github.com/bpowers/go-agent/persistence/sqlitestore"
 )
 
+const defaultModel = "claude-opus-4-1"
+
 func main() {
 	if err := run(parseFlags(), os.Stdin, os.Stdout, os.Stderr); err != nil {
 		log.Fatal(err)
@@ -44,7 +46,7 @@ func parseFlagsArgs(args []string) *Config {
 	var config Config
 	fs := flag.NewFlagSet("agent-cli", flag.ContinueOnError)
 
-	fs.StringVar(&config.Model, "model", "gpt-4o-mini", "Model to use (e.g., gpt-4o, claude-3-5-sonnet-20241022, gemini-1.5-flash)")
+	fs.StringVar(&config.Model, "model", defaultModel, "Model to use (e.g., gpt-5, claude-sonnet-4, gemini-2.5-flash)")
 	fs.StringVar(&config.APIKey, "api-key", "", "API key (defaults to environment variable based on provider)")
 	fs.Float64Var(&config.Temperature, "temperature", -1, "Temperature for response generation (0.0-1.0)")
 	fs.IntVar(&config.MaxTokens, "max-tokens", 0, "Maximum tokens in response (0 for default)")

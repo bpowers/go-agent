@@ -32,7 +32,7 @@ func TestParseFlags(t *testing.T) {
 			name: "Default values",
 			args: []string{"agent-cli"},
 			expected: &Config{
-				Model:            "gpt-4o-mini",
+				Model:            defaultModel,
 				APIKey:           "",
 				Temperature:      -1,
 				MaxTokens:        0,
@@ -43,9 +43,9 @@ func TestParseFlags(t *testing.T) {
 		},
 		{
 			name: "Custom model",
-			args: []string{"agent-cli", "-model", "claude-3-opus"},
+			args: []string{"agent-cli", "-model", "claude-sonnet-4"},
 			expected: &Config{
-				Model:            "claude-3-opus",
+				Model:            "claude-sonnet-4",
 				APIKey:           "",
 				Temperature:      -1,
 				MaxTokens:        0,
@@ -58,7 +58,7 @@ func TestParseFlags(t *testing.T) {
 			name: "With API key",
 			args: []string{"agent-cli", "-api-key", "test-key-123"},
 			expected: &Config{
-				Model:            "gpt-4o-mini",
+				Model:            defaultModel,
 				APIKey:           "test-key-123",
 				Temperature:      -1,
 				MaxTokens:        0,
@@ -71,7 +71,7 @@ func TestParseFlags(t *testing.T) {
 			name: "Custom temperature",
 			args: []string{"agent-cli", "-temperature", "0.2"},
 			expected: &Config{
-				Model:            "gpt-4o-mini",
+				Model:            defaultModel,
 				APIKey:           "",
 				Temperature:      0.2,
 				MaxTokens:        0,
@@ -84,7 +84,7 @@ func TestParseFlags(t *testing.T) {
 			name: "Custom max tokens",
 			args: []string{"agent-cli", "-max-tokens", "2048"},
 			expected: &Config{
-				Model:            "gpt-4o-mini",
+				Model:            defaultModel,
 				APIKey:           "",
 				Temperature:      -1,
 				MaxTokens:        2048,
@@ -97,7 +97,7 @@ func TestParseFlags(t *testing.T) {
 			name: "Custom system prompt",
 			args: []string{"agent-cli", "-system", "You are a coding assistant."},
 			expected: &Config{
-				Model:            "gpt-4o-mini",
+				Model:            defaultModel,
 				APIKey:           "",
 				Temperature:      -1,
 				MaxTokens:        0,
@@ -110,7 +110,7 @@ func TestParseFlags(t *testing.T) {
 			name: "Debug mode",
 			args: []string{"agent-cli", "-debug"},
 			expected: &Config{
-				Model:            "gpt-4o-mini",
+				Model:            defaultModel,
 				APIKey:           "",
 				Temperature:      -1,
 				MaxTokens:        0,
@@ -123,7 +123,7 @@ func TestParseFlags(t *testing.T) {
 			name: "All options",
 			args: []string{
 				"agent-cli",
-				"-model", "gemini-1.5-pro",
+				"-model", "gemini-2.5-pro",
 				"-api-key", "secret-key",
 				"-temperature", "0.9",
 				"-max-tokens", "4096",
@@ -131,7 +131,7 @@ func TestParseFlags(t *testing.T) {
 				"-debug",
 			},
 			expected: &Config{
-				Model:            "gemini-1.5-pro",
+				Model:            "gemini-2.5-pro",
 				APIKey:           "secret-key",
 				Temperature:      0.9,
 				MaxTokens:        4096,
