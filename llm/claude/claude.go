@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"maps"
 	"os"
-	"slices"
 	"strings"
-	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -82,11 +79,10 @@ func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.C
 	maxTokens := getModelMaxTokens(c.modelName)
 
 	return &chatClient{
-		client:       c,
-		systemPrompt: systemPrompt,
-		msgs:         initialMsgs,
-		maxTokens:    maxTokens,
-		tools:        make(map[string]common.RegisteredTool),
+		client:    c,
+		state:     common.NewState(systemPrompt, initialMsgs),
+		tools:     common.NewTools(),
+		maxTokens: maxTokens,
 	}
 }
 
@@ -132,19 +128,9 @@ func getModelMaxTokens(model string) int {
 
 type chatClient struct {
 	client
-	systemPrompt string
-
-	mu   sync.Mutex
-	msgs []chat.Message
-
-	// Token tracking
-	cumulativeUsage  chat.TokenUsageDetails
-	lastMessageUsage chat.TokenUsageDetails
-	maxTokens        int
-
-	// Tool support
-	tools     map[string]common.RegisteredTool
-	toolsLock sync.RWMutex
+	state     *common.State
+	tools     *common.Tools
+	maxTokens int
 }
 
 func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
@@ -156,32 +142,26 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 	// Build message list for Claude
 	var messages []anthropic.MessageParam
-	var systemPrompt string
 
 	// Snapshot history with minimal lock
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
+	systemPrompt, history := c.state.Snapshot()
 
-		systemPrompt = c.systemPrompt
-
-		// Add history
-		for _, m := range c.msgs {
-			switch m.Role {
-			case chat.UserRole:
-				messages = append(messages, anthropic.NewUserMessage(
-					anthropic.NewTextBlock(m.Content),
-				))
-			case chat.AssistantRole:
-				messages = append(messages, anthropic.NewAssistantMessage(
-					anthropic.NewTextBlock(m.Content),
-				))
-			default:
-				// Claude doesn't support system role in messages, only as a separate field
-				continue
-			}
+	// Add history
+	for _, m := range history {
+		switch m.Role {
+		case chat.UserRole:
+			messages = append(messages, anthropic.NewUserMessage(
+				anthropic.NewTextBlock(m.Content),
+			))
+		case chat.AssistantRole:
+			messages = append(messages, anthropic.NewAssistantMessage(
+				anthropic.NewTextBlock(m.Content),
+			))
+		default:
+			// Claude doesn't support system role in messages, only as a separate field
+			continue
 		}
-	}()
+	}
 
 	// Add current message
 	switch msg.Role {
@@ -208,27 +188,17 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	}
 
 	// Add tools if registered
-	var toolConversionErr error
-	func() {
-		c.toolsLock.RLock()
-		defer c.toolsLock.RUnlock()
-
-		if len(c.tools) > 0 {
-			tools := make([]anthropic.ToolUnionParam, 0, len(c.tools))
-			for _, tool := range c.tools {
-				toolParam, err := c.mcpToClaudeTool(tool.Definition)
-				if err != nil {
-					toolConversionErr = fmt.Errorf("failed to convert tool: %w", err)
-					return
-				}
-				tools = append(tools, toolParam)
+	allTools := c.tools.GetAll()
+	if len(allTools) > 0 {
+		tools := make([]anthropic.ToolUnionParam, 0, len(allTools))
+		for _, tool := range allTools {
+			toolParam, err := c.mcpToClaudeTool(tool.Definition)
+			if err != nil {
+				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
 			}
-			params.Tools = tools
+			tools = append(tools, toolParam)
 		}
-	}()
-
-	if toolConversionErr != nil {
-		return chat.Message{}, toolConversionErr
+		params.Tools = tools
 	}
 
 	// Add system prompt if present
@@ -456,25 +426,14 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					TotalTokens:  int(event.Usage.InputTokens + event.Usage.OutputTokens),
 				}
 
-				// Update usage with lock
-				func() {
-					c.mu.Lock()
-					defer c.mu.Unlock()
-
-					c.lastMessageUsage = usage
-					c.cumulativeUsage.InputTokens += usage.InputTokens
-					c.cumulativeUsage.OutputTokens += usage.OutputTokens
-					c.cumulativeUsage.TotalTokens += usage.TotalTokens
-				}()
+				// Update usage
+				c.state.UpdateUsage(usage)
 
 				if c.debug {
-					func() {
-						c.mu.Lock()
-						defer c.mu.Unlock()
-						log.Printf("[Claude] Usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-							usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-							c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
-					}()
+					totalUsage, _ := c.state.TokenUsage()
+					log.Printf("[Claude] Usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
+						usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
+						totalUsage.Cumulative.InputTokens, totalUsage.Cumulative.OutputTokens, totalUsage.Cumulative.TotalTokens)
 				}
 			}
 		case "message_stop":
@@ -507,14 +466,8 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		Content: respContent.String(),
 	}
 
-	// Update history with lock
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		c.msgs = append(c.msgs, reqMsg)
-		c.msgs = append(c.msgs, respMsg)
-	}()
+	// Update history
+	c.state.AppendMessages([]chat.Message{reqMsg, respMsg}, nil)
 
 	// Token usage is extracted from message_delta events during streaming
 
@@ -522,23 +475,12 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 }
 
 func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	msgs = make([]chat.Message, len(c.msgs))
-	copy(msgs, c.msgs)
-
-	return c.systemPrompt, msgs
+	return c.state.History()
 }
 
 // TokenUsage returns token usage for both the last message and cumulative session
 func (c *chatClient) TokenUsage() (chat.TokenUsage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return chat.TokenUsage{
-		LastMessage: c.lastMessageUsage,
-		Cumulative:  c.cumulativeUsage,
-	}, nil
+	return c.state.TokenUsage()
 }
 
 // MaxTokens returns the maximum token limit for the model
@@ -548,35 +490,17 @@ func (c *chatClient) MaxTokens() int {
 
 // RegisterTool registers a tool with its MCP definition and handler function
 func (c *chatClient) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
-	c.toolsLock.Lock()
-	defer c.toolsLock.Unlock()
-
-	toolName := def.Name()
-	if toolName == "" {
-		return fmt.Errorf("tool definition missing name")
-	}
-
-	c.tools[toolName] = common.RegisteredTool{
-		Definition: def,
-		Handler:    fn,
-	}
-
-	return nil
+	return c.tools.Register(def, fn)
 }
 
 // DeregisterTool removes a tool by name
 func (c *chatClient) DeregisterTool(name string) {
-	c.toolsLock.Lock()
-	defer c.toolsLock.Unlock()
-	delete(c.tools, name)
+	c.tools.Deregister(name)
 }
 
 // ListTools returns the names of all registered tools
 func (c *chatClient) ListTools() []string {
-	c.toolsLock.RLock()
-	defer c.toolsLock.RUnlock()
-
-	return slices.Sorted(maps.Keys(c.tools))
+	return c.tools.List()
 }
 
 // mcpToClaudeTool converts an MCP tool definition to Claude format
@@ -624,21 +548,15 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 
 	var toolResults []anthropic.ContentBlockParamUnion
 
-	c.toolsLock.RLock()
-	defer c.toolsLock.RUnlock()
-
 	for _, toolCall := range toolCalls {
-		tool, exists := c.tools[toolCall.Name]
-		if !exists {
-			// Tool not found, return error message
-			errorResult := anthropic.NewToolResultBlock(toolCall.ID, fmt.Sprintf(`{"error": "Tool %s not found"}`, toolCall.Name), true)
+		argsStr := string(toolCall.Input)
+		result, err := c.tools.Execute(ctx, toolCall.Name, argsStr)
+		if err != nil {
+			// Tool not found or execution error, return error message
+			errorResult := anthropic.NewToolResultBlock(toolCall.ID, fmt.Sprintf(`{"error": "%s"}`, err.Error()), true)
 			toolResults = append(toolResults, errorResult)
 			continue
 		}
-
-		// Execute the tool
-		argsStr := string(toolCall.Input)
-		result := tool.Handler(ctx, argsStr)
 
 		if c.debug {
 			log.Printf("[Claude] Tool %s executed with args %s, result: %s\n",
@@ -657,35 +575,29 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialContent string, initialToolCalls []anthropic.ToolUseBlock, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all content blocks for the conversation
 	var conversationMessages []anthropic.MessageParam
-	var systemPrompt string
 
 	// Build initial conversation with system prompt and history
 	// Snapshot history with minimal lock
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
+	systemPrompt, history := c.state.Snapshot()
 
-		systemPrompt = c.systemPrompt
-
-		// Add history
-		for _, m := range c.msgs {
-			switch m.Role {
-			case chat.UserRole:
-				conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
-					anthropic.NewTextBlock(m.Content),
-				))
-			case chat.AssistantRole:
-				conversationMessages = append(conversationMessages, anthropic.NewAssistantMessage(
-					anthropic.NewTextBlock(m.Content),
-				))
-			default:
-				// Convert system messages to user messages for Claude
-				conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
-					anthropic.NewTextBlock(m.Content),
-				))
-			}
+	// Add history
+	for _, m := range history {
+		switch m.Role {
+		case chat.UserRole:
+			conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
+				anthropic.NewTextBlock(m.Content),
+			))
+		case chat.AssistantRole:
+			conversationMessages = append(conversationMessages, anthropic.NewAssistantMessage(
+				anthropic.NewTextBlock(m.Content),
+			))
+		default:
+			// Convert system messages to user messages for Claude
+			conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
+				anthropic.NewTextBlock(m.Content),
+			))
 		}
-	}()
+	}
 
 	// Add the initial user message
 	conversationMessages = append(conversationMessages, anthropic.NewUserMessage(
@@ -759,23 +671,19 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Add tools if registered (for follow-up after tool execution)
-		func() {
-			c.toolsLock.RLock()
-			defer c.toolsLock.RUnlock()
-
-			if len(c.tools) > 0 {
-				tools := make([]anthropic.ToolUnionParam, 0, len(c.tools))
-				for _, tool := range c.tools {
-					toolParam, err := c.mcpToClaudeTool(tool.Definition)
-					if err != nil {
-						// Skip this tool on error
-						continue
-					}
-					tools = append(tools, toolParam)
+		allTools := c.tools.GetAll()
+		if len(allTools) > 0 {
+			tools := make([]anthropic.ToolUnionParam, 0, len(allTools))
+			for _, tool := range allTools {
+				toolParam, err := c.mcpToClaudeTool(tool.Definition)
+				if err != nil {
+					// Skip this tool on error
+					continue
 				}
-				followUpParams.Tools = tools
+				tools = append(tools, toolParam)
 			}
-		}()
+			followUpParams.Tools = tools
+		}
 
 		// Create a new stream for the follow-up request
 		followUpStream := c.anthropicClient.Messages.NewStreaming(ctx, followUpParams)
@@ -885,25 +793,14 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						TotalTokens:  int(event.Usage.InputTokens + event.Usage.OutputTokens),
 					}
 
-					// Update usage with lock
-					func() {
-						c.mu.Lock()
-						defer c.mu.Unlock()
-
-						c.lastMessageUsage = usage
-						c.cumulativeUsage.InputTokens += usage.InputTokens
-						c.cumulativeUsage.OutputTokens += usage.OutputTokens
-						c.cumulativeUsage.TotalTokens += usage.TotalTokens
-					}()
+					// Update usage
+					c.state.UpdateUsage(usage)
 
 					if c.debug {
-						func() {
-							c.mu.Lock()
-							defer c.mu.Unlock()
-							log.Printf("[Claude] Follow-up usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-								usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-								c.cumulativeUsage.InputTokens, c.cumulativeUsage.OutputTokens, c.cumulativeUsage.TotalTokens)
-						}()
+						totalUsage, _ := c.state.TokenUsage()
+						log.Printf("[Claude] Follow-up usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
+							usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
+							totalUsage.Cumulative.InputTokens, totalUsage.Cumulative.OutputTokens, totalUsage.Cumulative.TotalTokens)
 					}
 				}
 			case "message_stop":
@@ -941,13 +838,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			log.Printf("[Claude] Returning final response from tool handler, content length: %d\n", len(finalMsg.Content))
 		}
 
-		// Update history with lock - update both messages at once
-		func() {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-
-			c.msgs = append(c.msgs, initialMsg, finalMsg)
-		}()
+		// Update history - update both messages at once
+		c.state.AppendMessages([]chat.Message{initialMsg, finalMsg}, nil)
 
 		return finalMsg, nil
 	}

@@ -4,10 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
-	"sync"
 
 	"google.golang.org/genai"
 
@@ -72,11 +69,10 @@ func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.C
 	maxTokens := getModelMaxTokens(c.modelName)
 
 	return &chatClient{
-		client:       c,
-		systemPrompt: systemPrompt,
-		msgs:         initialMsgs,
-		maxTokens:    maxTokens,
-		tools:        make(map[string]common.RegisteredTool),
+		client:    c,
+		state:     common.NewState(systemPrompt, initialMsgs),
+		tools:     common.NewTools(),
+		maxTokens: maxTokens,
 	}
 }
 
@@ -106,19 +102,9 @@ func getModelMaxTokens(model string) int {
 
 type chatClient struct {
 	client
-	systemPrompt string
-
-	mu   sync.Mutex
-	msgs []chat.Message
-
-	// Token tracking
-	cumulativeUsage  chat.TokenUsageDetails
-	lastMessageUsage chat.TokenUsageDetails
-	maxTokens        int
-
-	// Tool support
-	tools     map[string]common.RegisteredTool
-	toolsLock sync.RWMutex
+	state     *common.State
+	tools     *common.Tools
+	maxTokens int
 }
 
 func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
@@ -130,58 +116,52 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 	// Build content for all messages
 	var contents []*genai.Content
-	var systemPrompt string
 
 	// Snapshot history with minimal lock
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
+	systemPrompt, history := c.state.Snapshot()
 
-		systemPrompt = c.systemPrompt
+	// Add system instruction as first content if present
+	if systemPrompt != "" {
+		systemText := systemPrompt
+		// Handle response format if provided
+		if reqOpts.ResponseFormat != nil && reqOpts.ResponseFormat.Schema != nil {
+			systemText += fmt.Sprintf("\n\nYou must respond with valid JSON that conforms to the schema named: %s", reqOpts.ResponseFormat.Name)
+		}
+		contents = append(contents, &genai.Content{
+			Role: "user",
+			Parts: []*genai.Part{
+				{Text: systemText},
+			},
+		})
+		// Add a placeholder assistant response to maintain conversation flow
+		contents = append(contents, &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "I understand and will follow these instructions."},
+			},
+		})
+	}
 
-		// Add system instruction as first content if present
-		if systemPrompt != "" {
-			systemText := systemPrompt
-			// Handle response format if provided
-			if reqOpts.ResponseFormat != nil && reqOpts.ResponseFormat.Schema != nil {
-				systemText += fmt.Sprintf("\n\nYou must respond with valid JSON that conforms to the schema named: %s", reqOpts.ResponseFormat.Name)
-			}
-			contents = append(contents, &genai.Content{
-				Role: "user",
-				Parts: []*genai.Part{
-					{Text: systemText},
-				},
-			})
-			// Add a placeholder assistant response to maintain conversation flow
-			contents = append(contents, &genai.Content{
-				Role: "model",
-				Parts: []*genai.Part{
-					{Text: "I understand and will follow these instructions."},
-				},
-			})
+	// Add history messages
+	for _, m := range history {
+		var role string
+		switch m.Role {
+		case chat.UserRole:
+			role = "user"
+		case chat.AssistantRole:
+			role = "model"
+		default:
+			// Skip system messages as they're handled separately
+			continue
 		}
 
-		// Add history messages
-		for _, m := range c.msgs {
-			var role string
-			switch m.Role {
-			case chat.UserRole:
-				role = "user"
-			case chat.AssistantRole:
-				role = "model"
-			default:
-				// Skip system messages as they're handled separately
-				continue
-			}
-
-			contents = append(contents, &genai.Content{
-				Role: role,
-				Parts: []*genai.Part{
-					{Text: m.Content},
-				},
-			})
-		}
-	}()
+		contents = append(contents, &genai.Content{
+			Role: role,
+			Parts: []*genai.Part{
+				{Text: m.Content},
+			},
+		})
+	}
 
 	// Add current message
 	var currentRole string
@@ -214,32 +194,22 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	}
 
 	// Add tools if registered
-	var toolConversionErr error
-	func() {
-		c.toolsLock.RLock()
-		defer c.toolsLock.RUnlock()
-
-		if len(c.tools) > 0 {
-			tools := make([]*genai.Tool, 0, 1)
-			functionDeclarations := make([]*genai.FunctionDeclaration, 0, len(c.tools))
-			for _, tool := range c.tools {
-				funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool.Definition)
-				if err != nil {
-					toolConversionErr = fmt.Errorf("failed to convert tool: %w", err)
-					return
-				}
-				functionDeclarations = append(functionDeclarations, funcDecl)
+	allTools := c.tools.GetAll()
+	if len(allTools) > 0 {
+		tools := make([]*genai.Tool, 0, 1)
+		functionDeclarations := make([]*genai.FunctionDeclaration, 0, len(allTools))
+		for _, tool := range allTools {
+			funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool.Definition)
+			if err != nil {
+				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
 			}
-			// Create a single Tool with all function declarations
-			tools = append(tools, &genai.Tool{
-				FunctionDeclarations: functionDeclarations,
-			})
-			config.Tools = tools
+			functionDeclarations = append(functionDeclarations, funcDecl)
 		}
-	}()
-
-	if toolConversionErr != nil {
-		return chat.Message{}, toolConversionErr
+		// Create a single Tool with all function declarations
+		tools = append(tools, &genai.Tool{
+			FunctionDeclarations: functionDeclarations,
+		})
+		config.Tools = tools
 	}
 
 	// Stream content
@@ -306,17 +276,8 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					CachedTokens: int(chunk.UsageMetadata.CachedContentTokenCount),
 				}
 
-				// Update usage with lock
-				func() {
-					c.mu.Lock()
-					defer c.mu.Unlock()
-
-					c.lastMessageUsage = usage
-					c.cumulativeUsage.InputTokens += usage.InputTokens
-					c.cumulativeUsage.OutputTokens += usage.OutputTokens
-					c.cumulativeUsage.TotalTokens += usage.TotalTokens
-					c.cumulativeUsage.CachedTokens += usage.CachedTokens
-				}()
+				// Update usage
+				c.state.UpdateUsage(usage)
 			}
 		}
 	}
@@ -331,36 +292,19 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		Content: respContent.String(),
 	}
 
-	// Update history with lock
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		c.msgs = append(c.msgs, reqMsg)
-		c.msgs = append(c.msgs, respMsg)
-	}()
+	// Update history
+	c.state.AppendMessages([]chat.Message{reqMsg, respMsg}, nil)
 
 	return respMsg, nil
 }
 
 func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	msgs = make([]chat.Message, len(c.msgs))
-	copy(msgs, c.msgs)
-
-	return c.systemPrompt, msgs
+	return c.state.History()
 }
 
 // TokenUsage returns token usage for both the last message and cumulative session
 func (c *chatClient) TokenUsage() (chat.TokenUsage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return chat.TokenUsage{
-		LastMessage: c.lastMessageUsage,
-		Cumulative:  c.cumulativeUsage,
-	}, nil
+	return c.state.TokenUsage()
 }
 
 // MaxTokens returns the maximum token limit for the model
@@ -370,35 +314,17 @@ func (c *chatClient) MaxTokens() int {
 
 // RegisterTool registers a tool with its MCP definition and handler function
 func (c *chatClient) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
-	c.toolsLock.Lock()
-	defer c.toolsLock.Unlock()
-
-	toolName := def.Name()
-	if toolName == "" {
-		return fmt.Errorf("tool definition missing name")
-	}
-
-	c.tools[toolName] = common.RegisteredTool{
-		Definition: def,
-		Handler:    fn,
-	}
-
-	return nil
+	return c.tools.Register(def, fn)
 }
 
 // DeregisterTool removes a tool by name
 func (c *chatClient) DeregisterTool(name string) {
-	c.toolsLock.Lock()
-	defer c.toolsLock.Unlock()
-	delete(c.tools, name)
+	c.tools.Deregister(name)
 }
 
 // ListTools returns the names of all registered tools
 func (c *chatClient) ListTools() []string {
-	c.toolsLock.RLock()
-	defer c.toolsLock.RUnlock()
-
-	return slices.Sorted(maps.Keys(c.tools))
+	return c.tools.List()
 }
 
 // mcpToGeminiFunctionDeclaration converts an MCP tool definition to Gemini FunctionDeclaration format
@@ -489,48 +415,43 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Build initial conversation with system prompt and history
 	// Snapshot history with minimal lock
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
+	systemPrompt, history := c.state.Snapshot()
 
-		systemPrompt = c.systemPrompt
+	if systemPrompt != "" {
+		conversationContents = append(conversationContents, &genai.Content{
+			Role: "user",
+			Parts: []*genai.Part{
+				{Text: systemPrompt},
+			},
+		})
+		// Add a placeholder assistant response to maintain conversation flow
+		conversationContents = append(conversationContents, &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "I understand and will follow these instructions."},
+			},
+		})
+	}
 
-		if systemPrompt != "" {
-			conversationContents = append(conversationContents, &genai.Content{
-				Role: "user",
-				Parts: []*genai.Part{
-					{Text: systemPrompt},
-				},
-			})
-			// Add a placeholder assistant response to maintain conversation flow
-			conversationContents = append(conversationContents, &genai.Content{
-				Role: "model",
-				Parts: []*genai.Part{
-					{Text: "I understand and will follow these instructions."},
-				},
-			})
+	// Add history messages
+	for _, m := range history {
+		var role string
+		switch m.Role {
+		case chat.UserRole:
+			role = "user"
+		case chat.AssistantRole:
+			role = "model"
+		default:
+			continue
 		}
 
-		// Add history messages
-		for _, m := range c.msgs {
-			var role string
-			switch m.Role {
-			case chat.UserRole:
-				role = "user"
-			case chat.AssistantRole:
-				role = "model"
-			default:
-				continue
-			}
-
-			conversationContents = append(conversationContents, &genai.Content{
-				Role: role,
-				Parts: []*genai.Part{
-					{Text: m.Content},
-				},
-			})
-		}
-	}()
+		conversationContents = append(conversationContents, &genai.Content{
+			Role: role,
+			Parts: []*genai.Part{
+				{Text: m.Content},
+			},
+		})
+	}
 
 	// Add the initial user message
 	conversationContents = append(conversationContents, &genai.Content{
@@ -587,28 +508,24 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Add tools again for follow-up after tool execution
-		func() {
-			c.toolsLock.RLock()
-			defer c.toolsLock.RUnlock()
-
-			if len(c.tools) > 0 {
-				tools := make([]*genai.Tool, 0, 1)
-				functionDeclarations := make([]*genai.FunctionDeclaration, 0, len(c.tools))
-				for _, tool := range c.tools {
-					funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool.Definition)
-					if err != nil {
-						// Skip this tool on error
-						continue
-					}
-					functionDeclarations = append(functionDeclarations, funcDecl)
+		allTools := c.tools.GetAll()
+		if len(allTools) > 0 {
+			tools := make([]*genai.Tool, 0, 1)
+			functionDeclarations := make([]*genai.FunctionDeclaration, 0, len(allTools))
+			for _, tool := range allTools {
+				funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool.Definition)
+				if err != nil {
+					// Skip this tool on error
+					continue
 				}
-				// Create a single Tool with all function declarations
-				tools = append(tools, &genai.Tool{
-					FunctionDeclarations: functionDeclarations,
-				})
-				followUpConfig.Tools = tools
+				functionDeclarations = append(functionDeclarations, funcDecl)
 			}
-		}()
+			// Create a single Tool with all function declarations
+			tools = append(tools, &genai.Tool{
+				FunctionDeclarations: functionDeclarations,
+			})
+			followUpConfig.Tools = tools
+		}
 
 		// Create a new stream for the follow-up request
 		followUpStream := c.genaiClient.Models.GenerateContentStream(ctx, c.modelName, conversationContents, followUpConfig)
@@ -676,17 +593,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						CachedTokens: int(chunk.UsageMetadata.CachedContentTokenCount),
 					}
 
-					// Update usage with lock
-					func() {
-						c.mu.Lock()
-						defer c.mu.Unlock()
-
-						c.lastMessageUsage = usage
-						c.cumulativeUsage.InputTokens += usage.InputTokens
-						c.cumulativeUsage.OutputTokens += usage.OutputTokens
-						c.cumulativeUsage.TotalTokens += usage.TotalTokens
-						c.cumulativeUsage.CachedTokens += usage.CachedTokens
-					}()
+					// Update usage
+					c.state.UpdateUsage(usage)
 				}
 			}
 		}
@@ -702,13 +610,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			Content: respContent.String(),
 		}
 
-		// Update history with lock - update both messages at once
-		func() {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-
-			c.msgs = append(c.msgs, initialMsg, finalMsg)
-		}()
+		// Update history - update both messages at once
+		c.state.AppendMessages([]chat.Message{initialMsg, finalMsg}, nil)
 
 		return finalMsg, nil
 	}
@@ -725,24 +628,7 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 
 	var functionResults []*genai.FunctionResponse
 
-	c.toolsLock.RLock()
-	defer c.toolsLock.RUnlock()
-
 	for _, fc := range functionCalls {
-		tool, exists := c.tools[fc.Name]
-		if !exists {
-			// Tool not found, return error message
-			errorResponse := map[string]interface{}{
-				"error": fmt.Sprintf("Tool %s not found", fc.Name),
-			}
-			functionResults = append(functionResults, &genai.FunctionResponse{
-				ID:       fc.ID,
-				Name:     fc.Name,
-				Response: errorResponse,
-			})
-			continue
-		}
-
 		// Convert function arguments to JSON string for the handler
 		argsJSON, err := json.Marshal(fc.Args)
 		if err != nil {
@@ -758,7 +644,19 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 		}
 
 		// Execute the tool
-		resultStr := tool.Handler(ctx, string(argsJSON))
+		resultStr, err := c.tools.Execute(ctx, fc.Name, string(argsJSON))
+		if err != nil {
+			// Tool not found or execution error, return error message
+			errorResponse := map[string]interface{}{
+				"error": err.Error(),
+			}
+			functionResults = append(functionResults, &genai.FunctionResponse{
+				ID:       fc.ID,
+				Name:     fc.Name,
+				Response: errorResponse,
+			})
+			continue
+		}
 
 		// Parse the result back into a map for the response
 		var resultMap map[string]interface{}

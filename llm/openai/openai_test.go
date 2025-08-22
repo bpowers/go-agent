@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/llm/internal/common"
 )
 
 func TestResponsesAPISelection(t *testing.T) {
@@ -73,23 +74,29 @@ func TestResponsesAPISelection(t *testing.T) {
 func TestMessageConversion(t *testing.T) {
 	t.Parallel()
 	// Test that chat messages are properly converted for Responses API
+	systemPrompt := "You are a helpful assistant"
+	initialMsgs := []chat.Message{
+		{Role: chat.UserRole, Content: "Hello"},
+		{Role: chat.AssistantRole, Content: "Hi there!"},
+	}
+
 	client := &chatClient{
 		client: client{
 			modelName: "gpt-5",
 			api:       Responses,
 		},
-		systemPrompt: "You are a helpful assistant",
-		msgs: []chat.Message{
-			{Role: chat.UserRole, Content: "Hello"},
-			{Role: chat.AssistantRole, Content: "Hi there!"},
-		},
+		state: common.NewState(systemPrompt, initialMsgs),
+		tools: common.NewTools(),
 	}
 
 	// Verify the client has the correct configuration
 	assert.Equal(t, Responses, client.api)
 	assert.Equal(t, "gpt-5", client.modelName)
-	assert.Equal(t, "You are a helpful assistant", client.systemPrompt)
-	assert.Len(t, client.msgs, 2)
+
+	// Verify state was initialized correctly
+	actualSystemPrompt, actualMsgs := client.state.History()
+	assert.Equal(t, systemPrompt, actualSystemPrompt)
+	assert.Len(t, actualMsgs, 2)
 }
 
 func TestStreamEventHandling(t *testing.T) {
@@ -200,8 +207,8 @@ func TestMessageStreamRouting(t *testing.T) {
 				modelName: "gpt-5",
 				api:       Responses,
 			},
-			systemPrompt: "Test",
-			msgs:         []chat.Message{},
+			state: common.NewState("Test", []chat.Message{}),
+			tools: common.NewTools(),
 		}
 
 		// This would normally make an API call, but we're just testing routing
@@ -216,8 +223,8 @@ func TestMessageStreamRouting(t *testing.T) {
 				modelName: "gpt-4",
 				api:       ChatCompletions,
 			},
-			systemPrompt: "Test",
-			msgs:         []chat.Message{},
+			state: common.NewState("Test", []chat.Message{}),
+			tools: common.NewTools(),
 		}
 
 		assert.Equal(t, ChatCompletions, c.api)
