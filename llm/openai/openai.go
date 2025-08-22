@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"maps"
 	"os"
-	"slices"
 	"strings"
-	"sync"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -117,11 +114,10 @@ func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.C
 	maxTokens := getModelMaxTokens(c.modelName)
 
 	return &chatClient{
-		client:       c,
-		systemPrompt: systemPrompt,
-		msgs:         initialMsgs,
-		maxTokens:    maxTokens,
-		tools:        make(map[string]common.RegisteredTool),
+		client:    c,
+		state:     common.NewState(systemPrompt, initialMsgs),
+		tools:     common.NewTools(),
+		maxTokens: maxTokens,
 	}
 }
 
@@ -169,47 +165,22 @@ func isNoTemperatureModel(model string) bool {
 
 type chatClient struct {
 	client
-	systemPrompt string
-
-	mu   sync.Mutex
-	msgs []chat.Message
-
-	// Token tracking
-	cumulativeUsage  chat.TokenUsageDetails
-	lastMessageUsage chat.TokenUsageDetails
-	maxTokens        int
-
-	// Tool support
-	tools     map[string]common.RegisteredTool
-	toolsLock sync.RWMutex
+	state     *common.State
+	tools     *common.Tools
+	maxTokens int
 }
 
 // snapshotState returns a copy of the system prompt and message history.
 // This allows streaming operations to work with a consistent view of the state
 // without holding locks during long-running operations.
 func (c *chatClient) snapshotState() (systemPrompt string, history []chat.Message) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	systemPrompt = c.systemPrompt
-	history = make([]chat.Message, len(c.msgs))
-	copy(history, c.msgs)
-	return systemPrompt, history
+	return c.state.Snapshot()
 }
 
 // updateHistoryAndUsage appends messages to history and updates token usage.
 // It properly manages locks using defer to ensure they're always released.
 func (c *chatClient) updateHistoryAndUsage(msgs []chat.Message, usage chat.TokenUsageDetails) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.msgs = append(c.msgs, msgs...)
-	if usage.TotalTokens > 0 {
-		c.lastMessageUsage = usage
-		c.cumulativeUsage.InputTokens += usage.InputTokens
-		c.cumulativeUsage.OutputTokens += usage.OutputTokens
-		c.cumulativeUsage.TotalTokens += usage.TotalTokens
-	}
+	c.state.AppendMessages(msgs, &usage)
 }
 
 func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
@@ -237,9 +208,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	}
 
 	// Determine route to appropriate API based on model type and whether tools are registered
-	c.toolsLock.RLock()
-	nTools := len(c.tools)
-	c.toolsLock.RUnlock()
+	nTools := c.tools.Count()
 	// Note: The Responses API doesn't support tools yet, so we fall back to ChatCompletions when tools are registered
 	if c.api == Responses && nTools == 0 {
 		return c.messageStreamResponses(ctx, msg, callback, opts...)
@@ -527,27 +496,17 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	}
 
 	// Add tools if registered
-	var toolConversionErr error
-	func() {
-		c.toolsLock.RLock()
-		defer c.toolsLock.RUnlock()
-
-		if len(c.tools) > 0 {
-			tools := make([]openai.ChatCompletionToolParam, 0, len(c.tools))
-			for _, tool := range c.tools {
-				toolParam, err := c.mcpToOpenAITool(tool.Definition)
-				if err != nil {
-					toolConversionErr = fmt.Errorf("failed to convert tool: %w", err)
-					return
-				}
-				tools = append(tools, toolParam)
+	allTools := c.tools.GetAll()
+	if len(allTools) > 0 {
+		tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
+		for _, tool := range allTools {
+			toolParam, err := c.mcpToOpenAITool(tool.Definition)
+			if err != nil {
+				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
 			}
-			params.Tools = tools
+			tools = append(tools, toolParam)
 		}
-	}()
-
-	if toolConversionErr != nil {
-		return chat.Message{}, toolConversionErr
+		params.Tools = tools
 	}
 
 	// Track if temperature was set for error retry logic
@@ -815,23 +774,19 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 				paramsNoTemp.MaxCompletionTokens = openai.Int(int64(reqOpts.MaxTokens))
 			}
 			// Add tools if registered (for retry)
-			func() {
-				c.toolsLock.RLock()
-				defer c.toolsLock.RUnlock()
-
-				if len(c.tools) > 0 {
-					tools := make([]openai.ChatCompletionToolParam, 0, len(c.tools))
-					for _, tool := range c.tools {
-						toolParam, err := c.mcpToOpenAITool(tool.Definition)
-						if err != nil {
-							// Skip this tool on error
-							continue
-						}
-						tools = append(tools, toolParam)
+			allTools := c.tools.GetAll()
+			if len(allTools) > 0 {
+				tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
+				for _, tool := range allTools {
+					toolParam, err := c.mcpToOpenAITool(tool.Definition)
+					if err != nil {
+						// Skip this tool on error
+						continue
 					}
-					paramsNoTemp.Tools = tools
+					tools = append(tools, toolParam)
 				}
-			}()
+				paramsNoTemp.Tools = tools
+			}
 			// Add stream options to include usage information
 			paramsNoTemp.StreamOptions = openai.ChatCompletionStreamOptionsParam{
 				IncludeUsage: param.NewOpt(true),
@@ -981,31 +936,27 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
 
 	// Keep track of all messages for the conversation
-	var conversationMessages []openai.ChatCompletionMessageParamUnion
+	var msgs []openai.ChatCompletionMessageParamUnion
 
 	// Build conversation messages and update history
-	func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		if c.systemPrompt != "" {
-			conversationMessages = append(conversationMessages, openai.SystemMessage(c.systemPrompt))
+	systemPrompt, history := c.state.Snapshot()
+	if systemPrompt != "" {
+		msgs = append(msgs, openai.SystemMessage(systemPrompt))
+	}
+	for _, m := range history {
+		switch m.Role {
+		case chat.UserRole:
+			msgs = append(msgs, openai.UserMessage(m.Content))
+		case chat.AssistantRole:
+			msgs = append(msgs, openai.AssistantMessage(m.Content))
+		default:
+			msgs = append(msgs, openai.SystemMessage(m.Content))
 		}
-		for _, m := range c.msgs {
-			switch m.Role {
-			case chat.UserRole:
-				conversationMessages = append(conversationMessages, openai.UserMessage(m.Content))
-			case chat.AssistantRole:
-				conversationMessages = append(conversationMessages, openai.AssistantMessage(m.Content))
-			default:
-				conversationMessages = append(conversationMessages, openai.SystemMessage(m.Content))
-			}
-		}
-		// Add the initial user message to history
-		c.msgs = append(c.msgs, initialMsg)
-	}()
+	}
+	// Add the initial user message to history
+	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
 
-	conversationMessages = append(conversationMessages, openai.UserMessage(initialMsg.Content))
+	msgs = append(msgs, openai.UserMessage(initialMsg.Content))
 
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
@@ -1038,16 +989,16 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		assistantWithTools := openai.ChatCompletionAssistantMessageParam{
 			ToolCalls: toolCallParams,
 		}
-		conversationMessages = append(conversationMessages, openai.ChatCompletionMessageParamUnion{
+		msgs = append(msgs, openai.ChatCompletionMessageParamUnion{
 			OfAssistant: &assistantWithTools,
 		})
 
 		// Add tool results to messages
-		conversationMessages = append(conversationMessages, toolResults...)
+		msgs = append(msgs, toolResults...)
 
 		// Make another API call with tool results
 		followUpParams := openai.ChatCompletionNewParams{
-			Messages: conversationMessages,
+			Messages: msgs,
 			Model:    c.modelName,
 		}
 		if reqOpts.Temperature != nil {
@@ -1057,23 +1008,19 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			followUpParams.MaxCompletionTokens = openai.Int(int64(reqOpts.MaxTokens))
 		}
 		// Add tools if registered (for follow-up after tool execution)
-		func() {
-			c.toolsLock.RLock()
-			defer c.toolsLock.RUnlock()
-
-			if len(c.tools) > 0 {
-				tools := make([]openai.ChatCompletionToolParam, 0, len(c.tools))
-				for _, tool := range c.tools {
-					toolParam, err := c.mcpToOpenAITool(tool.Definition)
-					if err != nil {
-						// Skip this tool on error
-						continue
-					}
-					tools = append(tools, toolParam)
+		allTools := c.tools.GetAll()
+		if len(allTools) > 0 {
+			tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
+			for _, tool := range allTools {
+				toolParam, err := c.mcpToOpenAITool(tool.Definition)
+				if err != nil {
+					// Skip this tool on error
+					continue
 				}
-				followUpParams.Tools = tools
+				tools = append(tools, toolParam)
 			}
-		}()
+			followUpParams.Tools = tools
+		}
 		// Add stream options to include usage information
 		followUpParams.StreamOptions = openai.ChatCompletionStreamOptionsParam{
 			IncludeUsage: param.NewOpt(true),
@@ -1193,19 +1140,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			log.Printf("[OpenAI] Warning: Final response after tool execution has empty content")
 		}
 
-		// Update history with the final response under lock
-		func() {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-
-			c.msgs = append(c.msgs, finalMsg)
-			if lastUsage.TotalTokens > 0 {
-				c.lastMessageUsage = lastUsage
-				c.cumulativeUsage.InputTokens += lastUsage.InputTokens
-				c.cumulativeUsage.OutputTokens += lastUsage.OutputTokens
-				c.cumulativeUsage.TotalTokens += lastUsage.TotalTokens
-			}
-		}()
+		// Update history with the final response
+		c.state.AppendMessages([]chat.Message{finalMsg}, &lastUsage)
 
 		return finalMsg, nil
 	}
@@ -1252,22 +1188,16 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.Cha
 
 	var toolResults []openai.ChatCompletionMessageParamUnion
 
-	c.toolsLock.RLock()
-	defer c.toolsLock.RUnlock()
-
 	for _, toolCall := range toolCalls {
-		tool, exists := c.tools[toolCall.Function.Name]
-		if !exists {
-			// Tool not found, return error message
+		result, err := c.tools.Execute(ctx, toolCall.Function.Name, toolCall.Function.Arguments)
+		if err != nil {
+			// Tool not found or execution error, return error message
 			toolResults = append(toolResults, openai.ToolMessage(
-				fmt.Sprintf(`{"error": "Tool %s not found"}`, toolCall.Function.Name),
+				fmt.Sprintf(`{"error": "%s"}`, err.Error()),
 				toolCall.ID,
 			))
 			continue
 		}
-
-		// Execute the tool
-		result := tool.Handler(ctx, toolCall.Function.Arguments)
 
 		// Add tool result message
 		toolResults = append(toolResults, openai.ToolMessage(
@@ -1280,23 +1210,12 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.Cha
 }
 
 func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	msgs = make([]chat.Message, len(c.msgs))
-	copy(msgs, c.msgs)
-
-	return c.systemPrompt, msgs
+	return c.state.History()
 }
 
 // TokenUsage returns token usage for both the last message and cumulative session
 func (c *chatClient) TokenUsage() (chat.TokenUsage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return chat.TokenUsage{
-		LastMessage: c.lastMessageUsage,
-		Cumulative:  c.cumulativeUsage,
-	}, nil
+	return c.state.TokenUsage()
 }
 
 // MaxTokens returns the maximum token limit for the model
@@ -1306,35 +1225,17 @@ func (c *chatClient) MaxTokens() int {
 
 // RegisterTool registers a tool with its MCP definition and handler function
 func (c *chatClient) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
-	c.toolsLock.Lock()
-	defer c.toolsLock.Unlock()
-
-	toolName := def.Name()
-	if toolName == "" {
-		return fmt.Errorf("tool definition missing name")
-	}
-
-	c.tools[toolName] = common.RegisteredTool{
-		Definition: def,
-		Handler:    fn,
-	}
-
-	return nil
+	return c.tools.Register(def, fn)
 }
 
 // DeregisterTool removes a tool by name
 func (c *chatClient) DeregisterTool(name string) {
-	c.toolsLock.Lock()
-	defer c.toolsLock.Unlock()
-	delete(c.tools, name)
+	c.tools.Deregister(name)
 }
 
 // ListTools returns the names of all registered tools
 func (c *chatClient) ListTools() []string {
-	c.toolsLock.RLock()
-	defer c.toolsLock.RUnlock()
-
-	return slices.Sorted(maps.Keys(c.tools))
+	return c.tools.List()
 }
 
 // isValidJSON returns true if s is a complete valid JSON value
