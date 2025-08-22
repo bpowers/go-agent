@@ -133,13 +133,6 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				{Text: systemText},
 			},
 		})
-		// Add a placeholder assistant response to maintain conversation flow
-		contents = append(contents, &genai.Content{
-			Role: "model",
-			Parts: []*genai.Part{
-				{Text: "I understand and will follow these instructions."},
-			},
-		})
 	}
 
 	// Add history messages
@@ -422,13 +415,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			Role: "user",
 			Parts: []*genai.Part{
 				{Text: systemPrompt},
-			},
-		})
-		// Add a placeholder assistant response to maintain conversation flow
-		conversationContents = append(conversationContents, &genai.Content{
-			Role: "model",
-			Parts: []*genai.Part{
-				{Text: "I understand and will follow these instructions."},
 			},
 		})
 	}
