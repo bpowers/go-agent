@@ -31,12 +31,25 @@ func generateSessionID() string {
 type Session interface {
 	chat.Chat // a session is a chat that has been enhanced with context window management.
 
-	LiveRecords() []Record          // Get active context window records
-	TotalRecords() []Record         // Get all records (live + dead)
-	CompactNow() error              // Manually trigger compaction
-	SetCompactionThreshold(float64) // Set when to compact (0.0-1.0, default 0.8)
+	// SessionID returns the unique identifier for this session.
+	SessionID() string
 
-	Metrics() SessionMetrics // Token usage, compaction stats, etc.
+	// LiveRecords returns all records marked as live (in active context window).
+	LiveRecords() []Record
+
+	// TotalRecords returns all records (both live and dead).
+	TotalRecords() []Record
+
+	// CompactNow manually triggers context compaction.
+	CompactNow() error
+
+	// SetCompactionThreshold sets the threshold for automatic compaction (0.0-1.0).
+	// A value of 0.8 means compact when 80% of the context window is used.
+	// A value of 0.0 means never compact automatically.
+	SetCompactionThreshold(float64)
+
+	// Metrics returns usage statistics for the session.
+	Metrics() SessionMetrics
 }
 
 // RecordStatus represents the status of a record in the conversation.
@@ -82,9 +95,11 @@ type sessionOptions struct {
 	summarizer      Summarizer
 }
 
-// WithSessionID sets a custom session ID.
-// If not provided, a UUID will be generated.
-func WithSessionID(id string) SessionOption {
+// WithRestoreSession restores a session with the given ID.
+// This allows resuming a previous conversation by loading its history
+// and state from the configured persistence store.
+// If not provided, a new UUID will be generated for a fresh session.
+func WithRestoreSession(id string) SessionOption {
 	return func(opts *sessionOptions) {
 		opts.sessionID = id
 	}
@@ -197,7 +212,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		compactionThreshold = 0.8
 	}
 
-	return &persistentSession{
+	return &session{
 		sessionID:           options.sessionID,
 		chat:                baseChat,
 		client:              client,
@@ -212,8 +227,8 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 	}
 }
 
-// persistentSession is the implementation of Session with pluggable storage.
-type persistentSession struct {
+// session is the implementation of Session with pluggable storage.
+type session struct {
 	sessionID    string
 	chat         chat.Chat
 	client       chat.Client
@@ -238,8 +253,13 @@ type registeredTool struct {
 	fn  func(context.Context, string) string
 }
 
+// SessionID implements Session
+func (s *session) SessionID() string {
+	return s.sessionID
+}
+
 // Message implements chat.Chat
-func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
+func (s *session) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
 	// Add user message and check compaction
 	tempChat, err := s.prepareForMessage(ctx, msg)
 	if err != nil {
@@ -259,7 +279,7 @@ func (s *persistentSession) Message(ctx context.Context, msg chat.Message, opts 
 
 // prepareForMessage adds the user message, checks for compaction, and returns a prepared chat.
 // This method expects the mutex is NOT held and will handle locking internally.
-func (s *persistentSession) prepareForMessage(ctx context.Context, msg chat.Message) (chat.Chat, error) {
+func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat.Chat, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -303,7 +323,7 @@ func (s *persistentSession) prepareForMessage(ctx context.Context, msg chat.Mess
 
 // trackResponse records the response and updates metrics with actual token counts.
 // This method expects the mutex is NOT held and will handle locking internally.
-func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Message) {
+func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -353,7 +373,7 @@ func (s *persistentSession) trackResponse(tempChat chat.Chat, response chat.Mess
 }
 
 // History implements chat.Chat
-func (s *persistentSession) History() (systemPrompt string, msgs []chat.Message) {
+func (s *session) History() (systemPrompt string, msgs []chat.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -361,7 +381,7 @@ func (s *persistentSession) History() (systemPrompt string, msgs []chat.Message)
 }
 
 // TokenUsage implements chat.Chat
-func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
+func (s *session) TokenUsage() (chat.TokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -379,7 +399,7 @@ func (s *persistentSession) TokenUsage() (chat.TokenUsage, error) {
 }
 
 // MaxTokens implements chat.Chat
-func (s *persistentSession) MaxTokens() int {
+func (s *session) MaxTokens() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -388,7 +408,7 @@ func (s *persistentSession) MaxTokens() int {
 }
 
 // RegisterTool implements chat.Chat
-func (s *persistentSession) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
+func (s *session) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -406,7 +426,7 @@ func (s *persistentSession) RegisterTool(def chat.ToolDef, fn func(context.Conte
 }
 
 // DeregisterTool implements chat.Chat
-func (s *persistentSession) DeregisterTool(name string) {
+func (s *session) DeregisterTool(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -415,7 +435,7 @@ func (s *persistentSession) DeregisterTool(name string) {
 }
 
 // ListTools implements chat.Chat
-func (s *persistentSession) ListTools() []string {
+func (s *session) ListTools() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -427,7 +447,7 @@ func (s *persistentSession) ListTools() []string {
 }
 
 // LiveRecords returns all records marked as live (in active context window).
-func (s *persistentSession) LiveRecords() []Record {
+func (s *session) LiveRecords() []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -449,7 +469,7 @@ func (s *persistentSession) LiveRecords() []Record {
 }
 
 // TotalRecords returns all records (both live and dead).
-func (s *persistentSession) TotalRecords() []Record {
+func (s *session) TotalRecords() []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -471,7 +491,7 @@ func (s *persistentSession) TotalRecords() []Record {
 }
 
 // CompactNow manually triggers context compaction.
-func (s *persistentSession) CompactNow() error {
+func (s *session) CompactNow() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -482,7 +502,7 @@ func (s *persistentSession) CompactNow() error {
 }
 
 // compactNowLocked performs compaction with the mutex already held.
-func (s *persistentSession) compactNowLocked(ctx context.Context) error {
+func (s *session) compactNowLocked(ctx context.Context) error {
 	// Find live records to compact
 	liveRecords, _ := s.store.GetLiveRecords(s.sessionID)
 
@@ -541,7 +561,7 @@ func (s *persistentSession) compactNowLocked(ctx context.Context) error {
 }
 
 // SetCompactionThreshold sets the threshold for automatic compaction (0.0-1.0).
-func (s *persistentSession) SetCompactionThreshold(threshold float64) {
+func (s *session) SetCompactionThreshold(threshold float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -556,7 +576,7 @@ func (s *persistentSession) SetCompactionThreshold(threshold float64) {
 }
 
 // Metrics returns usage statistics for the session.
-func (s *persistentSession) Metrics() SessionMetrics {
+func (s *session) Metrics() SessionMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -586,7 +606,7 @@ func (s *persistentSession) Metrics() SessionMetrics {
 // Helper methods - all expect mutex to be held
 
 // shouldCompactLocked checks if compaction is needed (mutex must be held).
-func (s *persistentSession) shouldCompactLocked() bool {
+func (s *session) shouldCompactLocked() bool {
 	// Threshold of 0.0 means never compact
 	if s.compactionThreshold == 0.0 {
 		return false
@@ -603,7 +623,7 @@ func (s *persistentSession) shouldCompactLocked() bool {
 }
 
 // calculateLiveTokensLocked calculates live token count (mutex must be held).
-func (s *persistentSession) calculateLiveTokensLocked() int {
+func (s *session) calculateLiveTokensLocked() int {
 	records, _ := s.store.GetLiveRecords(s.sessionID)
 	total := 0
 	for _, r := range records {
@@ -614,7 +634,7 @@ func (s *persistentSession) calculateLiveTokensLocked() int {
 }
 
 // buildChatHistoryLocked builds the chat history (mutex must be held).
-func (s *persistentSession) buildChatHistoryLocked() (string, []chat.Message) {
+func (s *session) buildChatHistoryLocked() (string, []chat.Message) {
 	var systemPrompt string
 	var msgs []chat.Message
 
@@ -639,7 +659,7 @@ func (s *persistentSession) buildChatHistoryLocked() (string, []chat.Message) {
 }
 
 // saveMetricsLocked saves metrics to store (mutex must be held).
-func (s *persistentSession) saveMetricsLocked() {
+func (s *session) saveMetricsLocked() {
 	s.store.SaveMetrics(s.sessionID, persistence.SessionMetrics{
 		CompactionCount:     s.compactionCount,
 		LastCompaction:      s.lastCompaction,

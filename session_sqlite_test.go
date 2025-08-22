@@ -2,13 +2,18 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/llm/openai"
 	"github.com/bpowers/go-agent/persistence/sqlitestore"
 )
 
@@ -29,7 +34,7 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	client := &mockClient{}
 	session := NewSession(client, "Persistent assistant",
 		WithStore(store),
-		WithSessionID(sessionID))
+		WithRestoreSession(sessionID))
 
 	// Test basic messaging
 	ctx := context.Background()
@@ -52,7 +57,7 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	// Create new session with same store and session ID to test persistence
 	session2 := NewSession(client, "Should be ignored", // System prompt already in store
 		WithStore(store),
-		WithSessionID(sessionID))
+		WithRestoreSession(sessionID))
 
 	// Should have the same records
 	records2 := session2.LiveRecords()
@@ -75,7 +80,7 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 	client := &mockClient{}
 	session1 := NewSession(client, "Persistent system",
 		WithStore(store1),
-		WithSessionID(sessionID))
+		WithRestoreSession(sessionID))
 
 	ctx := context.Background()
 
@@ -101,7 +106,7 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 
 	session2 := NewSession(client, "Persistent system",
 		WithStore(store2),
-		WithSessionID(sessionID))
+		WithRestoreSession(sessionID))
 
 	// Should have the same history
 	records := session2.TotalRecords()
@@ -148,4 +153,241 @@ func TestSessionCompactionWithSQLite(t *testing.T) {
 	metrics := session.Metrics()
 	assert.Equal(t, 1, metrics.CompactionCount)
 	assert.False(t, metrics.LastCompaction.IsZero())
+}
+
+func TestSessionResumption(t *testing.T) {
+	// Constants for testing
+	const userName = "bobby"
+	const systemPrompt = "You are a helpful assistant. Remember important information from the conversation."
+
+	// Use a temporary directory for this test
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "session_resume.db")
+
+	var sessionID string
+
+	// Phase 1: Create initial session and conversation
+	{
+		// Create SQLite store
+		store, err := sqlitestore.New(dbPath)
+		require.NoError(t, err)
+
+		// Create a mock client for testing
+		client := &mockClient{}
+
+		// Create initial session
+		session := NewSession(client, systemPrompt, WithStore(store))
+
+		// Record the session ID for later restoration
+		sessionID = session.SessionID()
+		require.NotEmpty(t, sessionID, "Session ID should not be empty")
+
+		ctx := context.Background()
+
+		// Send first message introducing the name
+		msg1 := fmt.Sprintf("Hello! My name is %s", userName)
+		response1, err := session.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: msg1,
+		})
+		require.NoError(t, err)
+		assert.Contains(t, response1.Content, msg1)
+
+		// Send second message with some other context
+		msg2 := "I'm interested in learning about Go programming"
+		response2, err := session.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: msg2,
+		})
+		require.NoError(t, err)
+		assert.Contains(t, response2.Content, msg2)
+
+		// Verify we have the expected records
+		records := session.LiveRecords()
+		assert.Len(t, records, 5) // System + 2*(user+assistant)
+
+		// Close the store to simulate session end
+		store.Close()
+	}
+
+	// Phase 2: Force garbage collection to ensure no references remain
+	for i := 0; i < 2; i++ {
+		runtime.GC()
+		runtime.Gosched()
+	}
+
+	// Phase 3: Resume session with same ID
+	{
+		// Create new store with same database
+		store, err := sqlitestore.New(dbPath)
+		require.NoError(t, err)
+		defer store.Close()
+
+		// Create a mock client for testing
+		client := &mockClient{}
+
+		// Resume session using WithRestoreSession
+		resumedSession := NewSession(client, "Different prompt that should be ignored",
+			WithStore(store),
+			WithRestoreSession(sessionID))
+
+		// Verify the session ID matches
+		assert.Equal(t, sessionID, resumedSession.SessionID())
+
+		// Verify the history was restored
+		records := resumedSession.LiveRecords()
+		assert.Len(t, records, 5) // Should have all the previous records
+
+		// Verify the system prompt was preserved from the original session
+		assert.Equal(t, systemPrompt, records[0].Content)
+
+		// Verify the user's name is in the history
+		foundNameMessage := false
+		for _, record := range records {
+			if record.Role == chat.UserRole && strings.Contains(record.Content, userName) {
+				foundNameMessage = true
+				break
+			}
+		}
+		assert.True(t, foundNameMessage, "Should find the message with user's name in history")
+
+		// Now ask the LLM to recall the user's name
+		ctx := context.Background()
+		response, err := resumedSession.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: "What is my name? Reply with just the name in one word.",
+		})
+		require.NoError(t, err)
+
+		// The mock client echoes back the content, so check if it contains the question
+		// In a real scenario with an actual LLM, we'd check if it recalls "bobby"
+		// For our mock, we just verify the message was processed
+		assert.Contains(t, response.Content, "What is my name")
+
+		// Verify cumulative tokens were preserved
+		metrics := resumedSession.Metrics()
+		assert.Greater(t, metrics.CumulativeTokens, 0)
+		assert.Equal(t, 7, metrics.RecordsTotal) // Original 5 + new question + answer
+	}
+}
+
+func TestSessionResumptionWithLLM(t *testing.T) {
+	// Skip if no API key
+	if os.Getenv("OPENAI_API_KEY") == "" {
+		t.Skip("Skipping LLM integration test: OPENAI_API_KEY not set")
+	}
+
+	// Constants for testing
+	const userName = "bobby"
+	const systemPrompt = "You are a helpful assistant. Remember important information from the conversation."
+
+	// Use a temporary directory for this test
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "session_llm_resume.db")
+
+	var sessionID string
+
+	// Phase 1: Create initial session and conversation with real LLM
+	{
+		// Create SQLite store
+		store, err := sqlitestore.New(dbPath)
+		require.NoError(t, err)
+
+		// Create OpenAI client with gpt-4o-mini
+		client, err := openai.NewClient(
+			openai.OpenAIURL,
+			os.Getenv("OPENAI_API_KEY"),
+			openai.WithModel("gpt-4o-mini"),
+		)
+		require.NoError(t, err)
+
+		// Create initial session
+		session := NewSession(client, systemPrompt, WithStore(store))
+
+		// Record the session ID for later restoration
+		sessionID = session.SessionID()
+		require.NotEmpty(t, sessionID, "Session ID should not be empty")
+
+		ctx := context.Background()
+
+		// Send first message introducing the name
+		msg1 := fmt.Sprintf("Hello! My name is %s. Please remember this for later.", userName)
+		response1, err := session.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: msg1,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, response1.Content)
+
+		// Send second message with some other context
+		msg2 := "I'm interested in learning about Go programming. What's a good starting point?"
+		response2, err := session.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: msg2,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, response2.Content)
+
+		// Verify we have the expected records
+		records := session.LiveRecords()
+		assert.Len(t, records, 5) // System + 2*(user+assistant)
+
+		// Close the store to simulate session end
+		store.Close()
+	}
+
+	// Phase 2: Force garbage collection to ensure no references remain
+	for i := 0; i < 2; i++ {
+		runtime.GC()
+		runtime.Gosched()
+	}
+
+	// Phase 3: Resume session with same ID
+	{
+		// Create new store with same database
+		store, err := sqlitestore.New(dbPath)
+		require.NoError(t, err)
+		defer store.Close()
+
+		// Create OpenAI client with gpt-4o-mini
+		client, err := openai.NewClient(
+			openai.OpenAIURL,
+			os.Getenv("OPENAI_API_KEY"),
+			openai.WithModel("gpt-4o-mini"),
+		)
+		require.NoError(t, err)
+
+		// Resume session using WithRestoreSession
+		resumedSession := NewSession(client, "Different prompt that should be ignored",
+			WithStore(store),
+			WithRestoreSession(sessionID))
+
+		// Verify the session ID matches
+		assert.Equal(t, sessionID, resumedSession.SessionID())
+
+		// Verify the history was restored
+		records := resumedSession.LiveRecords()
+		assert.Len(t, records, 5) // Should have all the previous records
+
+		// Verify the system prompt was preserved from the original session
+		assert.Equal(t, systemPrompt, records[0].Content)
+
+		// Now ask the LLM to recall the user's name
+		ctx := context.Background()
+		response, err := resumedSession.Message(ctx, chat.Message{
+			Role:    chat.UserRole,
+			Content: "What is my name? Reply with just the name in one word.",
+		})
+		require.NoError(t, err)
+
+		// The LLM should recall the name "bobby" from the previous conversation
+		responseLower := strings.ToLower(response.Content)
+		assert.Contains(t, responseLower, strings.ToLower(userName),
+			"LLM should recall the name %s from the resumed session, got: %s", userName, response.Content)
+
+		// Verify cumulative tokens were preserved and increased
+		metrics := resumedSession.Metrics()
+		assert.Greater(t, metrics.CumulativeTokens, 0)
+		assert.Equal(t, 7, metrics.RecordsTotal) // Original 5 + new question + answer
+	}
 }
