@@ -34,6 +34,7 @@ type Config struct {
 	MaxTokens        int
 	SystemPrompt     string
 	Debug            bool
+	Streaming        bool
 	PersistenceFile  string
 	CompactThreshold float64
 }
@@ -52,6 +53,7 @@ func parseFlagsArgs(args []string) *Config {
 	fs.IntVar(&config.MaxTokens, "max-tokens", 0, "Maximum tokens in response (0 for default)")
 	fs.StringVar(&config.SystemPrompt, "system", "You are a helpful assistant.", "System prompt")
 	fs.BoolVar(&config.Debug, "debug", false, "Enable debug output")
+	fs.BoolVar(&config.Streaming, "stream", true, "Use streaming API (default true)")
 	fs.StringVar(&config.PersistenceFile, "persist", "", "SQLite file for conversation persistence (empty for memory-only)")
 	fs.Float64Var(&config.CompactThreshold, "compact", 0.8, "Threshold for automatic context compaction (0.0-1.0)")
 	_ = fs.Parse(args)
@@ -68,6 +70,7 @@ var createClientFunc = func(config *Config) (chat.Client, error) {
 		MaxTokens:    config.MaxTokens,
 		SystemPrompt: config.SystemPrompt,
 		Debug:        config.Debug,
+		Streaming:    &config.Streaming,
 	}
 	return llm.NewClient(llmConfig)
 }

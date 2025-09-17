@@ -48,6 +48,7 @@ type client struct {
 	modelName    string
 	api          API
 	debug        bool
+	streaming    bool   // true for streaming responses, false for non-streaming
 	apiSet       bool   // true if WithAPI was explicitly provided
 	baseURL      string // Store base URL for testing
 }
@@ -75,12 +76,19 @@ func WithDebug(debug bool) Option {
 	}
 }
 
+func WithStreaming(streaming bool) Option {
+	return func(c *client) {
+		c.streaming = streaming
+	}
+}
+
 // NewClient returns a chat client that can begin chat sessions with an LLM service that speaks
 // the OpenAI chat completion API.
 func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, error) {
 	c := &client{
-		api:     ChatCompletions, // default to chat completions
-		baseURL: apiBase,         // Store for testing
+		api:       ChatCompletions, // default to chat completions
+		streaming: true,            // default to streaming
+		baseURL:   apiBase,         // Store for testing
 	}
 
 	for _, opt := range opts {
@@ -221,7 +229,12 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	if c.api == Responses && nTools == 0 {
 		return c.messageStreamResponses(ctx, msg, callback, opts...)
 	}
-	return c.messageStreamChatCompletions(ctx, msg, callback, opts...)
+
+	// Route to streaming or non-streaming ChatCompletions implementation
+	if c.streaming {
+		return c.messageStreamingChatCompletions(ctx, msg, callback, opts...)
+	}
+	return c.messageNonStreamingChatCompletions(ctx, msg, callback, opts...)
 }
 
 // messageStreamResponses uses the Responses API for reasoning models (gpt-5, o1, o3)
@@ -456,8 +469,8 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 	return respMsg, nil
 }
 
-// messageStreamChatCompletions uses the standard Chat Completions API
-func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
+// messageStreamingChatCompletions uses the standard Chat Completions API with streaming
+func (c *chatClient) messageStreamingChatCompletions(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
 	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
@@ -938,6 +951,210 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	return respMsg, nil
 }
 
+// messageNonStreamingChatCompletions uses the standard Chat Completions API without streaming
+func (c *chatClient) messageNonStreamingChatCompletions(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
+	reqMsg := msg
+	reqOpts := chat.ApplyOptions(opts...)
+
+	// Snapshot state without holding lock
+	systemPrompt, history := c.snapshotState()
+
+	// Check if debug logging is enabled
+	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
+
+	// Build message list
+	var messages []openai.ChatCompletionMessageParamUnion
+
+	// Add system prompt if present
+	if systemPrompt != "" {
+		messages = append(messages, openai.SystemMessage(systemPrompt))
+	}
+
+	// Add history
+	for _, m := range history {
+		switch m.Role {
+		case chat.UserRole:
+			messages = append(messages, openai.UserMessage(m.Content))
+		case chat.AssistantRole:
+			messages = append(messages, openai.AssistantMessage(m.Content))
+		default:
+			messages = append(messages, openai.SystemMessage(m.Content))
+		}
+	}
+
+	// Add current message
+	switch msg.Role {
+	case chat.UserRole:
+		messages = append(messages, openai.UserMessage(msg.Content))
+	case chat.AssistantRole:
+		messages = append(messages, openai.AssistantMessage(msg.Content))
+	default:
+		messages = append(messages, openai.SystemMessage(msg.Content))
+	}
+
+	// Build request parameters
+	params := openai.ChatCompletionNewParams{
+		Messages: messages,
+		Model:    c.modelName,
+	}
+
+	// Add tools if registered
+	allTools := c.tools.GetAll()
+	if len(allTools) > 0 {
+		tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
+		for _, tool := range allTools {
+			toolParam, err := c.mcpToOpenAITool(tool.Definition)
+			if err != nil {
+				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
+			}
+			tools = append(tools, toolParam)
+		}
+		params.Tools = tools
+	}
+
+	// Only set temperature for models that support it
+	if reqOpts.Temperature != nil && !isNoTemperatureModel(c.modelName) {
+		params.Temperature = openai.Float(*reqOpts.Temperature)
+	}
+
+	if reqOpts.MaxTokens > 0 {
+		params.MaxCompletionTokens = openai.Int(int64(reqOpts.MaxTokens))
+	}
+
+	// Make the non-streaming API call
+	if debugSSE {
+		log.Printf("[OpenAI Non-Streaming] Calling API for model: %s\n", c.modelName)
+	}
+
+	resp, err := c.openaiClient.Chat.Completions.New(ctx, params)
+	if err != nil {
+		// Check if the error is about unsupported temperature
+		errStr := err.Error()
+		if strings.Contains(errStr, "temperature") && strings.Contains(errStr, "does not support") && reqOpts.Temperature != nil {
+			// Retry without temperature
+			if c.debug {
+				fmt.Fprintf(os.Stderr, "\nTemperature not supported for model %s, retrying without temperature\n", c.modelName)
+			}
+			// Create new params without temperature
+			paramsNoTemp := openai.ChatCompletionNewParams{
+				Messages: messages,
+				Model:    c.modelName,
+			}
+			if reqOpts.MaxTokens > 0 {
+				paramsNoTemp.MaxCompletionTokens = openai.Int(int64(reqOpts.MaxTokens))
+			}
+			// Re-add tools if registered
+			if len(allTools) > 0 {
+				tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
+				for _, tool := range allTools {
+					toolParam, err := c.mcpToOpenAITool(tool.Definition)
+					if err != nil {
+						continue // Skip tool on error
+					}
+					tools = append(tools, toolParam)
+				}
+				paramsNoTemp.Tools = tools
+			}
+
+			resp, err = c.openaiClient.Chat.Completions.New(ctx, paramsNoTemp)
+			if err != nil {
+				return chat.Message{}, fmt.Errorf("non-streaming error after temperature retry: %w", err)
+			}
+		} else {
+			return chat.Message{}, fmt.Errorf("non-streaming error: %w", err)
+		}
+	}
+
+	// Extract response data
+	if len(resp.Choices) == 0 {
+		return chat.Message{}, fmt.Errorf("no choices in response")
+	}
+
+	choice := resp.Choices[0]
+	content := choice.Message.Content
+
+	// Extract usage information
+	usage := chat.TokenUsageDetails{
+		InputTokens:  int(resp.Usage.PromptTokens),
+		OutputTokens: int(resp.Usage.CompletionTokens),
+		TotalTokens:  int(resp.Usage.TotalTokens),
+	}
+
+	if debugSSE {
+		log.Printf("[OpenAI Non-Streaming] Response received - Content length: %d, Tools: %d, Usage: %+v\n",
+			len(content), len(choice.Message.ToolCalls), usage)
+	}
+
+	// Emit content event if callback provided and there's content
+	if callback != nil && content != "" {
+		event := chat.StreamEvent{
+			Type:    chat.StreamEventTypeContent,
+			Content: content,
+		}
+		if err := callback(event); err != nil {
+			return chat.Message{}, err
+		}
+	}
+
+	// Handle tool calls if present
+	if len(choice.Message.ToolCalls) > 0 {
+		// Emit tool call events if callback provided
+		if callback != nil {
+			for _, tc := range choice.Message.ToolCalls {
+				// Parse arguments to json.RawMessage
+				var args json.RawMessage
+				if tc.Function.Arguments != "" {
+					args = json.RawMessage(tc.Function.Arguments)
+				}
+
+				toolCallEvent := chat.StreamEvent{
+					Type: chat.StreamEventTypeToolCall,
+					ToolCalls: []chat.ToolCall{
+						{
+							ID:        tc.ID,
+							Name:      tc.Function.Name,
+							Arguments: args,
+						},
+					},
+				}
+				if err := callback(toolCallEvent); err != nil {
+					return chat.Message{}, err
+				}
+			}
+		}
+
+		// Convert to the internal format for tool handling
+		var toolCalls []openai.ChatCompletionMessageToolCall
+		for _, tc := range choice.Message.ToolCalls {
+			toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCall{
+				ID: tc.ID,
+				Function: openai.ChatCompletionMessageToolCallFunction{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+
+		// Handle tool calls with potentially multiple rounds
+		return c.handleToolCallRoundsNonStreaming(ctx, reqMsg, toolCalls, reqOpts, callback)
+	}
+
+	// Create response message
+	respMsg := chat.Message{
+		Role:    chat.AssistantRole,
+		Content: content,
+	}
+
+	// Update history and usage
+	c.updateHistoryAndUsage([]chat.Message{reqMsg, respMsg}, usage)
+
+	if debugSSE && content == "" {
+		log.Printf("[OpenAI Non-Streaming] Warning: Response has empty content")
+	}
+
+	return respMsg, nil
+}
+
 // handleToolCallRounds handles potentially multiple rounds of tool calls
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialToolCalls []openai.ChatCompletionMessageToolCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Check if debug logging is enabled
@@ -1146,6 +1363,194 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// Debug log if content is empty
 		if debugSSE && finalMsg.Content == "" {
 			log.Printf("[OpenAI] Warning: Final response after tool execution has empty content")
+		}
+
+		// Update history with the final response
+		c.state.AppendMessages([]chat.Message{finalMsg}, &lastUsage)
+
+		return finalMsg, nil
+	}
+
+	// This should never be reached since the loop continues until no tool calls
+	return chat.Message{}, fmt.Errorf("unexpected end of tool call processing")
+}
+
+// handleToolCallRoundsNonStreaming handles potentially multiple rounds of tool calls using non-streaming API
+func (c *chatClient) handleToolCallRoundsNonStreaming(ctx context.Context, initialMsg chat.Message, initialToolCalls []openai.ChatCompletionMessageToolCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
+	// Check if debug logging is enabled
+	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
+
+	// Keep track of all messages for the conversation
+	var msgs []openai.ChatCompletionMessageParamUnion
+
+	// Build conversation messages and update history
+	systemPrompt, history := c.state.Snapshot()
+	if systemPrompt != "" {
+		msgs = append(msgs, openai.SystemMessage(systemPrompt))
+	}
+	for _, m := range history {
+		switch m.Role {
+		case chat.UserRole:
+			msgs = append(msgs, openai.UserMessage(m.Content))
+		case chat.AssistantRole:
+			msgs = append(msgs, openai.AssistantMessage(m.Content))
+		default:
+			msgs = append(msgs, openai.SystemMessage(m.Content))
+		}
+	}
+	// Add the initial user message to history
+	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
+
+	msgs = append(msgs, openai.UserMessage(initialMsg.Content))
+
+	// Process tool calls in a loop until we get a final response
+	toolCalls := initialToolCalls
+
+	for len(toolCalls) > 0 {
+		if debugSSE {
+			log.Printf("[OpenAI Non-Streaming] Processing %d tool calls", len(toolCalls))
+		}
+
+		// Execute tool calls
+		toolResults, err := c.handleToolCalls(ctx, toolCalls)
+		if err != nil {
+			return chat.Message{}, fmt.Errorf("failed to execute tool calls: %w", err)
+		}
+
+		// Add assistant message with tool calls
+		// Convert tool calls to the proper format
+		toolCallParams := make([]openai.ChatCompletionMessageToolCallParam, len(toolCalls))
+		for i, tc := range toolCalls {
+			toolCallParams[i] = openai.ChatCompletionMessageToolCallParam{
+				ID: tc.ID,
+				Function: openai.ChatCompletionMessageToolCallFunctionParam{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			}
+		}
+
+		// Create assistant message with tool calls
+		assistantWithTools := openai.ChatCompletionAssistantMessageParam{
+			ToolCalls: toolCallParams,
+		}
+		msgs = append(msgs, openai.ChatCompletionMessageParamUnion{
+			OfAssistant: &assistantWithTools,
+		})
+
+		// Add tool results to messages
+		msgs = append(msgs, toolResults...)
+
+		// Make another API call with tool results (non-streaming)
+		followUpParams := openai.ChatCompletionNewParams{
+			Messages: msgs,
+			Model:    c.modelName,
+		}
+		if reqOpts.Temperature != nil && !isNoTemperatureModel(c.modelName) {
+			followUpParams.Temperature = openai.Float(*reqOpts.Temperature)
+		}
+		if reqOpts.MaxTokens > 0 {
+			followUpParams.MaxCompletionTokens = openai.Int(int64(reqOpts.MaxTokens))
+		}
+		// Add tools if registered (for follow-up after tool execution)
+		allTools := c.tools.GetAll()
+		if len(allTools) > 0 {
+			tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
+			for _, tool := range allTools {
+				toolParam, err := c.mcpToOpenAITool(tool.Definition)
+				if err != nil {
+					// Skip this tool on error
+					continue
+				}
+				tools = append(tools, toolParam)
+			}
+			followUpParams.Tools = tools
+		}
+
+		// Make non-streaming API call
+		followUpResp, err := c.openaiClient.Chat.Completions.New(ctx, followUpParams)
+		if err != nil {
+			return chat.Message{}, fmt.Errorf("follow-up non-streaming error: %w", err)
+		}
+
+		if len(followUpResp.Choices) == 0 {
+			return chat.Message{}, fmt.Errorf("no choices in follow-up response")
+		}
+
+		choice := followUpResp.Choices[0]
+		content := choice.Message.Content
+
+		// Extract usage
+		lastUsage := chat.TokenUsageDetails{
+			InputTokens:  int(followUpResp.Usage.PromptTokens),
+			OutputTokens: int(followUpResp.Usage.CompletionTokens),
+			TotalTokens:  int(followUpResp.Usage.TotalTokens),
+		}
+
+		// Check for more tool calls
+		if len(choice.Message.ToolCalls) > 0 {
+			// Reset toolCalls for next round
+			toolCalls = nil
+			for _, tc := range choice.Message.ToolCalls {
+				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCall{
+					ID: tc.ID,
+					Function: openai.ChatCompletionMessageToolCallFunction{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+
+			// Emit tool call events if callback provided
+			if callback != nil {
+				for _, tc := range choice.Message.ToolCalls {
+					var args json.RawMessage
+					if tc.Function.Arguments != "" {
+						args = json.RawMessage(tc.Function.Arguments)
+					}
+
+					toolCallEvent := chat.StreamEvent{
+						Type: chat.StreamEventTypeToolCall,
+						ToolCalls: []chat.ToolCall{
+							{
+								ID:        tc.ID,
+								Name:      tc.Function.Name,
+								Arguments: args,
+							},
+						},
+					}
+					if err := callback(toolCallEvent); err != nil {
+						return chat.Message{}, err
+					}
+				}
+			}
+
+			if debugSSE {
+				log.Printf("[OpenAI Non-Streaming] Got %d more tool calls", len(toolCalls))
+			}
+			continue
+		}
+
+		// No more tool calls, we have the final response
+		// Emit content event if callback provided
+		if callback != nil && content != "" {
+			event := chat.StreamEvent{
+				Type:    chat.StreamEventTypeContent,
+				Content: content,
+			}
+			if err := callback(event); err != nil {
+				return chat.Message{}, err
+			}
+		}
+
+		finalMsg := chat.Message{
+			Role:    chat.AssistantRole,
+			Content: content,
+		}
+
+		// Debug log if content is empty
+		if debugSSE && finalMsg.Content == "" {
+			log.Printf("[OpenAI Non-Streaming] Warning: Final response after tool execution has empty content")
 		}
 
 		// Update history with the final response
