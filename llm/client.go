@@ -16,6 +16,7 @@ import (
 type Config struct {
 	Model        string
 	APIKey       string
+	BaseURL      string // Optional base URL override for the API endpoint
 	Temperature  float64
 	MaxTokens    int
 	SystemPrompt string
@@ -60,8 +61,12 @@ func NewClient(config *Config) (chat.Client, error) {
 			opts = append(opts, openai.WithDebug(true))
 		}
 
+		baseURL := config.BaseURL
+		if baseURL == "" {
+			baseURL = openai.OpenAIURL
+		}
 		log.Printf("Using OpenAI client with model %q\n", config.Model)
-		return openai.NewClient(openai.OpenAIURL, apiKey, opts...)
+		return openai.NewClient(baseURL, apiKey, opts...)
 
 	case ProviderClaude:
 		if apiKey == "" {
@@ -78,8 +83,12 @@ func NewClient(config *Config) (chat.Client, error) {
 			opts = append(opts, claude.WithDebug(true))
 		}
 
+		baseURL := config.BaseURL
+		if baseURL == "" {
+			baseURL = claude.AnthropicURL
+		}
 		log.Printf("Using Claude client with model %q\n", config.Model)
-		return claude.NewClient(claude.AnthropicURL, apiKey, opts...)
+		return claude.NewClient(baseURL, apiKey, opts...)
 
 	case ProviderGemini:
 		if apiKey == "" {
@@ -94,6 +103,9 @@ func NewClient(config *Config) (chat.Client, error) {
 
 		opts := []gemini.Option{
 			gemini.WithModel(config.Model),
+		}
+		if config.BaseURL != "" {
+			opts = append(opts, gemini.WithBaseURL(config.BaseURL))
 		}
 		if config.Debug {
 			opts = append(opts, gemini.WithDebug(true))
@@ -111,8 +123,12 @@ func NewClient(config *Config) (chat.Client, error) {
 			opts = append(opts, openai.WithDebug(true))
 		}
 
+		baseURL := config.BaseURL
+		if baseURL == "" {
+			baseURL = openai.OllamaURL
+		}
 		log.Printf("Using OpenAI client locally w/ ollama with model %q\n", config.Model)
-		return openai.NewClient(openai.OllamaURL, "", opts...)
+		return openai.NewClient(baseURL, "", opts...)
 
 	default:
 		return nil, fmt.Errorf("unknown model provider for model: %s", config.Model)

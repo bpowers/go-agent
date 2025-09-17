@@ -48,7 +48,8 @@ type client struct {
 	modelName    string
 	api          API
 	debug        bool
-	apiSet       bool // true if WithAPI was explicitly provided
+	apiSet       bool   // true if WithAPI was explicitly provided
+	baseURL      string // Store base URL for testing
 }
 
 var _ chat.Client = &client{}
@@ -78,7 +79,8 @@ func WithDebug(debug bool) Option {
 // the OpenAI chat completion API.
 func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, error) {
 	c := &client{
-		api: ChatCompletions, // default to chat completions
+		api:     ChatCompletions, // default to chat completions
+		baseURL: apiBase,         // Store for testing
 	}
 
 	for _, opt := range opts {
@@ -106,6 +108,12 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 	c.openaiClient = openai.NewClient(clientOpts...)
 
 	return c, nil
+}
+
+// BaseURL returns the base URL for testing purposes.
+// This is exported for integration testing only.
+func (c *client) BaseURL() string {
+	return c.baseURL
 }
 
 // NewChat returns a chat instance.

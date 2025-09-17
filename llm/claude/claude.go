@@ -23,6 +23,7 @@ type client struct {
 	anthropicClient anthropic.Client
 	modelName       string
 	debug           bool
+	baseURL         string // Store base URL for testing
 }
 
 var _ chat.Client = &client{}
@@ -44,7 +45,13 @@ func WithDebug(debug bool) Option {
 // NewClient returns a chat client that can begin chat sessions with Claude's Messages API.
 func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, error) {
 	c := &client{
-		debug: os.Getenv("GO_AGENT_DEBUG") == "1", // Enable debug if env var is set
+		debug:   os.Getenv("GO_AGENT_DEBUG") == "1", // Enable debug if env var is set
+		baseURL: apiBase,                            // Store for testing
+	}
+
+	// Use default if empty
+	if c.baseURL == "" {
+		c.baseURL = AnthropicURL
 	}
 
 	for _, opt := range opts {
@@ -71,6 +78,12 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 	c.anthropicClient = anthropic.NewClient(clientOpts...)
 
 	return c, nil
+}
+
+// BaseURL returns the base URL for testing purposes.
+// This is exported for integration testing only.
+func (c *client) BaseURL() string {
+	return c.baseURL
 }
 
 // NewChat returns a chat instance.

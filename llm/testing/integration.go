@@ -344,3 +344,25 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 	t.Logf("Tool call streaming test passed: received %d tool call events and %d content events",
 		len(toolCallEvents), len(contentEvents))
 }
+
+// BaseURLValidator is an interface that clients can implement to expose their base URL for testing
+type BaseURLValidator interface {
+	BaseURL() string
+}
+
+// TestBaseURLConfiguration validates that BaseURL is properly configured in the client
+func TestBaseURLConfiguration(t testing.TB, client chat.Client, expectedURL string) {
+	// Import note: caller should import testify packages
+	// We use testing.TB interface here for flexibility
+
+	// Try to cast to BaseURLValidator interface
+	validator, ok := client.(BaseURLValidator)
+	if !ok {
+		t.Fatal("Client must implement BaseURLValidator interface")
+	}
+
+	actualURL := validator.BaseURL()
+	if actualURL != expectedURL {
+		t.Errorf("BaseURL mismatch: expected %q, got %q", expectedURL, actualURL)
+	}
+}

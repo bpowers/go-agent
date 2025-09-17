@@ -15,6 +15,7 @@ import (
 type client struct {
 	genaiClient *genai.Client
 	modelName   string
+	baseURL     string
 	debug       bool
 }
 
@@ -28,10 +29,22 @@ func WithModel(modelName string) Option {
 	}
 }
 
+func WithBaseURL(baseURL string) Option {
+	return func(c *client) {
+		c.baseURL = baseURL
+	}
+}
+
 func WithDebug(debug bool) Option {
 	return func(c *client) {
 		c.debug = debug
 	}
+}
+
+// BaseURL returns the base URL for testing purposes.
+// This is exported for integration testing only.
+func (c *client) BaseURL() string {
+	return c.baseURL
 }
 
 // NewClient returns a chat client that can begin chat sessions with Google's Gemini API.
@@ -176,6 +189,13 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 	// Configure generation settings
 	config := &genai.GenerateContentConfig{}
+
+	// Apply base URL if configured
+	if c.baseURL != "" {
+		config.HTTPOptions = &genai.HTTPOptions{
+			BaseURL: c.baseURL,
+		}
+	}
 
 	if reqOpts.Temperature != nil {
 		temp := float32(*reqOpts.Temperature)
@@ -485,6 +505,14 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// Make another API call with tool results
 		followUpConfig := &genai.GenerateContentConfig{}
+
+		// Apply base URL if configured
+		if c.baseURL != "" {
+			followUpConfig.HTTPOptions = &genai.HTTPOptions{
+				BaseURL: c.baseURL,
+			}
+		}
+
 		if reqOpts.Temperature != nil {
 			temp := float32(*reqOpts.Temperature)
 			followUpConfig.Temperature = &temp
