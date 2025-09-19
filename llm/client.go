@@ -21,7 +21,6 @@ type Config struct {
 	MaxTokens    int
 	SystemPrompt string
 	Debug        bool
-	Streaming    *bool // Optional: whether to use streaming API (nil means default, which is true)
 }
 
 // ModelProvider represents the different LLM providers
@@ -60,11 +59,6 @@ func NewClient(config *Config) (chat.Client, error) {
 
 		if config.Debug {
 			opts = append(opts, openai.WithDebug(true))
-		}
-
-		// Add streaming option if specified
-		if config.Streaming != nil {
-			opts = append(opts, openai.WithStreaming(*config.Streaming))
 		}
 
 		baseURL := config.BaseURL
@@ -127,11 +121,6 @@ func NewClient(config *Config) (chat.Client, error) {
 		}
 		if config.Debug {
 			opts = append(opts, openai.WithDebug(true))
-		}
-
-		// Add streaming option if specified
-		if config.Streaming != nil {
-			opts = append(opts, openai.WithStreaming(*config.Streaming))
 		}
 
 		baseURL := config.BaseURL

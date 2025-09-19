@@ -99,44 +99,6 @@ func TestMessageConversion(t *testing.T) {
 	assert.Len(t, actualMsgs, 2)
 }
 
-func TestStreamingOptions(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name              string
-		opts              []Option
-		expectedStreaming bool
-	}{
-		{
-			name:              "Default is streaming",
-			opts:              nil,
-			expectedStreaming: true,
-		},
-		{
-			name:              "Explicitly enable streaming",
-			opts:              []Option{WithStreaming(true)},
-			expectedStreaming: true,
-		},
-		{
-			name:              "Explicitly disable streaming",
-			opts:              []Option{WithStreaming(false)},
-			expectedStreaming: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			c := &client{
-				streaming: true, // Default
-			}
-			for _, opt := range tt.opts {
-				opt(c)
-			}
-			assert.Equal(t, tt.expectedStreaming, c.streaming)
-		})
-	}
-}
-
 func TestStreamEventHandling(t *testing.T) {
 	t.Parallel()
 	// Test that reasoning events are properly handled
