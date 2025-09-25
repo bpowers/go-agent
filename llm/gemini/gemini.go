@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"google.golang.org/genai"
@@ -17,6 +18,7 @@ type client struct {
 	modelName   string
 	baseURL     string
 	debug       bool
+	headers     map[string]string // Custom HTTP headers
 }
 
 var _ chat.Client = &client{}
@@ -41,10 +43,22 @@ func WithDebug(debug bool) Option {
 	}
 }
 
+func WithHeaders(headers map[string]string) Option {
+	return func(c *client) {
+		c.headers = headers
+	}
+}
+
 // BaseURL returns the base URL for testing purposes.
 // This is exported for integration testing only.
 func (c *client) BaseURL() string {
 	return c.baseURL
+}
+
+// Headers returns the custom headers for testing purposes.
+// This is exported for integration testing only.
+func (c *client) Headers() map[string]string {
+	return c.headers
 }
 
 // NewClient returns a chat client that can begin chat sessions with Google's Gemini API.
@@ -64,9 +78,22 @@ func NewClient(apiKey string, opts ...Option) (chat.Client, error) {
 	}
 
 	ctx := context.Background()
-	genaiClient, err := genai.NewClient(ctx, &genai.ClientConfig{
+
+	// Build client config
+	config := &genai.ClientConfig{
 		APIKey: apiKey,
-	})
+	}
+
+	// Add custom headers if provided
+	if len(c.headers) > 0 {
+		httpHeaders := make(http.Header)
+		for key, value := range c.headers {
+			httpHeaders.Set(key, value)
+		}
+		config.HTTPOptions.Headers = httpHeaders
+	}
+
+	genaiClient, err := genai.NewClient(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create genai client: %w", err)
 	}

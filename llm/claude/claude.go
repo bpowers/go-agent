@@ -23,7 +23,8 @@ type client struct {
 	anthropicClient anthropic.Client
 	modelName       string
 	debug           bool
-	baseURL         string // Store base URL for testing
+	baseURL         string            // Store base URL for testing
+	headers         map[string]string // Custom HTTP headers
 }
 
 var _ chat.Client = &client{}
@@ -39,6 +40,12 @@ func WithModel(modelName string) Option {
 func WithDebug(debug bool) Option {
 	return func(c *client) {
 		c.debug = debug
+	}
+}
+
+func WithHeaders(headers map[string]string) Option {
+	return func(c *client) {
+		c.headers = headers
 	}
 }
 
@@ -75,6 +82,11 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 		clientOpts = append(clientOpts, option.WithBaseURL(apiBase))
 	}
 
+	// Add custom headers if provided
+	for key, value := range c.headers {
+		clientOpts = append(clientOpts, option.WithHeader(key, value))
+	}
+
 	c.anthropicClient = anthropic.NewClient(clientOpts...)
 
 	return c, nil
@@ -84,6 +96,12 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 // This is exported for integration testing only.
 func (c *client) BaseURL() string {
 	return c.baseURL
+}
+
+// Headers returns the custom headers for testing purposes.
+// This is exported for integration testing only.
+func (c *client) Headers() map[string]string {
+	return c.headers
 }
 
 // NewChat returns a chat instance.

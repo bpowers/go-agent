@@ -48,8 +48,9 @@ type client struct {
 	modelName    string
 	api          API
 	debug        bool
-	apiSet       bool   // true if WithAPI was explicitly provided
-	baseURL      string // Store base URL for testing
+	apiSet       bool              // true if WithAPI was explicitly provided
+	baseURL      string            // Store base URL for testing
+	headers      map[string]string // Custom HTTP headers
 }
 
 var _ chat.Client = &client{}
@@ -72,6 +73,12 @@ func WithAPI(api API) Option {
 func WithDebug(debug bool) Option {
 	return func(c *client) {
 		c.debug = debug
+	}
+}
+
+func WithHeaders(headers map[string]string) Option {
+	return func(c *client) {
+		c.headers = headers
 	}
 }
 
@@ -105,6 +112,11 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 		clientOpts = append(clientOpts, option.WithAPIKey(apiKey))
 	}
 
+	// Add custom headers if provided
+	for key, value := range c.headers {
+		clientOpts = append(clientOpts, option.WithHeader(key, value))
+	}
+
 	c.openaiClient = openai.NewClient(clientOpts...)
 
 	return c, nil
@@ -114,6 +126,12 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 // This is exported for integration testing only.
 func (c *client) BaseURL() string {
 	return c.baseURL
+}
+
+// Headers returns the custom headers for testing purposes.
+// This is exported for integration testing only.
+func (c *client) Headers() map[string]string {
+	return c.headers
 }
 
 // NewChat returns a chat instance.

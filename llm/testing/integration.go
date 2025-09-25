@@ -366,3 +366,41 @@ func TestBaseURLConfiguration(t testing.TB, client chat.Client, expectedURL stri
 		t.Errorf("BaseURL mismatch: expected %q, got %q", expectedURL, actualURL)
 	}
 }
+
+// HeadersValidator is an interface that clients can implement to expose their custom headers for testing
+type HeadersValidator interface {
+	Headers() map[string]string
+}
+
+// TestHeaderConfiguration validates that custom headers are properly configured in the client
+func TestHeaderConfiguration(t testing.TB, client chat.Client, expectedHeaders map[string]string) {
+	// Import note: caller should import testify packages
+	// We use testing.TB interface here for flexibility
+
+	// Try to cast to HeadersValidator interface
+	validator, ok := client.(HeadersValidator)
+	if !ok {
+		t.Fatal("Client must implement HeadersValidator interface")
+	}
+
+	actualHeaders := validator.Headers()
+
+	// Check that all expected headers are present with correct values
+	for key, expectedValue := range expectedHeaders {
+		actualValue, ok := actualHeaders[key]
+		if !ok {
+			t.Errorf("Missing header %q", key)
+			continue
+		}
+		if actualValue != expectedValue {
+			t.Errorf("Header %q mismatch: expected %q, got %q", key, expectedValue, actualValue)
+		}
+	}
+
+	// Check for unexpected headers
+	for key := range actualHeaders {
+		if _, expected := expectedHeaders[key]; !expected {
+			t.Errorf("Unexpected header %q with value %q", key, actualHeaders[key])
+		}
+	}
+}
