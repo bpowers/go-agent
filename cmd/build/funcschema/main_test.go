@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"strings"
 	"testing"
 
 	"github.com/bpowers/go-agent/schema"
+	"github.com/iancoleman/strcase"
 )
 
 func TestGenerateInputSchema(t *testing.T) {
@@ -286,8 +288,14 @@ func ReadDir(ctx context.Context) ReadDirResult {
 				t.Fatalf("function %s not found", tt.funcName)
 			}
 
+			// Create doc.Package for testing
+			docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+			if err != nil {
+				t.Fatalf("failed to create doc package: %v", err)
+			}
+
 			// Generate input schema
-			s, err := generateInputSchema(targetFunc.Type.Params, node)
+			s, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("generateInputSchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -530,8 +538,14 @@ func ArrayOfArrays(req Request) ArrayResult { return ArrayResult{} }`,
 				t.Fatalf("function %s not found", tt.funcName)
 			}
 
+			// Create doc.Package for testing
+			docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+			if err != nil {
+				t.Fatalf("failed to create doc package: %v", err)
+			}
+
 			// Generate output schema
-			s, err := generateOutputSchema(targetFunc.Type.Results, node)
+			s, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("generateOutputSchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -593,20 +607,26 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
 		t.Fatal("DatasetGet function not found")
 	}
 
+	// Create doc.Package for testing
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+	if err != nil {
+		t.Fatalf("failed to create doc package: %v", err)
+	}
+
 	// Generate schemas
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate input schema: %v", err)
 	}
 
-	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node)
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate output schema: %v", err)
 	}
 
 	// Create tool definition with snake_case name
 	tool := &MCPTool{
-		Name:         camelToSnake("DatasetGet"),
+		Name:         strcase.ToSnake("DatasetGet"),
 		Description:  "Function DatasetGet",
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,
@@ -788,7 +808,7 @@ func (t T) Method(req Request) string { return "" }`,
 			err = validateFunction(targetFunc, tt.funcName, node)
 			if err == nil {
 				t.Error("expected validation error, got nil")
-			} else if tt.wantErr != "" && !contains(err.Error(), tt.wantErr) {
+			} else if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("expected error containing %q, got %q", tt.wantErr, err.Error())
 			}
 		})
@@ -848,19 +868,6 @@ func validateFunction(targetFunc *ast.FuncDecl, funcName string, node *ast.File)
 	return nil
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || len(substr) > 0 && len(s) > len(substr) && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 func TestNoArgumentFunction(t *testing.T) {
 	t.Parallel()
 	// Test a function with only context parameter
@@ -904,13 +911,19 @@ func ListFiles(ctx context.Context) ListFilesResult {
 		t.Fatalf("validation failed: %v", err)
 	}
 
+	// Create doc.Package for testing
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+	if err != nil {
+		t.Fatalf("failed to create doc package: %v", err)
+	}
+
 	// Generate schemas
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate input schema: %v", err)
 	}
 
-	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node)
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate output schema: %v", err)
 	}
@@ -939,7 +952,7 @@ func ListFiles(ctx context.Context) ListFilesResult {
 
 	// Create tool definition
 	tool := &MCPTool{
-		Name:         camelToSnake("ListFiles"),
+		Name:         strcase.ToSnake("ListFiles"),
 		Description:  "Function ListFiles",
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,
@@ -981,24 +994,24 @@ func TestCamelToSnake(t *testing.T) {
 	}{
 		{"ReadDir", "read_dir"},
 		{"DatasetGet", "dataset_get"},
-		{"HTTPServer", "h_t_t_p_server"},
-		{"GetHTTPResponse", "get_h_t_t_p_response"},
+		{"HTTPServer", "http_server"},            // Fixed expectation
+		{"GetHTTPResponse", "get_http_response"}, // Fixed expectation
 		{"SimpleFunc", "simple_func"},
 		{"lowercase", "lowercase"},
 		{"A", "a"},
-		{"AB", "a_b"},
-		{"ABC", "a_b_c"},
-		{"GetUserByID", "get_user_by_i_d"},
-		{"CreateAPIKey", "create_a_p_i_key"},
-		{"IOReader", "i_o_reader"},
+		{"AB", "ab"},                       // Fixed expectation
+		{"ABC", "abc"},                     // Fixed expectation
+		{"GetUserByID", "get_user_by_id"},  // Fixed expectation
+		{"CreateAPIKey", "create_api_key"}, // Fixed expectation
+		{"IOReader", "io_reader"},          // Fixed expectation
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			t.Parallel()
-			result := camelToSnake(tt.input)
+			result := strcase.ToSnake(tt.input)
 			if result != tt.expected {
-				t.Errorf("camelToSnake(%q) = %q, want %q", tt.input, result, tt.expected)
+				t.Errorf("strcase.ToSnake(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}

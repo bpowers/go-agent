@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -60,7 +61,7 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
 	}
 	goModContent := `module testpkg
 
-go 1.21
+go 1.24
 
 require github.com/bpowers/go-agent v0.0.0
 
@@ -103,21 +104,33 @@ replace github.com/bpowers/go-agent => ` + repoRoot + `
 	}
 
 	for _, elem := range expectedElements {
-		if !contains(string(content), elem) {
+		if !strings.Contains(string(content), elem) {
 			t.Errorf("generated file missing expected element: %s", elem)
 		}
 	}
 
 	// Check that outputSchema is included in the generated JSON
-	if !contains(string(content), `"outputSchema"`) {
+	// The JSON might use backticks or escaped quotes, so check for both
+	hasOutputSchema := strings.Contains(string(content), `"outputSchema"`) ||
+		strings.Contains(string(content), `\"outputSchema\"`)
+	if !hasOutputSchema {
 		t.Error("generated JSON missing outputSchema field")
 	}
 
 	// Verify the outputSchema contains expected properties
-	if !contains(string(content), `"Revision"`) && !contains(string(content), `"revision"`) {
+	hasRevision := strings.Contains(string(content), `"Revision"`) ||
+		strings.Contains(string(content), `"revision"`) ||
+		strings.Contains(string(content), `\"Revision\"`) ||
+		strings.Contains(string(content), `\"revision\"`)
+	if !hasRevision {
 		t.Error("outputSchema missing Revision field")
 	}
-	if !contains(string(content), `"Data"`) && !contains(string(content), `"data"`) {
+
+	hasData := strings.Contains(string(content), `"Data"`) ||
+		strings.Contains(string(content), `"data"`) ||
+		strings.Contains(string(content), `\"Data\"`) ||
+		strings.Contains(string(content), `\"data\"`)
+	if !hasData {
 		t.Error("outputSchema missing Data field")
 	}
 
@@ -205,7 +218,7 @@ func GetSystemInfo(ctx context.Context) GetSystemInfoResult {
 	}
 	goModContent := `module testpkg
 
-go 1.21
+go 1.24
 
 require github.com/bpowers/go-agent v0.0.0
 
@@ -255,7 +268,7 @@ replace github.com/bpowers/go-agent => ` + repoRoot + `
 	}
 
 	for _, elem := range expectedElements {
-		if !contains(string(content), elem) {
+		if !strings.Contains(string(content), elem) {
 			t.Errorf("generated file missing expected element: %s", elem)
 		}
 	}
@@ -267,7 +280,7 @@ replace github.com/bpowers/go-agent => ` + repoRoot + `
 	}
 
 	for _, elem := range unexpectedElements {
-		if contains(string(content), elem) {
+		if strings.Contains(string(content), elem) {
 			t.Errorf("generated file should not contain: %s", elem)
 		}
 	}
@@ -323,5 +336,3 @@ func TestNoArgWrapper(t *testing.T) {
 		t.Fatalf("generated code does not compile or test fails: %v\nOutput: %s", err, output)
 	}
 }
-
-// Using the contains function from main_test.go

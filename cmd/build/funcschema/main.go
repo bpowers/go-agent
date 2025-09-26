@@ -5,14 +5,18 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bpowers/go-agent/schema"
+	"github.com/iancoleman/strcase"
+	"mvdan.cc/gofumpt/format"
 )
 
 var (
@@ -49,6 +53,14 @@ func run() error {
 	node, err := parser.ParseFile(fset, *inputFile, nil, parser.ParseComments)
 	if err != nil {
 		return fmt.Errorf("parsing file: %w", err)
+	}
+
+	// Create doc.Package for extracting documentation using NewFromFiles
+	// This avoids the deprecated ast.Package
+	// Use doc.PreserveAST to prevent NewFromFiles from modifying the AST nodes
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls|doc.PreserveAST)
+	if err != nil {
+		return fmt.Errorf("creating doc package: %w", err)
 	}
 
 	// Find the target function
@@ -115,23 +127,23 @@ func run() error {
 	}
 
 	// Generate input schema from parameters
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
 	if err != nil {
 		return fmt.Errorf("generating input schema: %w", err)
 	}
 
 	// Generate output schema from return type
-	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node)
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
 	if err != nil {
 		return fmt.Errorf("generating output schema: %w", err)
 	}
 
-	// Extract description from godoc comments
-	description := extractDescription(targetFunc, *funcName)
+	// Extract description from godoc comments directly from AST
+	description := extractDescriptionFromAST(targetFunc)
 
 	// Create the MCP tool definition
 	tool := &MCPTool{
-		Name:         camelToSnake(*funcName),
+		Name:         strcase.ToSnake(*funcName),
 		Description:  description,
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,
@@ -161,7 +173,7 @@ func run() error {
 	return nil
 }
 
-func generateInputSchema(params *ast.FieldList, file *ast.File) (*schema.JSON, error) {
+func generateInputSchema(params *ast.FieldList, file *ast.File, docPkg *doc.Package) (*schema.JSON, error) {
 	// We now expect one or two parameters: context.Context and optionally a struct
 	if params == nil || len(params.List) < 1 || len(params.List) > 2 {
 		return nil, fmt.Errorf("expected one or two parameters: context.Context and optionally a struct")
@@ -185,7 +197,7 @@ func generateInputSchema(params *ast.FieldList, file *ast.File) (*schema.JSON, e
 
 	// Generate schema for the struct parameter
 	// This will return the struct's schema directly
-	paramSchema, _, err := generateTypeSchema(param.Type, file)
+	paramSchema, _, err := generateTypeSchema(param.Type, file, docPkg)
 	if err != nil {
 		return nil, fmt.Errorf("generating schema for parameter: %w", err)
 	}
@@ -195,18 +207,28 @@ func generateInputSchema(params *ast.FieldList, file *ast.File) (*schema.JSON, e
 	return paramSchema, nil
 }
 
-func generateOutputSchema(results *ast.FieldList, file *ast.File) (*schema.JSON, error) {
+func generateOutputSchema(results *ast.FieldList, file *ast.File, docPkg *doc.Package) (*schema.JSON, error) {
 	if results == nil || len(results.List) != 1 {
 		return nil, fmt.Errorf("function must return exactly one value")
 	}
 
 	result := results.List[0]
-	s, _, err := generateTypeSchema(result.Type, file)
+	s, _, err := generateTypeSchema(result.Type, file, docPkg)
 	return s, err
 }
 
-func generateTypeSchema(expr ast.Expr, file *ast.File) (*schema.JSON, bool, error) {
+func generateTypeSchema(expr ast.Expr, file *ast.File, docPkg *doc.Package) (*schema.JSON, bool, error) {
 	switch t := expr.(type) {
+	case *ast.SelectorExpr:
+		// Handle qualified types like time.Time, url.URL, etc.
+		if pkg, ok := t.X.(*ast.Ident); ok {
+			qualifiedType := pkg.Name + "." + t.Sel.Name
+			if s := generateStdlibTypeSchema(qualifiedType); s != nil {
+				return s, false, nil
+			}
+		}
+		// Fallback to object for unknown qualified types
+		return &schema.JSON{Type: schema.Object}, false, nil
 	case *ast.Ident:
 		// Basic types or type references
 		s, err := generateBasicTypeSchema(t.Name)
@@ -216,7 +238,7 @@ func generateTypeSchema(expr ast.Expr, file *ast.File) (*schema.JSON, bool, erro
 		// If it's not a basic type, it might be a struct type defined in the file
 		if s.Type == schema.Object && t.Name != "interface{}" {
 			// Try to find the type definition
-			structSchema := findAndGenerateStructSchema(t.Name, file)
+			structSchema := findAndGenerateStructSchema(t.Name, file, docPkg)
 			if structSchema != nil {
 				return structSchema, false, nil
 			}
@@ -224,7 +246,7 @@ func generateTypeSchema(expr ast.Expr, file *ast.File) (*schema.JSON, bool, erro
 		return s, false, nil
 	case *ast.StarExpr:
 		// Pointer type - it's optional (can be the type or null)
-		s, _, err := generateTypeSchema(t.X, file)
+		s, _, err := generateTypeSchema(t.X, file, docPkg)
 		if err != nil {
 			return nil, true, err
 		}
@@ -252,7 +274,7 @@ func generateTypeSchema(expr ast.Expr, file *ast.File) (*schema.JSON, bool, erro
 		}
 	case *ast.ArrayType:
 		// Array type
-		itemSchema, _, err := generateTypeSchema(t.Elt, file)
+		itemSchema, _, err := generateTypeSchema(t.Elt, file, docPkg)
 		if err != nil {
 			return nil, false, err
 		}
@@ -261,22 +283,58 @@ func generateTypeSchema(expr ast.Expr, file *ast.File) (*schema.JSON, bool, erro
 			Items: itemSchema,
 		}, false, nil
 	case *ast.MapType:
-		// Map type - in JSON this is an object with additional properties
-		// For now, we'll treat maps as generic objects
-		// TODO: We could potentially use patternProperties to be more specific about value types
+		// Map type - for now, we'll treat maps as generic objects
+		// TODO: We could potentially create a custom schema structure that preserves value type info
 		return &schema.JSON{
 			Type:                 schema.Object,
 			AdditionalProperties: boolPtr(true),
 		}, false, nil
 	case *ast.StructType:
 		// Inline struct
-		return generateStructTypeSchema(t, file)
+		return generateStructTypeSchema(t, file, docPkg, "")
 	case *ast.InterfaceType:
 		// Interface type - treat as any
 		return &schema.JSON{}, false, nil
 	default:
 		// Unknown type - return a generic object schema
 		return &schema.JSON{Type: schema.Object}, false, nil
+	}
+}
+
+func generateStdlibTypeSchema(qualifiedType string) *schema.JSON {
+	switch qualifiedType {
+	case "time.Time":
+		// RFC3339 format for JSON - add description since we can't use format field
+		return &schema.JSON{
+			Type:        schema.String,
+			Description: "RFC3339 date-time string",
+		}
+	case "time.Duration":
+		// Duration as string (e.g., "5s", "1h30m")
+		return &schema.JSON{
+			Type:        schema.String,
+			Description: "Duration string (e.g., '5s', '1h30m')",
+		}
+	case "url.URL":
+		return &schema.JSON{
+			Type:        schema.String,
+			Description: "URL string",
+		}
+	case "uuid.UUID":
+		return &schema.JSON{
+			Type:        schema.String,
+			Description: "UUID string",
+		}
+	case "net.IP":
+		return &schema.JSON{
+			Type:        schema.String,
+			Description: "IP address (IPv4 or IPv6)",
+		}
+	case "json.RawMessage":
+		// Any valid JSON
+		return &schema.JSON{}
+	default:
+		return nil
 	}
 }
 
@@ -297,7 +355,7 @@ func generateBasicTypeSchema(typeName string) (*schema.JSON, error) {
 	}
 }
 
-func findAndGenerateStructSchema(typeName string, file *ast.File) *schema.JSON {
+func findAndGenerateStructSchema(typeName string, file *ast.File, docPkg *doc.Package) *schema.JSON {
 	var targetType *ast.TypeSpec
 	ast.Inspect(file, func(n ast.Node) bool {
 		if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
@@ -316,11 +374,11 @@ func findAndGenerateStructSchema(typeName string, file *ast.File) *schema.JSON {
 		return nil
 	}
 
-	s, _, _ := generateStructTypeSchema(structType, file)
+	s, _, _ := generateStructTypeSchema(structType, file, docPkg, typeName)
 	return s
 }
 
-func generateStructTypeSchema(structType *ast.StructType, file *ast.File) (*schema.JSON, bool, error) {
+func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg *doc.Package, typeName string) (*schema.JSON, bool, error) {
 	s := &schema.JSON{
 		Type:                 schema.Object,
 		Properties:           make(map[string]*schema.JSON),
@@ -354,9 +412,45 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File) (*sche
 			}
 
 			// Generate schema for field type
-			fieldSchema, _, err := generateTypeSchema(field.Type, file)
+			fieldSchema, _, err := generateTypeSchema(field.Type, file, docPkg)
 			if err != nil {
 				return nil, false, err
+			}
+
+			// Extract field documentation from doc.Package if available
+			if typeName != "" && docPkg != nil {
+				for _, dt := range docPkg.Types {
+					if dt.Name == typeName {
+						// Look for field documentation in the type's fields
+						for _, f := range dt.Decl.Specs {
+							if ts, ok := f.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+								if st, ok := ts.Type.(*ast.StructType); ok {
+									// Find the matching field
+									for _, docField := range st.Fields.List {
+										for _, docFieldName := range docField.Names {
+											if docFieldName.Name == fieldName {
+												// Use doc comments if available
+												if docField.Doc != nil {
+													description := extractFieldDescription(docField.Doc)
+													if description != "" {
+														fieldSchema.Description = description
+													}
+												} else if docField.Comment != nil {
+													description := extractFieldDescription(docField.Comment)
+													if description != "" {
+														fieldSchema.Description = description
+													}
+												}
+												break
+											}
+										}
+									}
+								}
+							}
+						}
+						break
+					}
+				}
 			}
 
 			s.Properties[jsonName] = fieldSchema
@@ -426,6 +520,17 @@ func generateToolDefFile(tool *MCPTool, funcName, paramTypeName, returnTypeName,
 	lowerFuncName := strings.ToLower(funcName[:1]) + funcName[1:]
 	structTypeName := fmt.Sprintf("%sToolDefType", lowerFuncName)
 
+	// Use backticks for the JSON string for better readability
+	// Only fall back to strconv.Quote if the JSON contains backticks
+	jsonString := string(jsonBytes)
+	if strings.Contains(jsonString, "`") {
+		// Rare case: JSON contains backticks, use escaped quotes
+		jsonString = strconv.Quote(jsonString)
+	} else {
+		// Normal case: use backticks for readability
+		jsonString = "`" + jsonString + "`"
+	}
+
 	var content string
 	if paramTypeName == "" {
 		// No-argument function (only context)
@@ -481,8 +586,8 @@ func %sTool(ctx context.Context, input string) string {
 }
 `, packageName,
 			structTypeName, funcName, // type comment
-			structTypeName,                            // type declaration
-			structTypeName, "`"+string(jsonBytes)+"`", // MCPJsonSchema method
+			structTypeName,             // type declaration
+			structTypeName, jsonString, // MCPJsonSchema method
 			structTypeName, tool.Name, // Name method
 			structTypeName, tool.Description, // Description method
 			funcName, funcName, funcName, structTypeName, // var declaration
@@ -550,8 +655,8 @@ func %sTool(ctx context.Context, input string) string {
 }
 `, packageName,
 			structTypeName, funcName, // type comment
-			structTypeName,                            // type declaration
-			structTypeName, "`"+string(jsonBytes)+"`", // MCPJsonSchema method
+			structTypeName,             // type declaration
+			structTypeName, jsonString, // MCPJsonSchema method
 			structTypeName, tool.Name, // Name method
 			structTypeName, tool.Description, // Description method
 			funcName, funcName, funcName, structTypeName, // var declaration
@@ -559,8 +664,16 @@ func %sTool(ctx context.Context, input string) string {
 			funcName, returnTypeName)
 	}
 
+	// Format the generated code with gofumpt
+	formatted, err := format.Source([]byte(content), format.Options{})
+	if err != nil {
+		// If formatting fails, fall back to unformatted code
+		log.Printf("Warning: gofumpt formatting failed: %v", err)
+		formatted = []byte(content)
+	}
+
 	// Write the file
-	if err := os.WriteFile(outputFile, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(outputFile, formatted, 0o644); err != nil {
 		return fmt.Errorf("writing output file: %w", err)
 	}
 
@@ -661,30 +774,13 @@ func getTypeName(expr ast.Expr) string {
 	}
 }
 
-func camelToSnake(s string) string {
-	var result []byte
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			// Add underscore before uppercase letter (except first char)
-			result = append(result, '_')
-		}
-		// Convert to lowercase
-		if r >= 'A' && r <= 'Z' {
-			result = append(result, byte(r-'A'+'a'))
-		} else {
-			result = append(result, byte(r))
-		}
-	}
-	return string(result)
-}
-
 func boolPtr(b bool) *bool {
 	return &b
 }
 
-func extractDescription(fn *ast.FuncDecl, funcName string) string {
+func extractDescriptionFromAST(fn *ast.FuncDecl) string {
 	if fn.Doc == nil || len(fn.Doc.List) == 0 {
-		return fmt.Sprintf("Function %s", funcName)
+		return fmt.Sprintf("Function %s", fn.Name.Name)
 	}
 
 	// Get the whole doc comment
@@ -704,23 +800,51 @@ func extractDescription(fn *ast.FuncDecl, funcName string) string {
 	}
 
 	if len(docLines) == 0 {
-		return fmt.Sprintf("Function %s", funcName)
+		return fmt.Sprintf("Function %s", fn.Name.Name)
 	}
 
 	// Join all lines
 	fullDoc := strings.Join(docLines, " ")
 
 	// If the comment starts with the function name, remove it and capitalize the next word
-	if strings.HasPrefix(fullDoc, funcName+" ") {
-		remainder := strings.TrimPrefix(fullDoc, funcName+" ")
+	if strings.HasPrefix(fullDoc, fn.Name.Name+" ") {
+		remainder := strings.TrimPrefix(fullDoc, fn.Name.Name+" ")
 		if len(remainder) > 0 {
 			// Capitalize the first letter
 			fullDoc = strings.ToUpper(remainder[:1]) + remainder[1:]
 		}
-	} else if fullDoc == "" || fullDoc == funcName {
+	} else if fullDoc == "" || fullDoc == fn.Name.Name {
 		// If just the function name or empty, use default
-		return fmt.Sprintf("Function %s", funcName)
+		return fmt.Sprintf("Function %s", fn.Name.Name)
 	}
 
 	return fullDoc
+}
+
+func extractFieldDescription(commentGroup *ast.CommentGroup) string {
+	if commentGroup == nil || len(commentGroup.List) == 0 {
+		return ""
+	}
+
+	var docLines []string
+	for _, comment := range commentGroup.List {
+		text := comment.Text
+		// Remove the comment prefix (// or /*)
+		if strings.HasPrefix(text, "//") {
+			text = strings.TrimSpace(strings.TrimPrefix(text, "//"))
+		} else if strings.HasPrefix(text, "/*") {
+			text = strings.TrimSpace(strings.TrimPrefix(text, "/*"))
+			text = strings.TrimSuffix(text, "*/")
+		}
+		if text != "" {
+			docLines = append(docLines, text)
+		}
+	}
+
+	if len(docLines) == 0 {
+		return ""
+	}
+
+	// Join all lines with a space
+	return strings.Join(docLines, " ")
 }
