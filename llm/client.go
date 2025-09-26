@@ -16,7 +16,8 @@ import (
 type Config struct {
 	Model        string
 	APIKey       string
-	BaseURL      string // Optional base URL override for the API endpoint
+	BaseURL      string            // Optional base URL override for the API endpoint
+	Headers      map[string]string // Optional custom HTTP headers
 	Temperature  float64
 	MaxTokens    int
 	SystemPrompt string
@@ -61,6 +62,10 @@ func NewClient(config *Config) (chat.Client, error) {
 			opts = append(opts, openai.WithDebug(true))
 		}
 
+		if config.Headers != nil {
+			opts = append(opts, openai.WithHeaders(config.Headers))
+		}
+
 		baseURL := config.BaseURL
 		if baseURL == "" {
 			baseURL = openai.OpenAIURL
@@ -81,6 +86,10 @@ func NewClient(config *Config) (chat.Client, error) {
 		}
 		if config.Debug {
 			opts = append(opts, claude.WithDebug(true))
+		}
+
+		if config.Headers != nil {
+			opts = append(opts, claude.WithHeaders(config.Headers))
 		}
 
 		baseURL := config.BaseURL
@@ -110,6 +119,9 @@ func NewClient(config *Config) (chat.Client, error) {
 		if config.Debug {
 			opts = append(opts, gemini.WithDebug(true))
 		}
+		if config.Headers != nil {
+			opts = append(opts, gemini.WithHeaders(config.Headers))
+		}
 
 		log.Printf("Using Gemini client with model %q\n", config.Model)
 		return gemini.NewClient(apiKey, opts...)
@@ -121,6 +133,9 @@ func NewClient(config *Config) (chat.Client, error) {
 		}
 		if config.Debug {
 			opts = append(opts, openai.WithDebug(true))
+		}
+		if config.Headers != nil {
+			opts = append(opts, openai.WithHeaders(config.Headers))
 		}
 
 		baseURL := config.BaseURL
