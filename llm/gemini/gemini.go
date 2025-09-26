@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -22,6 +24,12 @@ type client struct {
 }
 
 var _ chat.Client = &client{}
+
+// generateFunctionCallID generates a unique ID for function calls
+func generateFunctionCallID() string {
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return fmt.Sprintf("gemini_%d_%d", time.Now().Unix(), rng.Intn(1000000))
+}
 
 type Option func(*client)
 
@@ -284,6 +292,10 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					}
 					// Check for function calls
 					if part.FunctionCall != nil {
+						// Generate ID if not present
+						if part.FunctionCall.ID == "" {
+							part.FunctionCall.ID = generateFunctionCallID()
+						}
 						functionCalls = append(functionCalls, part.FunctionCall)
 
 						// Emit tool call event
@@ -499,7 +511,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	for len(functionCalls) > 0 {
 		// Execute tool calls
-		functionResults, err := c.handleFunctionCalls(ctx, functionCalls)
+		functionResults, err := c.handleFunctionCalls(ctx, functionCalls, callback)
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("failed to execute function calls: %w", err)
 		}
@@ -585,6 +597,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					for _, part := range candidate.Content.Parts {
 						// Check for function calls
 						if part.FunctionCall != nil {
+							// Generate ID if not present
+							if part.FunctionCall.ID == "" {
+								part.FunctionCall.ID = generateFunctionCallID()
+							}
 							functionCalls = append(functionCalls, part.FunctionCall)
 
 							// Emit tool call event
@@ -662,7 +678,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 }
 
 // handleFunctionCalls processes function calls from the model and returns function results
-func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*genai.FunctionCall) ([]*genai.FunctionResponse, error) {
+func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*genai.FunctionCall, callback chat.StreamCallback) ([]*genai.FunctionResponse, error) {
 	if len(functionCalls) == 0 {
 		return nil, nil
 	}
@@ -686,6 +702,31 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 
 		// Execute the tool
 		resultStr, err := c.tools.Execute(ctx, fc.Name, string(argsJSON))
+
+		// Emit tool result event if callback is provided
+		if callback != nil {
+			var resultContent string
+			if err != nil {
+				resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
+			} else {
+				resultContent = resultStr
+			}
+
+			toolResultEvent := chat.StreamEvent{
+				Type: chat.StreamEventTypeToolResult,
+				ToolCalls: []chat.ToolCall{
+					{
+						ID:        fc.ID,
+						Name:      fc.Name,
+						Arguments: json.RawMessage(resultContent),
+					},
+				},
+			}
+			if callbackErr := callback(toolResultEvent); callbackErr != nil {
+				return nil, fmt.Errorf("callback error: %w", callbackErr)
+			}
+		}
+
 		if err != nil {
 			// Tool not found or execution error, return error message
 			errorResponse := map[string]interface{}{

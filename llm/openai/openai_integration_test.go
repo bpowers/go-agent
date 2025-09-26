@@ -215,6 +215,9 @@ func TestOpenAIIntegration_ToolCallStreamEvents(t *testing.T) {
 
 			// Use the test helper for tool call stream events
 			llmtesting.TestToolCallStreamEvents(t, client)
+
+			// Test both tool call and result events
+			llmtesting.TestToolCallAndResultStreamEvents(t, client)
 		})
 	}
 }

@@ -46,6 +46,8 @@ const (
 	StreamEventTypeThinkingSummary StreamEventType = "thinking_summary"
 	// StreamEventTypeToolCall indicates a tool is being invoked.
 	StreamEventTypeToolCall StreamEventType = "tool_call"
+	// StreamEventTypeToolResult indicates the result of a tool execution.
+	StreamEventTypeToolResult StreamEventType = "tool_result"
 	// StreamEventTypeDone indicates the stream has completed.
 	StreamEventTypeDone StreamEventType = "done"
 )

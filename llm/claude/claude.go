@@ -572,7 +572,7 @@ func (c *chatClient) mcpToClaudeTool(mcpDef chat.ToolDef) (anthropic.ToolUnionPa
 }
 
 // handleToolCalls processes tool calls from the model and returns tool result content blocks
-func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.ToolUseBlock) ([]anthropic.ContentBlockParamUnion, error) {
+func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.ToolUseBlock, callback chat.StreamCallback) ([]anthropic.ContentBlockParamUnion, error) {
 	if len(toolCalls) == 0 {
 		return nil, nil
 	}
@@ -582,6 +582,31 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 	for _, toolCall := range toolCalls {
 		argsStr := string(toolCall.Input)
 		result, err := c.tools.Execute(ctx, toolCall.Name, argsStr)
+
+		// Emit tool result event if callback is provided
+		if callback != nil {
+			var resultContent string
+			if err != nil {
+				resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
+			} else {
+				resultContent = result
+			}
+
+			toolResultEvent := chat.StreamEvent{
+				Type: chat.StreamEventTypeToolResult,
+				ToolCalls: []chat.ToolCall{
+					{
+						ID:        toolCall.ID,
+						Name:      toolCall.Name,
+						Arguments: json.RawMessage(resultContent),
+					},
+				},
+			}
+			if callbackErr := callback(toolResultEvent); callbackErr != nil {
+				return nil, fmt.Errorf("callback error: %w", callbackErr)
+			}
+		}
+
 		if err != nil {
 			// Tool not found or execution error, return error message
 			errorResult := anthropic.NewToolResultBlock(toolCall.ID, fmt.Sprintf(`{"error": "%s"}`, err.Error()), true)
@@ -651,7 +676,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			}
 		}
 		// Execute tool calls
-		toolResults, err := c.handleToolCalls(ctx, toolCalls)
+		toolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("failed to execute tool calls: %w", err)
 		}

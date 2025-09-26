@@ -2,6 +2,8 @@ package testing
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -343,6 +345,152 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 
 	t.Logf("Tool call streaming test passed: received %d tool call events and %d content events",
 		len(toolCallEvents), len(contentEvents))
+}
+
+// TestToolCallAndResultStreamEvents tests that both tool call and tool result events are emitted during streaming
+func TestToolCallAndResultStreamEvents(t testing.TB, client chat.Client) {
+	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
+
+	// Register a simple echo tool that returns a specific result
+	toolDef := &testToolDef{
+		name:        "echo",
+		description: "Echo back the provided message",
+		jsonSchema: `{
+			"name": "echo",
+			"description": "Echo back the provided message",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"message": {
+						"type": "string",
+						"description": "The message to echo back"
+					}
+				},
+				"required": ["message"]
+			}
+		}`,
+	}
+
+	toolCalled := false
+	err := chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {
+		toolCalled = true
+		// Parse the input to get the message
+		var args struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(input), &args); err != nil {
+			return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
+		}
+		return fmt.Sprintf("Echo: %s", args.Message)
+	})
+	if err != nil {
+		t.Fatalf("Failed to register tool: %v", err)
+	}
+
+	// Track events during streaming
+	var toolCallEvents []chat.StreamEvent
+	var toolResultEvents []chat.StreamEvent
+	var contentEvents []chat.StreamEvent
+	toolCallIDs := make(map[string]bool)
+
+	_, err = chatSession.Message(
+		context.Background(),
+		chat.Message{
+			Role:    chat.UserRole,
+			Content: "Please use the echo tool to echo the message 'Hello World'",
+		},
+		chat.WithStreamingCb(func(event chat.StreamEvent) error {
+			switch event.Type {
+			case chat.StreamEventTypeToolCall:
+				toolCallEvents = append(toolCallEvents, event)
+				// Track tool call IDs
+				for _, tc := range event.ToolCalls {
+					if tc.ID != "" {
+						toolCallIDs[tc.ID] = true
+					}
+				}
+				t.Logf("Tool call event: %+v", event)
+			case chat.StreamEventTypeToolResult:
+				toolResultEvents = append(toolResultEvents, event)
+				t.Logf("Tool result event: %+v", event)
+			case chat.StreamEventTypeContent:
+				contentEvents = append(contentEvents, event)
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Failed to get streaming response: %v", err)
+	}
+
+	// Verify tool was actually called
+	if !toolCalled {
+		t.Error("Expected tool to be called, but it wasn't")
+	}
+
+	// Verify we received at least one tool call event
+	if len(toolCallEvents) == 0 {
+		t.Error("Expected at least one tool call event during streaming")
+	}
+
+	// Verify we received at least one tool result event
+	if len(toolResultEvents) == 0 {
+		t.Error("Expected at least one tool result event during streaming")
+	}
+
+	// Verify tool call events contain proper information
+	for _, event := range toolCallEvents {
+		if len(event.ToolCalls) == 0 {
+			t.Error("Tool call event has no ToolCalls")
+		}
+		for _, tc := range event.ToolCalls {
+			if tc.Name == "" {
+				t.Error("Tool call has no name")
+			}
+			if tc.ID == "" {
+				t.Error("Tool call has no ID")
+			}
+			t.Logf("Tool invoked: %s (ID: %s) with args: %s", tc.Name, tc.ID, string(tc.Arguments))
+		}
+	}
+
+	// Verify tool result events match the tool calls
+	for _, event := range toolResultEvents {
+		if len(event.ToolCalls) == 0 {
+			t.Error("Tool result event has no ToolCalls")
+		}
+		for _, tc := range event.ToolCalls {
+			if tc.ID == "" {
+				t.Error("Tool result has no ID")
+			}
+			// Verify the result ID matches a previous tool call
+			if !toolCallIDs[tc.ID] {
+				t.Errorf("Tool result ID %s doesn't match any tool call", tc.ID)
+			}
+			// The result should be in the Arguments field (reusing the structure)
+			resultStr := string(tc.Arguments)
+			t.Logf("Tool result for ID %s: %s", tc.ID, resultStr)
+
+			// Verify the result contains expected output
+			if !strings.Contains(resultStr, "Echo:") && !strings.Contains(resultStr, "error") {
+				t.Errorf("Tool result doesn't contain expected output or error: %s", resultStr)
+			}
+		}
+	}
+
+	// Verify we still got content events
+	if len(contentEvents) == 0 {
+		t.Error("Expected content events in addition to tool events")
+	}
+
+	// Verify the number of tool calls matches tool results
+	if len(toolCallEvents) != len(toolResultEvents) {
+		t.Errorf("Mismatch: %d tool call events but %d tool result events",
+			len(toolCallEvents), len(toolResultEvents))
+	}
+
+	t.Logf("Tool call and result streaming test passed: received %d tool call events, %d tool result events, and %d content events",
+		len(toolCallEvents), len(toolResultEvents), len(contentEvents))
 }
 
 // BaseURLValidator is an interface that clients can implement to expose their base URL for testing

@@ -273,6 +273,17 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 						}
 					}
 				}
+			case chat.StreamEventTypeToolResult:
+				// Display tool result information
+				if len(event.ToolCalls) > 0 {
+					for _, tc := range event.ToolCalls {
+						_, _ = fmt.Fprintf(output, "✅ Tool result for %s:\n", tc.Name)
+						if config.Debug && len(tc.Arguments) > 0 {
+							// Arguments field contains the result in this case
+							_, _ = fmt.Fprintf(output, "   Result: %s\n", string(tc.Arguments))
+						}
+					}
+				}
 			case chat.StreamEventTypeContent:
 				// If we were thinking and now getting content without a summary event,
 				// add delineation
