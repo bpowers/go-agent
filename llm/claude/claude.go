@@ -326,24 +326,9 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
 				}
 
-				// Emit tool call event
-				if callback != nil {
-					toolCallEvent := chat.StreamEvent{
-						Type: chat.StreamEventTypeToolCall,
-						ToolCalls: []chat.ToolCall{
-							{
-								ID:        event.ContentBlock.ID,
-								Name:      event.ContentBlock.Name,
-								Arguments: json.RawMessage("{}"), // Initial empty arguments
-							},
-						},
-					}
-					if err := callback(toolCallEvent); err != nil {
-						return chat.Message{}, err
-					}
-				}
+				// Don't emit tool call event yet - wait for arguments to be accumulated
 				if event.ContentBlock.Input != nil {
-					// Input is provided in the start event - Claude usually provides complete input here
+					// Input is sometimes provided in the start event
 					inputBytes, err := json.Marshal(event.ContentBlock.Input)
 					if err == nil {
 						currentToolCall.Input = json.RawMessage(inputBytes)
@@ -440,6 +425,24 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						log.Printf("[Claude] Set tool input from deltas: %s\n", toolCallArgs.String())
 					}
 				}
+
+				// Now emit the tool call event with complete arguments
+				if callback != nil {
+					toolCallEvent := chat.StreamEvent{
+						Type: chat.StreamEventTypeToolCall,
+						ToolCalls: []chat.ToolCall{
+							{
+								ID:        currentToolCall.ID,
+								Name:      currentToolCall.Name,
+								Arguments: currentToolCall.Input,
+							},
+						},
+					}
+					if err := callback(toolCallEvent); err != nil {
+						return chat.Message{}, err
+					}
+				}
+
 				if c.debug {
 					log.Printf("[Claude] Finalizing tool call: ID=%s, Name=%s, Input=%s\n",
 						currentToolCall.ID, currentToolCall.Name, string(currentToolCall.Input))
@@ -854,24 +857,9 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 							event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
 					}
 
-					// Emit tool call event
-					if callback != nil {
-						toolCallEvent := chat.StreamEvent{
-							Type: chat.StreamEventTypeToolCall,
-							ToolCalls: []chat.ToolCall{
-								{
-									ID:        event.ContentBlock.ID,
-									Name:      event.ContentBlock.Name,
-									Arguments: json.RawMessage("{}"), // Initial empty arguments
-								},
-							},
-						}
-						if err := callback(toolCallEvent); err != nil {
-							return chat.Message{}, err
-						}
-					}
+					// Don't emit tool call event yet - wait for arguments to be accumulated
 					if event.ContentBlock.Input != nil {
-						// Input is provided in the start event - Claude usually provides complete input here
+						// Input is sometimes provided in the start event
 						inputBytes, err := json.Marshal(event.ContentBlock.Input)
 						if err == nil {
 							currentToolCall.Input = json.RawMessage(inputBytes)
@@ -913,6 +901,24 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 							log.Printf("[Claude] Follow-up set tool input from deltas: %s\n", toolCallArgs.String())
 						}
 					}
+
+					// Now emit the tool call event with complete arguments
+					if callback != nil {
+						toolCallEvent := chat.StreamEvent{
+							Type: chat.StreamEventTypeToolCall,
+							ToolCalls: []chat.ToolCall{
+								{
+									ID:        currentToolCall.ID,
+									Name:      currentToolCall.Name,
+									Arguments: currentToolCall.Input,
+								},
+							},
+						}
+						if err := callback(toolCallEvent); err != nil {
+							return chat.Message{}, err
+						}
+					}
+
 					if c.debug {
 						log.Printf("[Claude] Follow-up finalizing tool call: ID=%s, Name=%s, Input=%s\n",
 							currentToolCall.ID, currentToolCall.Name, string(currentToolCall.Input))
