@@ -386,11 +386,13 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg
 	}
 
 	var required []string
+	// Track field names to handle shadowing - outer struct fields override embedded ones
+	fieldNames := make(map[string]bool)
 
+	// First pass: process regular (non-embedded) fields
 	for _, field := range structType.Fields.List {
 		if len(field.Names) == 0 {
-			// Anonymous field (embedded struct) - skip for now
-			continue
+			continue // Skip anonymous fields in first pass
 		}
 
 		for _, name := range field.Names {
@@ -454,10 +456,57 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg
 			}
 
 			s.Properties[jsonName] = fieldSchema
+			fieldNames[jsonName] = true
 
 			// For OpenAI compatibility, ALL fields must be required
 			required = append(required, jsonName)
 		}
+	}
+
+	// Second pass: process embedded fields
+	for _, field := range structType.Fields.List {
+		if len(field.Names) != 0 {
+			continue // Skip regular fields in second pass
+		}
+
+		// Anonymous field (embedded struct)
+		embeddedType := field.Type
+
+		// Handle pointer to struct
+		if starExpr, ok := embeddedType.(*ast.StarExpr); ok {
+			embeddedType = starExpr.X
+		}
+
+		// Get the embedded type name
+		var embeddedTypeName string
+		if ident, ok := embeddedType.(*ast.Ident); ok {
+			embeddedTypeName = ident.Name
+
+			// Skip unexported embedded types
+			if !ast.IsExported(embeddedTypeName) {
+				continue
+			}
+
+			// Find and process the embedded struct
+			embeddedStruct := findAndGetStructType(embeddedTypeName, file)
+			if embeddedStruct != nil {
+				// Recursively get the schema for the embedded struct
+				embeddedSchema, _, err := generateStructTypeSchema(embeddedStruct, file, docPkg, embeddedTypeName)
+				if err != nil {
+					return nil, false, err
+				}
+
+				// Merge embedded fields into parent, skipping fields that are already defined (shadowed)
+				for propName, propSchema := range embeddedSchema.Properties {
+					if !fieldNames[propName] {
+						s.Properties[propName] = propSchema
+						fieldNames[propName] = true
+						required = append(required, propName)
+					}
+				}
+			}
+		}
+		// TODO: Handle inline struct type embedding if needed
 	}
 
 	if len(required) > 0 {
@@ -465,6 +514,21 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg
 	}
 
 	return s, false, nil
+}
+
+// findAndGetStructType finds a struct type definition by name in the file
+func findAndGetStructType(typeName string, file *ast.File) *ast.StructType {
+	var result *ast.StructType
+	ast.Inspect(file, func(n ast.Node) bool {
+		if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+			if st, ok := ts.Type.(*ast.StructType); ok {
+				result = st
+				return false
+			}
+		}
+		return true
+	})
+	return result
 }
 
 func parseJSONTag(tag *ast.BasicLit) (name string, omitempty bool) {

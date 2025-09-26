@@ -262,6 +262,267 @@ func ReadDir(ctx context.Context) ReadDirResult {
 				}
 			},
 		},
+		{
+			name: "simple embedded struct",
+			code: `package test
+import "context"
+type BaseFields struct {
+	ID   string
+	Name string
+}
+type EmbedRequest struct {
+	BaseFields
+	Age int
+}
+type EmbedResult struct {
+	Value string
+	Error *string
+}
+func EmbedFunc(ctx context.Context, req EmbedRequest) EmbedResult { return EmbedResult{Value: req.Name} }`,
+			funcName: "EmbedFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if s.Type != schema.Object {
+					t.Errorf("expected object type, got %v", s.Type)
+				}
+				if len(s.Properties) != 3 {
+					t.Errorf("expected 3 properties (ID, Name from embedded, Age from outer), got %d", len(s.Properties))
+				}
+				if s.Properties["ID"] == nil {
+					t.Error("expected 'ID' property from embedded struct")
+				}
+				if s.Properties["ID"].Type != schema.String {
+					t.Errorf("expected string type for ID")
+				}
+				if s.Properties["Name"] == nil {
+					t.Error("expected 'Name' property from embedded struct")
+				}
+				if s.Properties["Age"] == nil {
+					t.Error("expected 'Age' property from outer struct")
+				}
+				if len(s.Required) != 3 {
+					t.Errorf("expected 3 required fields, got %d", len(s.Required))
+				}
+			},
+		},
+		{
+			name: "embedded struct with json tags",
+			code: `package test
+import "context"
+type BaseWithTags struct {
+	UserID   string ` + "`json:\"user_id\"`" + `
+	UserName string ` + "`json:\"user_name\"`" + `
+}
+type EmbedTagRequest struct {
+	BaseWithTags
+	UserAge int ` + "`json:\"user_age\"`" + `
+}
+type EmbedTagResult struct {
+	Value string
+	Error *string
+}
+func EmbedTagFunc(ctx context.Context, req EmbedTagRequest) EmbedTagResult { return EmbedTagResult{Value: req.UserName} }`,
+			funcName: "EmbedTagFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if len(s.Properties) != 3 {
+					t.Errorf("expected 3 properties, got %d", len(s.Properties))
+				}
+				if s.Properties["user_id"] == nil {
+					t.Error("expected 'user_id' property from embedded struct with json tag")
+				}
+				if s.Properties["user_name"] == nil {
+					t.Error("expected 'user_name' property from embedded struct with json tag")
+				}
+				if s.Properties["user_age"] == nil {
+					t.Error("expected 'user_age' property from outer struct")
+				}
+				if s.Properties["UserID"] != nil {
+					t.Error("should not have UserID property (renamed by json tag)")
+				}
+				if s.Properties["UserName"] != nil {
+					t.Error("should not have UserName property (renamed by json tag)")
+				}
+			},
+		},
+		{
+			name: "field shadowing in embedded struct",
+			code: `package test
+import "context"
+type ShadowBase struct {
+	Name  string
+	Email string
+}
+type ShadowRequest struct {
+	ShadowBase
+	Name string  // This shadows the embedded Name field
+	Age  int
+}
+type ShadowResult struct {
+	Value string
+	Error *string
+}
+func ShadowFunc(ctx context.Context, req ShadowRequest) ShadowResult { return ShadowResult{Value: req.Name} }`,
+			funcName: "ShadowFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if len(s.Properties) != 3 {
+					t.Errorf("expected 3 properties (Name from outer, Email from embedded, Age), got %d", len(s.Properties))
+				}
+				if s.Properties["Name"] == nil {
+					t.Error("expected 'Name' property")
+				}
+				if s.Properties["Email"] == nil {
+					t.Error("expected 'Email' property from embedded struct")
+				}
+				if s.Properties["Age"] == nil {
+					t.Error("expected 'Age' property")
+				}
+			},
+		},
+		{
+			name: "multiple embedded structs",
+			code: `package test
+import "context"
+type Timestamps struct {
+	CreatedAt string ` + "`json:\"created_at\"`" + `
+	UpdatedAt string ` + "`json:\"updated_at\"`" + `
+}
+type Metadata struct {
+	Version int    ` + "`json:\"version\"`" + `
+	Author  string ` + "`json:\"author\"`" + `
+}
+type MultiEmbedRequest struct {
+	Timestamps
+	Metadata
+	Title string ` + "`json:\"title\"`" + `
+}
+type MultiEmbedResult struct {
+	Value string
+	Error *string
+}
+func MultiEmbedFunc(ctx context.Context, req MultiEmbedRequest) MultiEmbedResult { return MultiEmbedResult{Value: req.Title} }`,
+			funcName: "MultiEmbedFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if len(s.Properties) != 5 {
+					t.Errorf("expected 5 properties, got %d", len(s.Properties))
+				}
+				if s.Properties["created_at"] == nil {
+					t.Error("expected 'created_at' from Timestamps")
+				}
+				if s.Properties["updated_at"] == nil {
+					t.Error("expected 'updated_at' from Timestamps")
+				}
+				if s.Properties["version"] == nil {
+					t.Error("expected 'version' from Metadata")
+				}
+				if s.Properties["author"] == nil {
+					t.Error("expected 'author' from Metadata")
+				}
+				if s.Properties["title"] == nil {
+					t.Error("expected 'title' from outer struct")
+				}
+			},
+		},
+		{
+			name: "pointer to embedded struct",
+			code: `package test
+import "context"
+type PtrBase struct {
+	BaseID   string
+	BaseName string
+}
+type PtrEmbedRequest struct {
+	*PtrBase
+	Extra string
+}
+type PtrEmbedResult struct {
+	Value string
+	Error *string
+}
+func PtrEmbedFunc(ctx context.Context, req PtrEmbedRequest) PtrEmbedResult { return PtrEmbedResult{Value: req.BaseName} }`,
+			funcName: "PtrEmbedFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if len(s.Properties) != 3 {
+					t.Errorf("expected 3 properties, got %d", len(s.Properties))
+				}
+				if s.Properties["BaseID"] == nil {
+					t.Error("expected 'BaseID' from embedded pointer struct")
+				}
+				if s.Properties["BaseName"] == nil {
+					t.Error("expected 'BaseName' from embedded pointer struct")
+				}
+				if s.Properties["Extra"] == nil {
+					t.Error("expected 'Extra' from outer struct")
+				}
+			},
+		},
+		{
+			name: "nested embedded structs",
+			code: `package test
+import "context"
+type DeepBase struct {
+	DeepField string
+}
+type MiddleLayer struct {
+	DeepBase
+	MiddleField string
+}
+type NestedEmbedRequest struct {
+	MiddleLayer
+	TopField string
+}
+type NestedEmbedResult struct {
+	Value string
+	Error *string
+}
+func NestedEmbedFunc(ctx context.Context, req NestedEmbedRequest) NestedEmbedResult { return NestedEmbedResult{Value: req.DeepField} }`,
+			funcName: "NestedEmbedFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if len(s.Properties) != 3 {
+					t.Errorf("expected 3 properties, got %d", len(s.Properties))
+				}
+				if s.Properties["DeepField"] == nil {
+					t.Error("expected 'DeepField' from nested embedded struct")
+				}
+				if s.Properties["MiddleField"] == nil {
+					t.Error("expected 'MiddleField' from middle embedded struct")
+				}
+				if s.Properties["TopField"] == nil {
+					t.Error("expected 'TopField' from top struct")
+				}
+			},
+		},
+		{
+			name: "unexported embedded struct fields are skipped",
+			code: `package test
+import "context"
+type UnexportedBase struct {
+	PublicField  string
+	privateField string
+}
+type UnexportedEmbedRequest struct {
+	UnexportedBase
+	OtherField string
+}
+type UnexportedEmbedResult struct {
+	Value string
+	Error *string
+}
+func UnexportedEmbedFunc(ctx context.Context, req UnexportedEmbedRequest) UnexportedEmbedResult { return UnexportedEmbedResult{Value: req.PublicField} }`,
+			funcName: "UnexportedEmbedFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if len(s.Properties) != 2 {
+					t.Errorf("expected 2 properties (only exported fields), got %d", len(s.Properties))
+				}
+				if s.Properties["PublicField"] == nil {
+					t.Error("expected 'PublicField' from embedded struct")
+				}
+				if s.Properties["OtherField"] == nil {
+					t.Error("expected 'OtherField' from outer struct")
+				}
+				if s.Properties["privateField"] != nil {
+					t.Error("should not have 'privateField' (unexported)")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
