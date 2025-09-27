@@ -1036,6 +1036,13 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			msgs = append(msgs, toolResults...)
 		}
 
+		// Check for system reminder after tool execution
+		if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
+			if reminder := reminderFunc(); reminder != "" {
+				msgs = append(msgs, openai.SystemMessage(reminder))
+			}
+		}
+
 		// Make another API call with tool results
 		followUpParams := openai.ChatCompletionNewParams{
 			Messages: msgs,

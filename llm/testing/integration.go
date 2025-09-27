@@ -664,3 +664,159 @@ func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 
 	t.Log("Empty tool results handling test passed")
 }
+
+// TestSystemReminderWithToolCalls tests that system reminders are properly injected after tool execution
+func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
+	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
+
+	// Track tool execution
+	toolExecutionCount := 0
+	var lastToolInput string
+
+	// Register a simple calculation tool
+	calcTool := &testToolDef{
+		name:        "add_numbers",
+		description: "Add two numbers together",
+		jsonSchema: `{
+			"name": "add_numbers",
+			"description": "Add two numbers together",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"a": {"type": "number"},
+					"b": {"type": "number"}
+				},
+				"required": ["a", "b"]
+			}
+		}`,
+	}
+
+	err := chatSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+		toolExecutionCount++
+		lastToolInput = input
+
+		// Parse input and calculate result
+		var params struct {
+			A float64 `json:"a"`
+			B float64 `json:"b"`
+		}
+		if err := json.Unmarshal([]byte(input), &params); err != nil {
+			return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
+		}
+		result := params.A + params.B
+		return fmt.Sprintf(`{"result": %v}`, result)
+	})
+	if err != nil {
+		t.Fatalf("Failed to register calculation tool: %v", err)
+	}
+
+	// Create context with system reminder that executes after tools
+	ctx := chat.WithSystemReminder(context.Background(), func() string {
+		if toolExecutionCount > 0 {
+			return fmt.Sprintf("<system-reminder>Tool 'add_numbers' was executed %d times. Last input: %s. Please mention this in your response.</system-reminder>",
+				toolExecutionCount, lastToolInput)
+		}
+		return ""
+	})
+
+	// Test with a message that should trigger tool use
+	response, err := chatSession.Message(
+		ctx,
+		chat.Message{
+			Role:    chat.UserRole,
+			Content: "Please add 42 and 58 for me.",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Failed to get response with system reminder: %v", err)
+	}
+
+	// Verify we got a response
+	if response.Content == "" {
+		t.Error("Expected non-empty response content")
+	}
+
+	// Verify the tool was called
+	if toolExecutionCount == 0 {
+		t.Error("Expected tool to be called, but it wasn't")
+	}
+
+	// The response should contain the result (100)
+	if !strings.Contains(response.Content, "100") {
+		t.Error("Expected response to contain the calculation result '100'")
+	}
+
+	t.Logf("Tool executed %d times, response length: %d chars", toolExecutionCount, len(response.Content))
+
+	// Test with streaming to ensure reminders work with streaming too
+	streamingSession := client.NewChat("You are a helpful assistant with access to tools.")
+
+	// Reset counters for streaming test
+	toolExecutionCount = 0
+	streamToolCalled := false
+
+	err = streamingSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+		toolExecutionCount++
+		streamToolCalled = true
+		lastToolInput = input
+
+		// Parse and calculate
+		var params struct {
+			A float64 `json:"a"`
+			B float64 `json:"b"`
+		}
+		if err := json.Unmarshal([]byte(input), &params); err != nil {
+			return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
+		}
+		result := params.A + params.B
+		return fmt.Sprintf(`{"result": %v}`, result)
+	})
+	if err != nil {
+		t.Fatalf("Failed to register calculation tool for streaming: %v", err)
+	}
+
+	// Create context with system reminder for streaming
+	streamCtx := chat.WithSystemReminder(context.Background(), func() string {
+		if streamToolCalled {
+			return "<system-reminder>Streaming mode: Tool was called successfully.</system-reminder>"
+		}
+		return ""
+	})
+
+	var streamedContent strings.Builder
+	streamCallback := func(event chat.StreamEvent) error {
+		if event.Type == chat.StreamEventTypeContent && event.Content != "" {
+			streamedContent.WriteString(event.Content)
+		}
+		return nil
+	}
+
+	// Test with streaming
+	streamResponse, err := streamingSession.Message(
+		streamCtx,
+		chat.Message{
+			Role:    chat.UserRole,
+			Content: "Calculate 15 plus 25 for me.",
+		},
+		chat.WithStreamingCb(streamCallback),
+	)
+	if err != nil {
+		t.Fatalf("Failed to get streaming response with system reminder: %v", err)
+	}
+
+	// Verify streaming worked
+	if streamResponse.Content == "" {
+		t.Error("Expected non-empty response content from streaming")
+	}
+
+	if !streamToolCalled {
+		t.Error("Expected tool to be called during streaming")
+	}
+
+	// The response should contain the result (40)
+	if !strings.Contains(streamResponse.Content, "40") {
+		t.Error("Expected streaming response to contain the calculation result '40'")
+	}
+
+	t.Log("System reminder test passed for both regular and streaming modes")
+}

@@ -245,6 +245,18 @@ func TestClaudeIntegration_SimpleToolCall(t *testing.T) {
 	t.Logf("Response: %s", response.Content)
 }
 
+func TestClaudeIntegration_SystemReminderWithToolCalls(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err, "Failed to create Claude client")
+	require.NotNil(t, client)
+
+	// Use the test helper for system reminder with tool calls
+	llmtesting.TestSystemReminderWithToolCalls(t, client)
+}
+
 func TestClaudeIntegration_MaxTokensByModel(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

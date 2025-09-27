@@ -552,6 +552,18 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			})
 		}
 
+		// Check for system reminder after tool execution
+		if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
+			if reminder := reminderFunc(); reminder != "" {
+				msgs = append(msgs, &genai.Content{
+					Role: "user",
+					Parts: []*genai.Part{
+						{Text: reminder},
+					},
+				})
+			}
+		}
+
 		// Make another API call with tool results
 		followUpConfig := &genai.GenerateContentConfig{}
 

@@ -806,13 +806,26 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Add system prompt if present
+		var systemBlocks []anthropic.TextBlockParam
 		if systemPrompt != "" {
-			followUpParams.System = []anthropic.TextBlockParam{
-				{
-					Text: systemPrompt,
+			systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
+				Text: systemPrompt,
+				Type: "text",
+			})
+		}
+
+		// Check for system reminder after tool execution
+		if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
+			if reminder := reminderFunc(); reminder != "" {
+				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
+					Text: reminder,
 					Type: "text",
-				},
+				})
 			}
+		}
+
+		if len(systemBlocks) > 0 {
+			followUpParams.System = systemBlocks
 		}
 
 		if reqOpts.Temperature != nil {

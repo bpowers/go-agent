@@ -200,6 +200,18 @@ func TestGeminiIntegration_EmptyToolResultsHandling(t *testing.T) {
 	llmtesting.TestEmptyToolResultsHandling(t, client)
 }
 
+func TestGeminiIntegration_SystemReminderWithToolCalls(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err, "Failed to create Gemini client")
+	require.NotNil(t, client)
+
+	// Use the test helper for system reminder with tool calls
+	llmtesting.TestSystemReminderWithToolCalls(t, client)
+}
+
 func TestGeminiIntegration_MaxTokensByModel(t *testing.T) {
 	t.Parallel()
 

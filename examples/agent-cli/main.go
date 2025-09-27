@@ -37,6 +37,7 @@ type Config struct {
 	Debug            bool
 	PersistenceFile  string
 	CompactThreshold float64
+	SystemReminder   bool
 }
 
 func parseFlags() *Config {
@@ -56,6 +57,7 @@ func parseFlagsArgs(args []string) *Config {
 	fs.BoolVar(&config.Debug, "debug", false, "Enable debug output")
 	fs.StringVar(&config.PersistenceFile, "persist", "", "SQLite file for conversation persistence (empty for memory-only)")
 	fs.Float64Var(&config.CompactThreshold, "compact", 0.8, "Threshold for automatic context compaction (0.0-1.0)")
+	fs.BoolVar(&config.SystemReminder, "system-reminder", false, "Enable system reminders that track tool usage and context")
 	_ = fs.Parse(args)
 
 	return &config
@@ -117,15 +119,52 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 
 	ctx := fstools.WithTestFS(context.Background(), root.FS())
 
-	if err := session.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool); err != nil {
+	// Track tool usage if system reminders are enabled
+	var (
+		toolCallCount  int
+		filesRead      int
+		filesWritten   int
+		dirsListed     int
+		lastToolCalled string
+	)
+
+	// Wrap tool handlers to track usage
+	readDirHandler := fstools.ReadDirTool
+	readFileHandler := fstools.ReadFileTool
+	writeFileHandler := fstools.WriteFileTool
+
+	if config.SystemReminder {
+		readDirHandler = func(ctx context.Context, input string) string {
+			toolCallCount++
+			dirsListed++
+			lastToolCalled = "read_dir"
+			return fstools.ReadDirTool(ctx, input)
+		}
+
+		readFileHandler = func(ctx context.Context, input string) string {
+			toolCallCount++
+			filesRead++
+			lastToolCalled = "read_file"
+			return fstools.ReadFileTool(ctx, input)
+		}
+
+		writeFileHandler = func(ctx context.Context, input string) string {
+			toolCallCount++
+			filesWritten++
+			lastToolCalled = "write_file"
+			return fstools.WriteFileTool(ctx, input)
+		}
+	}
+
+	if err := session.RegisterTool(fstools.ReadDirToolDef, readDirHandler); err != nil {
 		return fmt.Errorf("failed to register ReadDirTool: %w", err)
 	}
 
-	if err = session.RegisterTool(fstools.ReadFileToolDef, fstools.ReadFileTool); err != nil {
+	if err = session.RegisterTool(fstools.ReadFileToolDef, readFileHandler); err != nil {
 		return fmt.Errorf("failed to register ReadFileTool: %w", err)
 	}
 
-	if err = session.RegisterTool(fstools.WriteFileToolDef, fstools.WriteFileTool); err != nil {
+	if err = session.RegisterTool(fstools.WriteFileToolDef, writeFileHandler); err != nil {
 		return fmt.Errorf("failed to register WriteFileTool: %w", err)
 	}
 
@@ -135,6 +174,9 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 	_, _ = fmt.Fprintln(output, "Chat started. Type 'exit' or 'quit' to end the conversation.")
 	_, _ = fmt.Fprintln(output, "Type your message and press Enter twice to send (or Ctrl+D on a new line).")
 	_, _ = fmt.Fprintln(output, "Commands: /status (show metrics), /help (show help)")
+	if config.SystemReminder {
+		_, _ = fmt.Fprintln(output, "System reminders: ENABLED (tracking tool usage and context)")
+	}
 	_, _ = fmt.Fprintln(output, "---")
 
 	for {
@@ -309,7 +351,46 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 
 		// Add streaming callback to the options
 		opts = append(opts, chat.WithStreamingCb(callback))
-		_, err := session.Message(ctx, userMsg, opts...)
+
+		// Add system reminder if enabled
+		messageCtx := ctx
+		if config.SystemReminder {
+			// Reset tool counts for this message
+			prevToolCount := toolCallCount
+			prevFilesRead := filesRead
+			prevFilesWritten := filesWritten
+			prevDirsListed := dirsListed
+
+			messageCtx = chat.WithSystemReminder(ctx, func() string {
+				// This function executes AFTER tools are called
+				if toolCallCount > prevToolCount {
+					var actions []string
+					if filesRead > prevFilesRead {
+						actions = append(actions, fmt.Sprintf("read %d file(s)", filesRead-prevFilesRead))
+					}
+					if filesWritten > prevFilesWritten {
+						actions = append(actions, fmt.Sprintf("wrote %d file(s)", filesWritten-prevFilesWritten))
+					}
+					if dirsListed > prevDirsListed {
+						actions = append(actions, fmt.Sprintf("listed %d director(ies)", dirsListed-prevDirsListed))
+					}
+
+					// Check context usage
+					metrics := session.Metrics()
+					contextInfo := fmt.Sprintf("Context: %.1f%% full", metrics.PercentFull*100)
+
+					if len(actions) > 0 {
+						return fmt.Sprintf("<system-reminder>Tools executed: %s. Last tool: %s. %s</system-reminder>",
+							strings.Join(actions, ", "), lastToolCalled, contextInfo)
+					}
+					return fmt.Sprintf("<system-reminder>Tool '%s' was called. %s</system-reminder>",
+						lastToolCalled, contextInfo)
+				}
+				return ""
+			})
+		}
+
+		_, err := session.Message(messageCtx, userMsg, opts...)
 		if err != nil {
 			_, _ = fmt.Fprintf(errOutput, "\nError: %v\n", err)
 			continue
