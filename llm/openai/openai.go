@@ -970,14 +970,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		msgs = append(msgs, openai.SystemMessage(systemPrompt))
 	}
 	for _, m := range history {
-		switch m.Role {
-		case chat.UserRole:
-			msgs = append(msgs, openai.UserMessage(m.Content))
-		case chat.AssistantRole:
-			msgs = append(msgs, openai.AssistantMessage(m.Content))
-		default:
-			msgs = append(msgs, openai.SystemMessage(m.Content))
-		}
+		msgs = append(msgs, openaiMessagesFromChatMessage(m)...)
 	}
 	// Add the initial user message to history
 	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
@@ -993,10 +986,30 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Execute tool calls
-		toolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
+		toolResults, chatToolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("failed to execute tool calls: %w", err)
 		}
+
+		// Persist assistant tool call message and tool results in chat state
+		chatToolCalls := make([]chat.ToolCall, len(toolCalls))
+		for i, tc := range toolCalls {
+			chatToolCalls[i] = openaiToolCallToChat(tc)
+		}
+		toolMessages := []chat.Message{
+			{
+				Role:      chat.AssistantRole,
+				ToolCalls: chatToolCalls,
+			},
+		}
+		if len(chatToolResults) > 0 {
+			toolMessages = append(toolMessages, chat.Message{
+				Role:        chat.ToolRole,
+				ToolResults: chatToolResults,
+				Content:     summarizeToolResults(chatToolResults),
+			})
+		}
+		c.state.AppendMessages(toolMessages, nil)
 
 		// Add assistant message with tool calls
 		// Convert tool calls to the proper format
@@ -1207,46 +1220,49 @@ func (c *chatClient) mcpToOpenAITool(mcpDef chat.ToolDef) (openai.ChatCompletion
 }
 
 // handleToolCalls processes tool calls from the model and returns tool results
-func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.ChatCompletionMessageToolCall, callback chat.StreamCallback) ([]openai.ChatCompletionMessageParamUnion, error) {
+func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.ChatCompletionMessageToolCall, callback chat.StreamCallback) ([]openai.ChatCompletionMessageParamUnion, []chat.ToolResult, error) {
 	if len(toolCalls) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var toolResults []openai.ChatCompletionMessageParamUnion
+	var chatResults []chat.ToolResult
 
 	for _, toolCall := range toolCalls {
 		result, err := c.tools.Execute(ctx, toolCall.Function.Name, toolCall.Function.Arguments)
 
 		// Emit tool result event if callback is provided
-		if callback != nil {
-			var resultContent string
-			if err != nil {
-				resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
-			} else {
-				resultContent = result
-			}
+		var resultContent string
+		toolResult := chat.ToolResult{
+			ToolCallID: toolCall.ID,
+			Name:       toolCall.Function.Name,
+		}
 
+		if err != nil {
+			resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
+			toolResult.Error = err.Error()
+		} else {
+			resultContent = result
+			toolResult.Content = result
+		}
+
+		if callback != nil {
 			toolResultEvent := chat.StreamEvent{
-				Type: chat.StreamEventTypeToolResult,
-				ToolCalls: []chat.ToolCall{
-					{
-						ID:        toolCall.ID,
-						Name:      toolCall.Function.Name,
-						Arguments: json.RawMessage(resultContent),
-					},
-				},
+				Type:        chat.StreamEventTypeToolResult,
+				ToolResults: []chat.ToolResult{toolResult},
 			}
 			if callbackErr := callback(toolResultEvent); callbackErr != nil {
-				return nil, fmt.Errorf("callback error: %w", callbackErr)
+				return nil, nil, fmt.Errorf("callback error: %w", callbackErr)
 			}
 		}
 
 		if err != nil {
 			// Tool not found or execution error, return error message
 			toolResults = append(toolResults, openai.ToolMessage(
-				fmt.Sprintf(`{"error": "%s"}`, err.Error()),
+				resultContent,
 				toolCall.ID,
 			))
+			chatResults = append(chatResults, toolResult)
 			continue
 		}
 
@@ -1255,9 +1271,103 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.Cha
 			result,
 			toolCall.ID,
 		))
+		chatResults = append(chatResults, toolResult)
 	}
 
-	return toolResults, nil
+	return toolResults, chatResults, nil
+}
+
+func openaiToolCallToChat(tc openai.ChatCompletionMessageToolCall) chat.ToolCall {
+	var args json.RawMessage
+	if tc.Function.Arguments != "" {
+		args = json.RawMessage(tc.Function.Arguments)
+	}
+	return chat.ToolCall{
+		ID:        tc.ID,
+		Name:      tc.Function.Name,
+		Arguments: args,
+	}
+}
+
+func openaiToolResultToMessage(tr chat.ToolResult) openai.ChatCompletionMessageParamUnion {
+	content := tr.Content
+	if tr.Error != "" {
+		payload, err := json.Marshal(map[string]string{"error": tr.Error})
+		if err == nil {
+			content = string(payload)
+		} else {
+			content = fmt.Sprintf(`{"error": "%s"}`, tr.Error)
+		}
+	}
+	if content == "" {
+		content = "{}"
+	}
+	return openai.ToolMessage(content, tr.ToolCallID)
+}
+
+func openaiMessagesFromChatMessage(m chat.Message) []openai.ChatCompletionMessageParamUnion {
+	switch m.Role {
+	case chat.UserRole:
+		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(m.Content)}
+	case chat.AssistantRole:
+		assistant := openai.ChatCompletionAssistantMessageParam{}
+		if m.Content != "" {
+			assistant.Content.OfString = param.NewOpt(m.Content)
+		}
+		if len(m.ToolCalls) > 0 {
+			assistant.ToolCalls = make([]openai.ChatCompletionMessageToolCallParam, len(m.ToolCalls))
+			for i, tc := range m.ToolCalls {
+				assistant.ToolCalls[i] = openai.ChatCompletionMessageToolCallParam{
+					ID: tc.ID,
+					Function: openai.ChatCompletionMessageToolCallFunctionParam{
+						Name:      tc.Name,
+						Arguments: string(tc.Arguments),
+					},
+				}
+			}
+		}
+		msgs := []openai.ChatCompletionMessageParamUnion{{OfAssistant: &assistant}}
+		if len(m.ToolResults) > 0 {
+			for _, tr := range m.ToolResults {
+				msgs = append(msgs, openaiToolResultToMessage(tr))
+			}
+		}
+		return msgs
+	case chat.ToolRole:
+		msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(m.ToolResults))
+		for _, tr := range m.ToolResults {
+			msgs = append(msgs, openaiToolResultToMessage(tr))
+		}
+		// Fallback if no structured tool results but content present
+		if len(msgs) == 0 && m.Content != "" {
+			msgs = append(msgs, openai.ToolMessage(m.Content, ""))
+		}
+		return msgs
+	default:
+		return nil
+	}
+}
+
+func summarizeToolResults(results []chat.ToolResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(results))
+	for _, r := range results {
+		switch {
+		case r.Error != "" && r.Name != "":
+			parts = append(parts, fmt.Sprintf("%s error: %s", r.Name, r.Error))
+		case r.Error != "":
+			parts = append(parts, fmt.Sprintf("error: %s", r.Error))
+		case r.Name != "" && r.Content != "":
+			parts = append(parts, fmt.Sprintf("%s result: %s", r.Name, r.Content))
+		case r.Content != "":
+			parts = append(parts, r.Content)
+		default:
+			parts = append(parts, r.Name)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {

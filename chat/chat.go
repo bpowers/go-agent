@@ -14,6 +14,8 @@ const (
 	UserRole Role = "user"
 	// AssistantRole identifies messages from the LLM.
 	AssistantRole Role = "assistant"
+	// ToolRole identifies messages originating from tool executions.
+	ToolRole Role = "tool"
 )
 
 // TokenUsageDetails represents detailed token usage information
@@ -105,8 +107,10 @@ type Client interface {
 
 // Message represents a message to or from an LLM.
 type Message struct {
-	Role    Role   `json:"role,omitzero"`
-	Content string `json:"content,omitzero"`
+	Role        Role         `json:"role,omitzero"`
+	Content     string       `json:"content,omitzero"`
+	ToolCalls   []ToolCall   `json:"tool_calls,omitzero"`
+	ToolResults []ToolResult `json:"tool_results,omitzero"`
 }
 
 // requestOpts is private so that Option can only be implemented by _this_ package.

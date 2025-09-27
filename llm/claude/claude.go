@@ -572,59 +572,161 @@ func (c *chatClient) mcpToClaudeTool(mcpDef chat.ToolDef) (anthropic.ToolUnionPa
 }
 
 // handleToolCalls processes tool calls from the model and returns tool result content blocks
-func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.ToolUseBlock, callback chat.StreamCallback) ([]anthropic.ContentBlockParamUnion, error) {
+func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.ToolUseBlock, callback chat.StreamCallback) ([]anthropic.ContentBlockParamUnion, []chat.ToolResult, error) {
 	if len(toolCalls) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var toolResults []anthropic.ContentBlockParamUnion
+	var chatResults []chat.ToolResult
 
 	for _, toolCall := range toolCalls {
 		argsStr := string(toolCall.Input)
 		result, err := c.tools.Execute(ctx, toolCall.Name, argsStr)
 
-		// Emit tool result event if callback is provided
-		if callback != nil {
-			var resultContent string
-			if err != nil {
-				resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
-			} else {
-				resultContent = result
-			}
+		toolResult := chat.ToolResult{
+			ToolCallID: toolCall.ID,
+			Name:       toolCall.Name,
+		}
 
+		var resultContent string
+		if err != nil {
+			resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
+			toolResult.Error = err.Error()
+		} else {
+			resultContent = result
+			toolResult.Content = result
+		}
+
+		if callback != nil {
 			toolResultEvent := chat.StreamEvent{
-				Type: chat.StreamEventTypeToolResult,
-				ToolCalls: []chat.ToolCall{
-					{
-						ID:        toolCall.ID,
-						Name:      toolCall.Name,
-						Arguments: json.RawMessage(resultContent),
-					},
-				},
+				Type:        chat.StreamEventTypeToolResult,
+				ToolResults: []chat.ToolResult{toolResult},
 			}
 			if callbackErr := callback(toolResultEvent); callbackErr != nil {
-				return nil, fmt.Errorf("callback error: %w", callbackErr)
+				return nil, nil, fmt.Errorf("callback error: %w", callbackErr)
 			}
 		}
 
 		if err != nil {
-			// Tool not found or execution error, return error message
-			errorResult := anthropic.NewToolResultBlock(toolCall.ID, fmt.Sprintf(`{"error": "%s"}`, err.Error()), true)
+			errorResult := anthropic.NewToolResultBlock(toolCall.ID, resultContent, true)
 			toolResults = append(toolResults, errorResult)
+			chatResults = append(chatResults, toolResult)
 			continue
 		}
 
 		if c.debug {
-			log.Printf("[Claude] Tool %s executed with args %s, result: %s\n",
-				toolCall.Name, argsStr, result)
+			log.Printf("[Claude] Tool %s executed with args %s, result: %s\n", toolCall.Name, argsStr, result)
 		}
 
-		// Add tool result content block
 		resultBlock := anthropic.NewToolResultBlock(toolCall.ID, result, false)
 		toolResults = append(toolResults, resultBlock)
+		chatResults = append(chatResults, toolResult)
 	}
 
-	return toolResults, nil
+	return toolResults, chatResults, nil
+}
+
+func claudeToolUseToChat(tool anthropic.ToolUseBlock) chat.ToolCall {
+	var args json.RawMessage
+	if len(tool.Input) > 0 {
+		args = append(json.RawMessage(nil), tool.Input...)
+	}
+	return chat.ToolCall{
+		ID:        tool.ID,
+		Name:      tool.Name,
+		Arguments: args,
+	}
+}
+
+func claudeToolResultBlock(tr chat.ToolResult) anthropic.ContentBlockParamUnion {
+	content := tr.Content
+	isError := false
+	if tr.Error != "" {
+		isError = true
+		if payload, err := json.Marshal(map[string]string{"error": tr.Error}); err == nil {
+			content = string(payload)
+		} else {
+			content = fmt.Sprintf(`{"error": "%s"}`, tr.Error)
+		}
+	}
+	if content == "" {
+		content = "{}"
+	}
+	return anthropic.NewToolResultBlock(tr.ToolCallID, content, isError)
+}
+
+func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
+	switch m.Role {
+	case chat.UserRole:
+		var blocks []anthropic.ContentBlockParamUnion
+		if m.Content != "" {
+			blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+		}
+		if len(blocks) == 0 {
+			return nil
+		}
+		return []anthropic.MessageParam{anthropic.NewUserMessage(blocks...)}
+	case chat.AssistantRole:
+		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
+		if m.Content != "" {
+			blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+		}
+		for _, tc := range m.ToolCalls {
+			blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
+		}
+		if len(blocks) == 0 {
+			return nil
+		}
+		messages := []anthropic.MessageParam{anthropic.NewAssistantMessage(blocks...)}
+		if len(m.ToolResults) > 0 {
+			resultBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolResults))
+			for _, tr := range m.ToolResults {
+				resultBlocks = append(resultBlocks, claudeToolResultBlock(tr))
+			}
+			messages = append(messages, anthropic.NewUserMessage(resultBlocks...))
+		}
+		return messages
+	case chat.ToolRole:
+		if len(m.ToolResults) == 0 {
+			if m.Content == "" {
+				return nil
+			}
+			return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content))}
+		}
+		resultBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolResults))
+		for _, tr := range m.ToolResults {
+			resultBlocks = append(resultBlocks, claudeToolResultBlock(tr))
+		}
+		return []anthropic.MessageParam{anthropic.NewUserMessage(resultBlocks...)}
+	default:
+		if m.Content == "" {
+			return nil
+		}
+		return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content))}
+	}
+}
+
+func summarizeToolResults(results []chat.ToolResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(results))
+	for _, r := range results {
+		switch {
+		case r.Error != "" && r.Name != "":
+			parts = append(parts, fmt.Sprintf("%s error: %s", r.Name, r.Error))
+		case r.Error != "":
+			parts = append(parts, fmt.Sprintf("error: %s", r.Error))
+		case r.Name != "" && r.Content != "":
+			parts = append(parts, fmt.Sprintf("%s result: %s", r.Name, r.Content))
+		case r.Content != "":
+			parts = append(parts, r.Content)
+		default:
+			parts = append(parts, r.Name)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // handleToolCallRounds handles potentially multiple rounds of tool calls
@@ -638,21 +740,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Add history
 	for _, m := range history {
-		switch m.Role {
-		case chat.UserRole:
-			msgs = append(msgs, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
-		case chat.AssistantRole:
-			msgs = append(msgs, anthropic.NewAssistantMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
-		default:
-			// Convert system messages to user messages for Claude
-			msgs = append(msgs, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(m.Content),
-			))
-		}
+		msgs = append(msgs, claudeMessagesFromChat(m)...)
 	}
 
 	// Add the initial user message
@@ -676,28 +764,40 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			}
 		}
 		// Execute tool calls
-		toolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
+		toolResults, chatToolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("failed to execute tool calls: %w", err)
 		}
 
-		// Create assistant message with tool calls
 		var assistantContentBlocks []anthropic.ContentBlockParamUnion
-		// Include initial text content if present
 		if initialContent != "" {
 			assistantContentBlocks = append(assistantContentBlocks, anthropic.NewTextBlock(initialContent))
-			initialContent = "" // Clear it so we don't use it again
 		}
-		for _, toolCall := range toolCalls {
+		chatToolCalls := make([]chat.ToolCall, len(toolCalls))
+		for i, toolCall := range toolCalls {
 			toolUseBlock := anthropic.NewToolUseBlock(toolCall.ID, toolCall.Input, toolCall.Name)
 			assistantContentBlocks = append(assistantContentBlocks, toolUseBlock)
+			chatToolCalls[i] = claudeToolUseToChat(toolCall)
 		}
 
-		// Add assistant message with tool calls and initial content
 		assistantMsg := anthropic.NewAssistantMessage(assistantContentBlocks...)
 		msgs = append(msgs, assistantMsg)
 
-		// Add tool results as user message
+		stateMessages := []chat.Message{{
+			Role:      chat.AssistantRole,
+			Content:   initialContent,
+			ToolCalls: chatToolCalls,
+		}}
+		if len(chatToolResults) > 0 {
+			stateMessages = append(stateMessages, chat.Message{
+				Role:        chat.ToolRole,
+				ToolResults: chatToolResults,
+				Content:     summarizeToolResults(chatToolResults),
+			})
+		}
+		c.state.AppendMessages(stateMessages, nil)
+		initialContent = ""
+
 		userMsg := anthropic.NewUserMessage(toolResults...)
 		msgs = append(msgs, userMsg)
 

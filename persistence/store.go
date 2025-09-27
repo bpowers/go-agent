@@ -11,14 +11,16 @@ import (
 
 // Record represents a conversation turn that can be persisted.
 type Record struct {
-	ID           int64     `json:"id"`
-	Role         chat.Role `json:"role"`
-	Content      string    `json:"content"`
-	Live         bool      `json:"live"`
-	Status       string    `json:"status"`        // pending, success, failed
-	InputTokens  int       `json:"input_tokens"`  // Actual tokens from LLM
-	OutputTokens int       `json:"output_tokens"` // Actual tokens from LLM
-	Timestamp    time.Time `json:"timestamp"`
+	ID           int64             `json:"id"`
+	Role         chat.Role         `json:"role"`
+	Content      string            `json:"content"`
+	ToolCalls    []chat.ToolCall   `json:"tool_calls,omitzero"`
+	ToolResults  []chat.ToolResult `json:"tool_results,omitzero"`
+	Live         bool              `json:"live"`
+	Status       string            `json:"status"`        // pending, success, failed
+	InputTokens  int               `json:"input_tokens"`  // Actual tokens from LLM
+	OutputTokens int               `json:"output_tokens"` // Actual tokens from LLM
+	Timestamp    time.Time         `json:"timestamp"`
 }
 
 // Store defines the interface for persisting session records.
@@ -81,6 +83,43 @@ type sessionData struct {
 	metrics SessionMetrics
 }
 
+func cloneToolCall(tc chat.ToolCall) chat.ToolCall {
+	copyCall := chat.ToolCall{
+		ID:   tc.ID,
+		Name: tc.Name,
+	}
+	if tc.Arguments != nil {
+		copyCall.Arguments = append([]byte(nil), tc.Arguments...)
+	}
+	return copyCall
+}
+
+func cloneToolResult(tr chat.ToolResult) chat.ToolResult {
+	return chat.ToolResult{
+		ToolCallID: tr.ToolCallID,
+		Name:       tr.Name,
+		Content:    tr.Content,
+		Error:      tr.Error,
+	}
+}
+
+func cloneRecord(r Record) Record {
+	clone := r
+	if len(r.ToolCalls) > 0 {
+		clone.ToolCalls = make([]chat.ToolCall, len(r.ToolCalls))
+		for i, tc := range r.ToolCalls {
+			clone.ToolCalls[i] = cloneToolCall(tc)
+		}
+	}
+	if len(r.ToolResults) > 0 {
+		clone.ToolResults = make([]chat.ToolResult, len(r.ToolResults))
+		for i, tr := range r.ToolResults {
+			clone.ToolResults[i] = cloneToolResult(tr)
+		}
+	}
+	return clone
+}
+
 // MemoryStore provides an in-memory implementation of Store.
 type MemoryStore struct {
 	mu       sync.Mutex
@@ -107,7 +146,7 @@ func (m *MemoryStore) AddRecord(sessionID string, record Record) (int64, error) 
 	sess := m.getOrCreateSessionLocked(sessionID)
 	record.ID = sess.nextID
 	sess.nextID++
-	sess.records = append(sess.records, record)
+	sess.records = append(sess.records, cloneRecord(record))
 	return record.ID, nil
 }
 
@@ -120,7 +159,7 @@ func (m *MemoryStore) GetRecord(sessionID string, id int64) (Record, error) {
 	// Iterate backwards since recent records are more likely to be accessed
 	for i := len(sess.records) - 1; i >= 0; i-- {
 		if sess.records[i].ID == id {
-			return sess.records[i], nil
+			return cloneRecord(sess.records[i]), nil
 		}
 	}
 	return Record{}, fmt.Errorf("record not found: %d", id)
@@ -146,7 +185,9 @@ func (m *MemoryStore) GetAllRecords(sessionID string) ([]Record, error) {
 
 	sess := m.getOrCreateSessionLocked(sessionID)
 	result := make([]Record, len(sess.records))
-	copy(result, sess.records)
+	for i, r := range sess.records {
+		result[i] = cloneRecord(r)
+	}
 	return result, nil
 }
 
@@ -159,7 +200,7 @@ func (m *MemoryStore) GetLiveRecords(sessionID string) ([]Record, error) {
 	var live []Record
 	for _, r := range sess.records {
 		if r.Live {
-			live = append(live, r)
+			live = append(live, cloneRecord(r))
 		}
 	}
 	return live, nil
@@ -174,7 +215,7 @@ func (m *MemoryStore) UpdateRecord(sessionID string, id int64, record Record) er
 	for i, r := range sess.records {
 		if r.ID == id {
 			record.ID = id // Preserve ID
-			sess.records[i] = record
+			sess.records[i] = cloneRecord(record)
 			return nil
 		}
 	}

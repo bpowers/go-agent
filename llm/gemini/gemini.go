@@ -480,22 +480,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Add history messages
 	for _, m := range history {
-		var role string
-		switch m.Role {
-		case chat.UserRole:
-			role = "user"
-		case chat.AssistantRole:
-			role = "model"
-		default:
-			continue
-		}
-
-		msgs = append(msgs, &genai.Content{
-			Role: role,
-			Parts: []*genai.Part{
-				{Text: m.Content},
-			},
-		})
+		msgs = append(msgs, geminiContentsFromChatMessage(m)...)
 	}
 
 	// Add the initial user message
@@ -511,23 +496,37 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	for len(functionCalls) > 0 {
 		// Execute tool calls
-		functionResults, err := c.handleFunctionCalls(ctx, functionCalls, callback)
+		functionResults, chatToolResults, err := c.handleFunctionCalls(ctx, functionCalls, callback)
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("failed to execute function calls: %w", err)
 		}
 
-		// Add assistant message with function calls
 		assistantParts := make([]*genai.Part, len(functionCalls))
+		chatToolCalls := make([]chat.ToolCall, len(functionCalls))
 		for i, fc := range functionCalls {
 			assistantParts[i] = &genai.Part{
 				FunctionCall: fc,
 			}
+			chatToolCalls[i] = geminiFunctionCallToChat(fc)
 		}
 
 		msgs = append(msgs, &genai.Content{
 			Role:  "model",
 			Parts: assistantParts,
 		})
+
+		stateMessages := []chat.Message{{
+			Role:      chat.AssistantRole,
+			ToolCalls: chatToolCalls,
+		}}
+		if len(chatToolResults) > 0 {
+			stateMessages = append(stateMessages, chat.Message{
+				Role:        chat.ToolRole,
+				ToolResults: chatToolResults,
+				Content:     summarizeToolResults(chatToolResults),
+			})
+		}
+		c.state.AppendMessages(stateMessages, nil)
 
 		// Add function results to messages
 		resultParts := make([]*genai.Part, len(functionResults))
@@ -677,16 +676,132 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	return chat.Message{}, fmt.Errorf("unexpected end of function call processing")
 }
 
+func geminiFunctionCallToChat(fc *genai.FunctionCall) chat.ToolCall {
+	var args json.RawMessage
+	if fc != nil && fc.Args != nil {
+		if data, err := json.Marshal(fc.Args); err == nil {
+			args = data
+		}
+	}
+	return chat.ToolCall{
+		ID:        fc.ID,
+		Name:      fc.Name,
+		Arguments: args,
+	}
+}
+
+func geminiToolResultToPart(tr chat.ToolResult) *genai.Part {
+	response := make(map[string]any)
+	if tr.Error != "" {
+		response["error"] = tr.Error
+	}
+	if tr.Content != "" {
+		if err := json.Unmarshal([]byte(tr.Content), &response); err != nil {
+			response["result"] = tr.Content
+		}
+	} else if tr.Error == "" {
+		response["result"] = ""
+	}
+	return &genai.Part{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       tr.ToolCallID,
+			Name:     tr.Name,
+			Response: response,
+		},
+	}
+}
+
+func geminiContentsFromChatMessage(m chat.Message) []*genai.Content {
+	switch m.Role {
+	case chat.UserRole:
+		if m.Content == "" {
+			return nil
+		}
+		return []*genai.Content{{
+			Role:  "user",
+			Parts: []*genai.Part{{Text: m.Content}},
+		}}
+	case chat.AssistantRole:
+		parts := make([]*genai.Part, 0, len(m.ToolCalls)+1)
+		if m.Content != "" {
+			parts = append(parts, &genai.Part{Text: m.Content})
+		}
+		for _, tc := range m.ToolCalls {
+			var args map[string]any
+			if len(tc.Arguments) > 0 {
+				if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+					args = map[string]any{"raw": string(tc.Arguments)}
+				}
+			}
+			parts = append(parts, &genai.Part{
+				FunctionCall: &genai.FunctionCall{
+					ID:   tc.ID,
+					Name: tc.Name,
+					Args: args,
+				},
+			})
+		}
+		contents := []*genai.Content{}
+		if len(parts) > 0 {
+			contents = append(contents, &genai.Content{Role: "model", Parts: parts})
+		}
+		if len(m.ToolResults) > 0 {
+			resultParts := make([]*genai.Part, 0, len(m.ToolResults))
+			for _, tr := range m.ToolResults {
+				resultParts = append(resultParts, geminiToolResultToPart(tr))
+			}
+			contents = append(contents, &genai.Content{Role: "function", Parts: resultParts})
+		}
+		return contents
+	case chat.ToolRole:
+		if len(m.ToolResults) == 0 {
+			return nil
+		}
+		resultParts := make([]*genai.Part, 0, len(m.ToolResults))
+		for _, tr := range m.ToolResults {
+			resultParts = append(resultParts, geminiToolResultToPart(tr))
+		}
+		return []*genai.Content{{Role: "function", Parts: resultParts}}
+	default:
+		if m.Content == "" {
+			return nil
+		}
+		return []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: m.Content}}}}
+	}
+}
+
+func summarizeToolResults(results []chat.ToolResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(results))
+	for _, r := range results {
+		switch {
+		case r.Error != "" && r.Name != "":
+			parts = append(parts, fmt.Sprintf("%s error: %s", r.Name, r.Error))
+		case r.Error != "":
+			parts = append(parts, fmt.Sprintf("error: %s", r.Error))
+		case r.Name != "" && r.Content != "":
+			parts = append(parts, fmt.Sprintf("%s result: %s", r.Name, r.Content))
+		case r.Content != "":
+			parts = append(parts, r.Content)
+		default:
+			parts = append(parts, r.Name)
+		}
+	}
+	return strings.Join(parts, "\\n")
+}
+
 // handleFunctionCalls processes function calls from the model and returns function results
-func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*genai.FunctionCall, callback chat.StreamCallback) ([]*genai.FunctionResponse, error) {
+func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*genai.FunctionCall, callback chat.StreamCallback) ([]*genai.FunctionResponse, []chat.ToolResult, error) {
 	if len(functionCalls) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var functionResults []*genai.FunctionResponse
+	var chatResults []chat.ToolResult
 
 	for _, fc := range functionCalls {
-		// Convert function arguments to JSON string for the handler
 		argsJSON, err := json.Marshal(fc.Args)
 		if err != nil {
 			errorResponse := map[string]interface{}{
@@ -697,38 +812,38 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 				Name:     fc.Name,
 				Response: errorResponse,
 			})
+			chatResults = append(chatResults, chat.ToolResult{
+				ToolCallID: fc.ID,
+				Name:       fc.Name,
+				Error:      fmt.Sprintf("Failed to marshal function arguments: %v", err),
+			})
 			continue
 		}
 
-		// Execute the tool
 		resultStr, err := c.tools.Execute(ctx, fc.Name, string(argsJSON))
 
-		// Emit tool result event if callback is provided
-		if callback != nil {
-			var resultContent string
-			if err != nil {
-				resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
-			} else {
-				resultContent = resultStr
-			}
+		toolResult := chat.ToolResult{
+			ToolCallID: fc.ID,
+			Name:       fc.Name,
+		}
 
+		if err != nil {
+			toolResult.Error = err.Error()
+		} else {
+			toolResult.Content = resultStr
+		}
+
+		if callback != nil {
 			toolResultEvent := chat.StreamEvent{
-				Type: chat.StreamEventTypeToolResult,
-				ToolCalls: []chat.ToolCall{
-					{
-						ID:        fc.ID,
-						Name:      fc.Name,
-						Arguments: json.RawMessage(resultContent),
-					},
-				},
+				Type:        chat.StreamEventTypeToolResult,
+				ToolResults: []chat.ToolResult{toolResult},
 			}
 			if callbackErr := callback(toolResultEvent); callbackErr != nil {
-				return nil, fmt.Errorf("callback error: %w", callbackErr)
+				return nil, nil, fmt.Errorf("callback error: %w", callbackErr)
 			}
 		}
 
 		if err != nil {
-			// Tool not found or execution error, return error message
 			errorResponse := map[string]interface{}{
 				"error": err.Error(),
 			}
@@ -737,25 +852,24 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 				Name:     fc.Name,
 				Response: errorResponse,
 			})
+			chatResults = append(chatResults, toolResult)
 			continue
 		}
 
-		// Parse the result back into a map for the response
 		var resultMap map[string]interface{}
 		if err := json.Unmarshal([]byte(resultStr), &resultMap); err != nil {
-			// If parsing fails, treat the result as a simple string response
 			resultMap = map[string]interface{}{
 				"result": resultStr,
 			}
 		}
 
-		// Add function result
 		functionResults = append(functionResults, &genai.FunctionResponse{
 			ID:       fc.ID,
 			Name:     fc.Name,
 			Response: resultMap,
 		})
+		chatResults = append(chatResults, toolResult)
 	}
 
-	return functionResults, nil
+	return functionResults, chatResults, nil
 }

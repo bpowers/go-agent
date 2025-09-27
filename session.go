@@ -63,14 +63,16 @@ const (
 
 // Record represents a conversation turn in the session history.
 type Record struct {
-	ID           int64        `json:"id,omitzero"`
-	Role         chat.Role    `json:"role"`
-	Content      string       `json:"content"`
-	Live         bool         `json:"live"`          // In active context window
-	Status       RecordStatus `json:"status"`        // Processing status
-	InputTokens  int          `json:"input_tokens"`  // Actual tokens from LLM
-	OutputTokens int          `json:"output_tokens"` // Actual tokens from LLM
-	Timestamp    time.Time    `json:"timestamp"`
+	ID           int64             `json:"id,omitzero"`
+	Role         chat.Role         `json:"role"`
+	Content      string            `json:"content"`
+	ToolCalls    []chat.ToolCall   `json:"tool_calls,omitzero"`
+	ToolResults  []chat.ToolResult `json:"tool_results,omitzero"`
+	Live         bool              `json:"live"`          // In active context window
+	Status       RecordStatus      `json:"status"`        // Processing status
+	InputTokens  int               `json:"input_tokens"`  // Actual tokens from LLM
+	OutputTokens int               `json:"output_tokens"` // Actual tokens from LLM
+	Timestamp    time.Time         `json:"timestamp"`
 }
 
 // SessionMetrics provides usage statistics for the session.
@@ -246,11 +248,61 @@ type session struct {
 	// Tool tracking - use single mutex for simplicity as per CLAUDE.md
 	tools             map[string]registeredTool
 	lastUserMessageID int64
+	lastUserMessage   chat.Message
+	lastHistoryLen    int
 }
 
 type registeredTool struct {
 	def chat.ToolDef
 	fn  func(context.Context, string) string
+}
+
+func cloneToolCalls(calls []chat.ToolCall) []chat.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	cloned := make([]chat.ToolCall, len(calls))
+	for i, tc := range calls {
+		cloned[i] = chat.ToolCall{
+			ID:   tc.ID,
+			Name: tc.Name,
+		}
+		if tc.Arguments != nil {
+			cloned[i].Arguments = append([]byte(nil), tc.Arguments...)
+		}
+	}
+	return cloned
+}
+
+func cloneToolResults(results []chat.ToolResult) []chat.ToolResult {
+	if len(results) == 0 {
+		return nil
+	}
+	cloned := make([]chat.ToolResult, len(results))
+	for i, tr := range results {
+		cloned[i] = chat.ToolResult{
+			ToolCallID: tr.ToolCallID,
+			Name:       tr.Name,
+			Content:    tr.Content,
+			Error:      tr.Error,
+		}
+	}
+	return cloned
+}
+
+func recordFromPersistence(r persistence.Record) Record {
+	return Record{
+		ID:           r.ID,
+		Role:         chat.Role(r.Role),
+		Content:      r.Content,
+		ToolCalls:    cloneToolCalls(r.ToolCalls),
+		ToolResults:  cloneToolResults(r.ToolResults),
+		Live:         r.Live,
+		Status:       RecordStatus(r.Status),
+		InputTokens:  r.InputTokens,
+		OutputTokens: r.OutputTokens,
+		Timestamp:    r.Timestamp,
+	}
 }
 
 // SessionID implements Session
@@ -295,6 +347,10 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 
 	// Store message ID for later token update
 	s.lastUserMessageID = userMsgID
+	s.lastUserMessage = chat.Message{
+		Role:    msg.Role,
+		Content: msg.Content,
+	}
 
 	// Check if we need to compact before sending
 	if s.shouldCompactLocked() {
@@ -307,6 +363,7 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 
 	// Build the message history from live records
 	systemPrompt, msgs := s.buildChatHistoryLocked()
+	s.lastHistoryLen = len(msgs)
 
 	// Recreate chat with current history
 	tempChat := s.client.NewChat(systemPrompt, msgs...)
@@ -358,15 +415,39 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 		}
 	}
 
-	// Add response with actual output tokens
-	s.store.AddRecord(s.sessionID, persistence.Record{
-		Role:         chat.Role(response.Role),
-		Content:      response.Content,
-		Live:         true,
-		InputTokens:  0, // Input tokens are on the user message
-		OutputTokens: usage.LastMessage.OutputTokens,
-		Timestamp:    time.Now(),
-	})
+	// Persist assistant/tool responses in the order returned by the provider.
+	_, history := tempChat.History()
+	if s.lastHistoryLen > len(history) {
+		s.lastHistoryLen = len(history)
+	}
+	newMessages := history[s.lastHistoryLen:]
+	if len(newMessages) > 0 {
+		first := newMessages[0]
+		if first.Role == s.lastUserMessage.Role && first.Content == s.lastUserMessage.Content && len(first.ToolCalls) == 0 && len(first.ToolResults) == 0 {
+			newMessages = newMessages[1:]
+		}
+	}
+	now := time.Now()
+	for i, m := range newMessages {
+		rec := persistence.Record{
+			Role:        m.Role,
+			Content:     m.Content,
+			ToolCalls:   cloneToolCalls(m.ToolCalls),
+			ToolResults: cloneToolResults(m.ToolResults),
+			Live:        true,
+			Timestamp:   now.Add(time.Millisecond * time.Duration(i)),
+		}
+
+		// Assign output tokens to the final assistant message in the exchange.
+		if m.Role == chat.AssistantRole && i == len(newMessages)-1 {
+			rec.OutputTokens = usage.LastMessage.OutputTokens
+		}
+
+		if _, err := s.store.AddRecord(s.sessionID, rec); err != nil {
+			log.Printf("Warning: failed to add record for role %s: %v", rec.Role, err)
+		}
+	}
+	s.lastHistoryLen = len(history)
 
 	// Save metrics
 	s.saveMetricsLocked()
@@ -454,16 +535,7 @@ func (s *session) LiveRecords() []Record {
 	records, _ := s.store.GetLiveRecords(s.sessionID)
 	var result []Record
 	for _, r := range records {
-		result = append(result, Record{
-			ID:           r.ID,
-			Role:         chat.Role(r.Role),
-			Content:      r.Content,
-			Live:         r.Live,
-			Status:       RecordStatus(r.Status),
-			InputTokens:  r.InputTokens,
-			OutputTokens: r.OutputTokens,
-			Timestamp:    r.Timestamp,
-		})
+		result = append(result, recordFromPersistence(r))
 	}
 	return result
 }
@@ -476,16 +548,7 @@ func (s *session) TotalRecords() []Record {
 	records, _ := s.store.GetAllRecords(s.sessionID)
 	var result []Record
 	for _, r := range records {
-		result = append(result, Record{
-			ID:           r.ID,
-			Role:         chat.Role(r.Role),
-			Content:      r.Content,
-			Live:         r.Live,
-			Status:       RecordStatus(r.Status),
-			InputTokens:  r.InputTokens,
-			OutputTokens: r.OutputTokens,
-			Timestamp:    r.Timestamp,
-		})
+		result = append(result, recordFromPersistence(r))
 	}
 	return result
 }
@@ -516,16 +579,7 @@ func (s *session) compactNowLocked(ctx context.Context) error {
 	// Convert persistence.Record to agent.Record for summarizer
 	var agentRecords []Record
 	for _, r := range recordsToSummarize {
-		agentRecords = append(agentRecords, Record{
-			ID:           r.ID,
-			Role:         chat.Role(r.Role),
-			Content:      r.Content,
-			Live:         r.Live,
-			Status:       RecordStatus(r.Status),
-			InputTokens:  r.InputTokens,
-			OutputTokens: r.OutputTokens,
-			Timestamp:    r.Timestamp,
-		})
+		agentRecords = append(agentRecords, recordFromPersistence(r))
 	}
 
 	// Use the configured summarizer with context from the request
@@ -649,8 +703,10 @@ func (s *session) buildChatHistoryLocked() (string, []chat.Message) {
 			}
 		} else {
 			msgs = append(msgs, chat.Message{
-				Role:    chat.Role(r.Role),
-				Content: r.Content,
+				Role:        chat.Role(r.Role),
+				Content:     r.Content,
+				ToolCalls:   cloneToolCalls(r.ToolCalls),
+				ToolResults: cloneToolResults(r.ToolResults),
 			})
 		}
 	}

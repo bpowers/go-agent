@@ -28,6 +28,8 @@ type ToolCall struct {
 type ToolResult struct {
 	// ToolCallID matches the ID from the corresponding ToolCall.
 	ToolCallID string `json:"tool_call_id"`
+	// Name is the tool name associated with this result.
+	Name string `json:"name"`
 	// Content is the result of the tool execution.
 	Content string `json:"content"`
 	// Error indicates if the tool execution failed.
@@ -64,6 +66,8 @@ type StreamEvent struct {
 	ThinkingStatus *ThinkingStatus `json:"thinking_status,omitzero"`
 	// ToolCalls contains any tool calls in this chunk.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolResults contains tool execution outputs in this chunk.
+	ToolResults []ToolResult `json:"tool_results,omitempty"`
 	// FinishReason indicates why the stream ended (if applicable).
 	FinishReason string `json:"finish_reason,omitempty"`
 }

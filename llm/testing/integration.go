@@ -456,24 +456,24 @@ func TestToolCallAndResultStreamEvents(t testing.TB, client chat.Client) {
 
 	// Verify tool result events match the tool calls
 	for _, event := range toolResultEvents {
-		if len(event.ToolCalls) == 0 {
-			t.Error("Tool result event has no ToolCalls")
+		if len(event.ToolResults) == 0 {
+			t.Error("Tool result event has no ToolResults")
 		}
-		for _, tc := range event.ToolCalls {
-			if tc.ID == "" {
-				t.Error("Tool result has no ID")
+		for _, tr := range event.ToolResults {
+			if tr.ToolCallID == "" {
+				t.Error("Tool result has no ToolCallID")
 			}
-			// Verify the result ID matches a previous tool call
-			if !toolCallIDs[tc.ID] {
-				t.Errorf("Tool result ID %s doesn't match any tool call", tc.ID)
+			if !toolCallIDs[tr.ToolCallID] {
+				t.Errorf("Tool result ID %s doesn't match any tool call", tr.ToolCallID)
 			}
-			// The result should be in the Arguments field (reusing the structure)
-			resultStr := string(tc.Arguments)
-			t.Logf("Tool result for ID %s: %s", tc.ID, resultStr)
+			resultStr := tr.Content
+			if tr.Error != "" {
+				resultStr = tr.Error
+			}
+			t.Logf("Tool result for ID %s: %s", tr.ToolCallID, resultStr)
 
-			// Verify the result contains expected output
-			if !strings.Contains(resultStr, "Echo:") && !strings.Contains(resultStr, "error") {
-				t.Errorf("Tool result doesn't contain expected output or error: %s", resultStr)
+			if tr.Error == "" && !strings.Contains(tr.Content, "Echo:") {
+				t.Errorf("Tool result doesn't contain expected output: %s", tr.Content)
 			}
 		}
 	}

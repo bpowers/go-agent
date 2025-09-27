@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -129,6 +130,67 @@ func (c *mockClient) NewChat(systemPrompt string, initialMsgs ...chat.Message) c
 	}
 	c.chats = append(c.chats, chat)
 	return chat
+}
+
+type toolMockChat struct {
+	mockChat
+}
+
+func (m *toolMockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
+	m.messageCalls++
+	m.messages = append(m.messages, msg)
+
+	toolCall := chat.Message{
+		Role: chat.AssistantRole,
+		ToolCalls: []chat.ToolCall{
+			{
+				ID:        "tool-call-1",
+				Name:      "echo",
+				Arguments: json.RawMessage(`{"message":"hi"}`),
+			},
+		},
+	}
+
+	toolResult := chat.Message{
+		Role: chat.ToolRole,
+		ToolResults: []chat.ToolResult{
+			{
+				ToolCallID: "tool-call-1",
+				Name:       "echo",
+				Content:    `{"result":"Echo: hi"}`,
+			},
+		},
+		Content: `{"result":"Echo: hi"}`,
+	}
+
+	final := chat.Message{
+		Role:    chat.AssistantRole,
+		Content: "Echo complete",
+	}
+
+	m.messages = append(m.messages, toolCall, toolResult, final)
+
+	usage := chat.TokenUsageDetails{InputTokens: 3, OutputTokens: 4, TotalTokens: 7}
+	m.tokenUsage.LastMessage = usage
+	m.tokenUsage.Cumulative.InputTokens += usage.InputTokens
+	m.tokenUsage.Cumulative.OutputTokens += usage.OutputTokens
+	m.tokenUsage.Cumulative.TotalTokens += usage.TotalTokens
+
+	return final, nil
+}
+
+type toolClient struct {
+	chat *toolMockChat
+}
+
+func (c *toolClient) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.Chat {
+	newChat := &toolMockChat{}
+	newChat.systemPrompt = systemPrompt
+	newChat.messages = append([]chat.Message{}, initialMsgs...)
+	newChat.maxTokens = 4096
+	newChat.tools = make(map[string]func(context.Context, string) string)
+	c.chat = newChat
+	return newChat
 }
 
 // mockToolDef implements chat.ToolDef for testing
@@ -628,4 +690,37 @@ func TestGetRecordEfficiency(t *testing.T) {
 	_, err = store.GetRecord(sessionID, 99999)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "record not found")
+}
+
+func TestSessionPersistsToolInteractions(t *testing.T) {
+	store := persistence.NewMemoryStore()
+	client := &toolClient{}
+	session := NewSession(client, "You are a tool tester", WithStore(store))
+
+	_, err := session.Message(context.Background(), chat.Message{
+		Role:    chat.UserRole,
+		Content: "Trigger a tool call",
+	})
+	require.NoError(t, err)
+
+	records := session.LiveRecords()
+	require.Len(t, records, 5)
+	assert.Equal(t, chat.UserRole, records[1].Role)
+	assert.Equal(t, chat.AssistantRole, records[2].Role)
+	require.Len(t, records[2].ToolCalls, 1)
+	assert.Equal(t, "tool-call-1", records[2].ToolCalls[0].ID)
+	assert.Equal(t, chat.ToolRole, records[3].Role)
+	require.Len(t, records[3].ToolResults, 1)
+	assert.Equal(t, "tool-call-1", records[3].ToolResults[0].ToolCallID)
+	assert.Equal(t, chat.AssistantRole, records[4].Role)
+
+	systemPrompt, history := session.History()
+	assert.Equal(t, "You are a tool tester", systemPrompt)
+	require.Len(t, history, 4)
+	assert.Equal(t, chat.UserRole, history[0].Role)
+	assert.Equal(t, chat.AssistantRole, history[1].Role)
+	require.Len(t, history[1].ToolCalls, 1)
+	assert.Equal(t, chat.ToolRole, history[2].Role)
+	require.Len(t, history[2].ToolResults, 1)
+	assert.Equal(t, chat.AssistantRole, history[3].Role)
 }
