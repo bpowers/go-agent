@@ -695,7 +695,10 @@ func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
 		}
 		messages := []anthropic.MessageParam{anthropic.NewAssistantMessage(blocks...)}
 		if len(m.ToolResults) > 0 {
-			messages = append(messages, anthropic.NewUserMessage(buildClaudeToolResultBlocks(m.ToolResults)...))
+			resultBlocks := buildClaudeToolResultBlocks(m.ToolResults)
+			if len(resultBlocks) > 0 {
+				messages = append(messages, anthropic.NewUserMessage(resultBlocks...))
+			}
 		}
 		return messages
 	case chat.ToolRole:
@@ -705,7 +708,13 @@ func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
 			}
 			return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content))}
 		}
-		return []anthropic.MessageParam{anthropic.NewUserMessage(buildClaudeToolResultBlocks(m.ToolResults)...)}
+		// Build tool result blocks and ensure we have content
+		resultBlocks := buildClaudeToolResultBlocks(m.ToolResults)
+		if len(resultBlocks) == 0 {
+			// No valid tool results to send, return nil to avoid empty message
+			return nil
+		}
+		return []anthropic.MessageParam{anthropic.NewUserMessage(resultBlocks...)}
 	default:
 		if m.Content == "" {
 			return nil
@@ -782,8 +791,12 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		c.state.AppendMessages(stateMessages, nil)
 		initialContent = ""
 
-		userMsg := anthropic.NewUserMessage(toolResults...)
-		msgs = append(msgs, userMsg)
+		// Only create user message if we have tool results
+		// Empty messages would cause "text content blocks must be non-empty" error
+		if len(toolResults) > 0 {
+			userMsg := anthropic.NewUserMessage(toolResults...)
+			msgs = append(msgs, userMsg)
+		}
 
 		// Make another API call with tool results
 		followUpParams := anthropic.MessageNewParams{
