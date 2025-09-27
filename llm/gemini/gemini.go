@@ -145,7 +145,7 @@ func getModelMaxTokens(model string) int {
 		}
 	}
 
-	panic(fmt.Errorf("unknown model %q", model))
+	return 128000
 }
 
 type chatClient struct {

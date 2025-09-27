@@ -15,6 +15,7 @@ import (
 // Config holds the LLM client configuration
 type Config struct {
 	Model        string
+	Provider     string
 	APIKey       string
 	BaseURL      string            // Optional base URL override for the API endpoint
 	Headers      map[string]string // Optional custom HTTP headers
@@ -37,7 +38,7 @@ const (
 
 // NewClient creates a chat client based on the configuration
 func NewClient(config *Config) (chat.Client, error) {
-	provider := detectProvider(config.Model)
+	provider := detectProvider(config.Model, config.Provider)
 	apiKey := config.APIKey
 
 	switch provider {
@@ -160,7 +161,20 @@ func isResponsesModel(model string) bool {
 }
 
 // detectProvider detects the provider from the model name
-func detectProvider(model string) ModelProvider {
+func detectProvider(model, provider string) ModelProvider {
+	if provider != "" {
+		switch provider {
+		case "openai":
+			return ProviderOpenAI
+		case "anthropic":
+			return ProviderClaude
+		case "google":
+			return ProviderGemini
+		case "ollama":
+			return ProviderOllama
+		}
+	}
+
 	modelLower := strings.ToLower(model)
 
 	// OpenAI models

@@ -91,7 +91,7 @@ func TestDetectProvider(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := detectProvider(tt.model)
+			result := detectProvider(tt.model, "")
 			assert.Equal(t, tt.expected, result, "Provider detection failed for model: %s", tt.model)
 		})
 	}

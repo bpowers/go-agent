@@ -29,6 +29,7 @@ func main() {
 // Config holds the application configuration
 type Config struct {
 	Model            string
+	Provider         string
 	APIKey           string
 	Temperature      float64
 	MaxTokens        int
@@ -51,6 +52,7 @@ func parseFlagsArgs(args []string) *Config {
 	fs.Float64Var(&config.Temperature, "temperature", -1, "Temperature for response generation (0.0-1.0)")
 	fs.IntVar(&config.MaxTokens, "max-tokens", 0, "Maximum tokens in response (0 for default)")
 	fs.StringVar(&config.SystemPrompt, "system", "You are a helpful assistant.", "System prompt")
+	fs.StringVar(&config.Provider, "provider", "", "Explicit provider to use (override auto-detecting)")
 	fs.BoolVar(&config.Debug, "debug", false, "Enable debug output")
 	fs.StringVar(&config.PersistenceFile, "persist", "", "SQLite file for conversation persistence (empty for memory-only)")
 	fs.Float64Var(&config.CompactThreshold, "compact", 0.8, "Threshold for automatic context compaction (0.0-1.0)")
@@ -63,6 +65,7 @@ func parseFlagsArgs(args []string) *Config {
 var createClientFunc = func(config *Config) (chat.Client, error) {
 	llmConfig := &llm.Config{
 		Model:        config.Model,
+		Provider:     config.Provider,
 		APIKey:       config.APIKey,
 		Temperature:  config.Temperature,
 		MaxTokens:    config.MaxTokens,
