@@ -552,3 +552,115 @@ func TestHeaderConfiguration(t testing.TB, client chat.Client, expectedHeaders m
 		}
 	}
 }
+
+// TestEmptyToolResultsHandling tests that clients properly handle empty tool results without causing API errors
+func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
+	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
+
+	// Register a tool that simulates returning empty results
+	emptyResultTool := &testToolDef{
+		name:        "empty_result_tool",
+		description: "A tool that returns an empty result",
+		jsonSchema: `{
+			"name": "empty_result_tool",
+			"description": "A tool that returns an empty result",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"action": {
+						"type": "string",
+						"description": "The action to perform"
+					}
+				},
+				"required": ["action"]
+			}
+		}`,
+	}
+
+	// Track if the tool was called
+	toolCalled := false
+	err := chatSession.RegisterTool(emptyResultTool, func(ctx context.Context, input string) string {
+		toolCalled = true
+		// Simulate an empty result scenario
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("Failed to register empty result tool: %v", err)
+	}
+
+	// Test with a message that should trigger tool use
+	response, err := chatSession.Message(
+		context.Background(),
+		chat.Message{
+			Role:    chat.UserRole,
+			Content: "Please use the empty_result_tool to perform a test action.",
+		},
+	)
+	// The request should succeed even with empty tool results
+	if err != nil {
+		t.Fatalf("Client failed to handle empty tool results properly: %v", err)
+	}
+
+	// Verify we got a response
+	if response.Content == "" {
+		t.Error("Expected non-empty response content")
+	}
+
+	// Verify the tool was called
+	if !toolCalled {
+		t.Error("Expected tool to be called, but it wasn't")
+	}
+
+	t.Logf("Non-streaming test passed, tool was called: %v", toolCalled)
+
+	// Create a new session for streaming test to avoid history complications
+	streamingSession := client.NewChat("You are a helpful assistant with access to tools.")
+
+	// Register the same tool in the new session
+	err = streamingSession.RegisterTool(emptyResultTool, func(ctx context.Context, input string) string {
+		toolCalled = true
+		// Simulate an empty result scenario
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("Failed to register empty result tool in streaming session: %v", err)
+	}
+
+	// Test with streaming to ensure it also handles empty results properly
+	toolCalled = false
+	var streamedContent strings.Builder
+	streamResponse, err := streamingSession.Message(
+		context.Background(),
+		chat.Message{
+			Role:    chat.UserRole,
+			Content: "Please use the empty_result_tool to perform a test action.",
+		},
+		chat.WithStreamingCb(func(event chat.StreamEvent) error {
+			if event.Type == chat.StreamEventTypeContent {
+				streamedContent.WriteString(event.Content)
+			}
+			return nil
+		}),
+	)
+	// The streaming request should also succeed with empty tool results
+	if err != nil {
+		t.Fatalf("Client failed to handle empty tool results properly during streaming: %v", err)
+	}
+
+	// Verify we got a response
+	if streamResponse.Content == "" {
+		t.Error("Expected non-empty response content from streaming")
+	}
+
+	// Verify streaming produced content
+	if streamedContent.String() == "" {
+		t.Error("Expected non-empty streamed content")
+	}
+
+	// Verify the tool was called again
+	if !toolCalled {
+		t.Error("Expected tool to be called during streaming, but it wasn't")
+	}
+
+	t.Log("Empty tool results handling test passed")
+}

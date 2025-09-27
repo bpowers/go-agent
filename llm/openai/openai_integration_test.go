@@ -279,6 +279,31 @@ func TestOpenAIIntegration_ToolRegistration(t *testing.T) {
 	}
 }
 
+func TestOpenAIIntegration_EmptyToolResultsHandling(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	tests := []struct {
+		name string
+		api  API
+	}{
+		{"ChatCompletions", ChatCompletions},
+		// Note: Responses API doesn't support tools
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, err := NewClient(OpenAIURL, getAPIKey(), WithModel(getTestModel()), WithAPI(tt.api))
+			require.NoError(t, err, "Failed to create OpenAI client")
+			require.NotNil(t, client)
+
+			// Use the test helper for empty tool results handling
+			llmtesting.TestEmptyToolResultsHandling(t, client)
+		})
+	}
+}
+
 func TestOpenAIIntegration_MaxTokensByModel(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

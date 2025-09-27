@@ -196,12 +196,15 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 			continue
 		}
 
-		contents = append(contents, &genai.Content{
-			Role: role,
-			Parts: []*genai.Part{
-				{Text: m.Content},
-			},
-		})
+		// Skip messages with empty content to avoid API errors
+		if m.Content != "" {
+			contents = append(contents, &genai.Content{
+				Role: role,
+				Parts: []*genai.Part{
+					{Text: m.Content},
+				},
+			})
+		}
 	}
 
 	// Add current message
@@ -480,7 +483,23 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Add history messages
 	for _, m := range history {
-		msgs = append(msgs, geminiContentsFromChatMessage(m)...)
+		contents := geminiContentsFromChatMessage(m)
+		// Skip any contents with empty parts to avoid API errors
+		for _, content := range contents {
+			if len(content.Parts) > 0 {
+				// Verify parts have at least one field initialized
+				hasValidPart := false
+				for _, part := range content.Parts {
+					if part.Text != "" || part.FunctionCall != nil || part.FunctionResponse != nil {
+						hasValidPart = true
+						break
+					}
+				}
+				if hasValidPart {
+					msgs = append(msgs, content)
+				}
+			}
+		}
 	}
 
 	// Add the initial user message
@@ -496,7 +515,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	for len(functionCalls) > 0 {
 		// Execute tool calls
-		functionResults, chatToolResults, err := c.handleFunctionCalls(ctx, functionCalls, callback)
+		functionResults, _, err := c.handleFunctionCalls(ctx, functionCalls, callback)
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("failed to execute function calls: %w", err)
 		}
@@ -515,30 +534,23 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			Parts: assistantParts,
 		})
 
-		stateMessages := []chat.Message{{
-			Role:      chat.AssistantRole,
-			ToolCalls: chatToolCalls,
-		}}
-		if len(chatToolResults) > 0 {
-			stateMessages = append(stateMessages, chat.Message{
-				Role:        chat.ToolRole,
-				ToolResults: chatToolResults,
+		// Note: We don't store intermediate tool-calling messages in conversation history
+		// The final conversation will only include the initial user message and final assistant response
+
+		// Add function results to messages (only if we have actual results)
+		if len(functionResults) > 0 {
+			resultParts := make([]*genai.Part, len(functionResults))
+			for i, fr := range functionResults {
+				resultParts[i] = &genai.Part{
+					FunctionResponse: fr,
+				}
+			}
+
+			msgs = append(msgs, &genai.Content{
+				Role:  "function",
+				Parts: resultParts,
 			})
 		}
-		c.state.AppendMessages(stateMessages, nil)
-
-		// Add function results to messages
-		resultParts := make([]*genai.Part, len(functionResults))
-		for i, fr := range functionResults {
-			resultParts[i] = &genai.Part{
-				FunctionResponse: fr,
-			}
-		}
-
-		msgs = append(msgs, &genai.Content{
-			Role:  "function",
-			Parts: resultParts,
-		})
 
 		// Make another API call with tool results
 		followUpConfig := &genai.GenerateContentConfig{}
@@ -755,20 +767,37 @@ func geminiContentsFromChatMessage(m chat.Message) []*genai.Content {
 		if m.Content != "" {
 			parts = append(parts, &genai.Part{Text: m.Content})
 		}
-		parts = append(parts, buildGeminiFunctionCalls(m.ToolCalls)...)
+		// Add tool calls
+		toolCallParts := buildGeminiFunctionCalls(m.ToolCalls)
+		parts = append(parts, toolCallParts...)
+
 		var contents []*genai.Content
+		// Only add if we have valid parts (either text or tool calls)
 		if len(parts) > 0 {
-			contents = append(contents, &genai.Content{Role: "model", Parts: parts})
+			// Skip assistant messages with no content and no tool calls
+			// These are intermediate tool-processing messages that shouldn't be in history
+			if m.Content == "" && len(toolCallParts) == 0 {
+				// Skip this message entirely
+			} else {
+				contents = append(contents, &genai.Content{Role: "model", Parts: parts})
+			}
 		}
 		if len(m.ToolResults) > 0 {
-			contents = append(contents, &genai.Content{Role: "function", Parts: buildGeminiToolResults(m.ToolResults)})
+			toolResultParts := buildGeminiToolResults(m.ToolResults)
+			if len(toolResultParts) > 0 {
+				contents = append(contents, &genai.Content{Role: "function", Parts: toolResultParts})
+			}
 		}
 		return contents
 	case chat.ToolRole:
 		if len(m.ToolResults) == 0 {
 			return nil
 		}
-		return []*genai.Content{{Role: "function", Parts: buildGeminiToolResults(m.ToolResults)}}
+		toolResultParts := buildGeminiToolResults(m.ToolResults)
+		if len(toolResultParts) == 0 {
+			return nil
+		}
+		return []*genai.Content{{Role: "function", Parts: toolResultParts}}
 	default:
 		if m.Content == "" {
 			return nil
@@ -842,7 +871,13 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 		}
 
 		var resultMap map[string]interface{}
-		if err := json.Unmarshal([]byte(resultStr), &resultMap); err != nil {
+		// Handle empty results specially to ensure valid response structure
+		if resultStr == "" {
+			resultMap = map[string]interface{}{
+				"result": "success", // Provide a non-empty result for empty tool responses
+			}
+		} else if err := json.Unmarshal([]byte(resultStr), &resultMap); err != nil {
+			// If not valid JSON, wrap as string result
 			resultMap = map[string]interface{}{
 				"result": resultStr,
 			}

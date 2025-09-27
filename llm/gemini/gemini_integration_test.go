@@ -188,6 +188,18 @@ func TestGeminiIntegration_ToolRegistration(t *testing.T) {
 	assert.Empty(t, tools)
 }
 
+func TestGeminiIntegration_EmptyToolResultsHandling(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err)
+	require.NotNil(t, client)
+
+	// Use the test helper for empty tool results handling
+	llmtesting.TestEmptyToolResultsHandling(t, client)
+}
+
 func TestGeminiIntegration_MaxTokensByModel(t *testing.T) {
 	t.Parallel()
 

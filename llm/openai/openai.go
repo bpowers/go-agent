@@ -1031,8 +1031,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			OfAssistant: &assistantWithTools,
 		})
 
-		// Add tool results to messages
-		msgs = append(msgs, toolResults...)
+		// Add tool results to messages (only if non-empty to avoid potential API issues)
+		if len(toolResults) > 0 {
+			msgs = append(msgs, toolResults...)
+		}
 
 		// Make another API call with tool results
 		followUpParams := openai.ChatCompletionNewParams{
