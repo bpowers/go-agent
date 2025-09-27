@@ -591,7 +591,7 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 
 		var resultContent string
 		if err != nil {
-			resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
+			resultContent = common.FormatToolErrorJSON(err.Error())
 			toolResult.Error = err.Error()
 		} else {
 			resultContent = result
@@ -644,16 +644,30 @@ func claudeToolResultBlock(tr chat.ToolResult) anthropic.ContentBlockParamUnion 
 	isError := false
 	if tr.Error != "" {
 		isError = true
-		if payload, err := json.Marshal(map[string]string{"error": tr.Error}); err == nil {
-			content = string(payload)
-		} else {
-			content = fmt.Sprintf(`{"error": "%s"}`, tr.Error)
-		}
+		content = common.FormatToolErrorJSON(tr.Error)
 	}
 	if content == "" {
 		content = "{}"
 	}
 	return anthropic.NewToolResultBlock(tr.ToolCallID, content, isError)
+}
+
+// buildToolCallBlocks converts chat.ToolCall array to Claude content blocks
+func buildClaudeToolCallBlocks(toolCalls []chat.ToolCall) []anthropic.ContentBlockParamUnion {
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
+	}
+	return blocks
+}
+
+// buildToolResultBlocks converts chat.ToolResult array to Claude content blocks
+func buildClaudeToolResultBlocks(toolResults []chat.ToolResult) []anthropic.ContentBlockParamUnion {
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(toolResults))
+	for _, tr := range toolResults {
+		blocks = append(blocks, claudeToolResultBlock(tr))
+	}
+	return blocks
 }
 
 func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
@@ -672,19 +686,13 @@ func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
 		if m.Content != "" {
 			blocks = append(blocks, anthropic.NewTextBlock(m.Content))
 		}
-		for _, tc := range m.ToolCalls {
-			blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
-		}
+		blocks = append(blocks, buildClaudeToolCallBlocks(m.ToolCalls)...)
 		if len(blocks) == 0 {
 			return nil
 		}
 		messages := []anthropic.MessageParam{anthropic.NewAssistantMessage(blocks...)}
 		if len(m.ToolResults) > 0 {
-			resultBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolResults))
-			for _, tr := range m.ToolResults {
-				resultBlocks = append(resultBlocks, claudeToolResultBlock(tr))
-			}
-			messages = append(messages, anthropic.NewUserMessage(resultBlocks...))
+			messages = append(messages, anthropic.NewUserMessage(buildClaudeToolResultBlocks(m.ToolResults)...))
 		}
 		return messages
 	case chat.ToolRole:
@@ -694,39 +702,13 @@ func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
 			}
 			return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content))}
 		}
-		resultBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolResults))
-		for _, tr := range m.ToolResults {
-			resultBlocks = append(resultBlocks, claudeToolResultBlock(tr))
-		}
-		return []anthropic.MessageParam{anthropic.NewUserMessage(resultBlocks...)}
+		return []anthropic.MessageParam{anthropic.NewUserMessage(buildClaudeToolResultBlocks(m.ToolResults)...)}
 	default:
 		if m.Content == "" {
 			return nil
 		}
 		return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content))}
 	}
-}
-
-func summarizeToolResults(results []chat.ToolResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(results))
-	for _, r := range results {
-		switch {
-		case r.Error != "" && r.Name != "":
-			parts = append(parts, fmt.Sprintf("%s error: %s", r.Name, r.Error))
-		case r.Error != "":
-			parts = append(parts, fmt.Sprintf("error: %s", r.Error))
-		case r.Name != "" && r.Content != "":
-			parts = append(parts, fmt.Sprintf("%s result: %s", r.Name, r.Content))
-		case r.Content != "":
-			parts = append(parts, r.Content)
-		default:
-			parts = append(parts, r.Name)
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 // handleToolCallRounds handles potentially multiple rounds of tool calls
@@ -792,7 +774,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			stateMessages = append(stateMessages, chat.Message{
 				Role:        chat.ToolRole,
 				ToolResults: chatToolResults,
-				Content:     summarizeToolResults(chatToolResults),
 			})
 		}
 		c.state.AppendMessages(stateMessages, nil)

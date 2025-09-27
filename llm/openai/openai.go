@@ -1006,7 +1006,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			toolMessages = append(toolMessages, chat.Message{
 				Role:        chat.ToolRole,
 				ToolResults: chatToolResults,
-				Content:     summarizeToolResults(chatToolResults),
 			})
 		}
 		c.state.AppendMessages(toolMessages, nil)
@@ -1239,7 +1238,7 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.Cha
 		}
 
 		if err != nil {
-			resultContent = fmt.Sprintf(`{"error": "%s"}`, err.Error())
+			resultContent = common.FormatToolErrorJSON(err.Error())
 			toolResult.Error = err.Error()
 		} else {
 			resultContent = result
@@ -1292,17 +1291,36 @@ func openaiToolCallToChat(tc openai.ChatCompletionMessageToolCall) chat.ToolCall
 func openaiToolResultToMessage(tr chat.ToolResult) openai.ChatCompletionMessageParamUnion {
 	content := tr.Content
 	if tr.Error != "" {
-		payload, err := json.Marshal(map[string]string{"error": tr.Error})
-		if err == nil {
-			content = string(payload)
-		} else {
-			content = fmt.Sprintf(`{"error": "%s"}`, tr.Error)
-		}
+		content = common.FormatToolErrorJSON(tr.Error)
 	}
 	if content == "" {
 		content = "{}"
 	}
 	return openai.ToolMessage(content, tr.ToolCallID)
+}
+
+// buildOpenAIToolCalls converts chat.ToolCall array to OpenAI tool call params
+func buildOpenAIToolCalls(toolCalls []chat.ToolCall) []openai.ChatCompletionMessageToolCallParam {
+	params := make([]openai.ChatCompletionMessageToolCallParam, len(toolCalls))
+	for i, tc := range toolCalls {
+		params[i] = openai.ChatCompletionMessageToolCallParam{
+			ID: tc.ID,
+			Function: openai.ChatCompletionMessageToolCallFunctionParam{
+				Name:      tc.Name,
+				Arguments: string(tc.Arguments),
+			},
+		}
+	}
+	return params
+}
+
+// buildOpenAIToolResults converts chat.ToolResult array to OpenAI messages
+func buildOpenAIToolResults(toolResults []chat.ToolResult) []openai.ChatCompletionMessageParamUnion {
+	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(toolResults))
+	for _, tr := range toolResults {
+		msgs = append(msgs, openaiToolResultToMessage(tr))
+	}
+	return msgs
 }
 
 func openaiMessagesFromChatMessage(m chat.Message) []openai.ChatCompletionMessageParamUnion {
@@ -1315,29 +1333,15 @@ func openaiMessagesFromChatMessage(m chat.Message) []openai.ChatCompletionMessag
 			assistant.Content.OfString = param.NewOpt(m.Content)
 		}
 		if len(m.ToolCalls) > 0 {
-			assistant.ToolCalls = make([]openai.ChatCompletionMessageToolCallParam, len(m.ToolCalls))
-			for i, tc := range m.ToolCalls {
-				assistant.ToolCalls[i] = openai.ChatCompletionMessageToolCallParam{
-					ID: tc.ID,
-					Function: openai.ChatCompletionMessageToolCallFunctionParam{
-						Name:      tc.Name,
-						Arguments: string(tc.Arguments),
-					},
-				}
-			}
+			assistant.ToolCalls = buildOpenAIToolCalls(m.ToolCalls)
 		}
 		msgs := []openai.ChatCompletionMessageParamUnion{{OfAssistant: &assistant}}
 		if len(m.ToolResults) > 0 {
-			for _, tr := range m.ToolResults {
-				msgs = append(msgs, openaiToolResultToMessage(tr))
-			}
+			msgs = append(msgs, buildOpenAIToolResults(m.ToolResults)...)
 		}
 		return msgs
 	case chat.ToolRole:
-		msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(m.ToolResults))
-		for _, tr := range m.ToolResults {
-			msgs = append(msgs, openaiToolResultToMessage(tr))
-		}
+		msgs := buildOpenAIToolResults(m.ToolResults)
 		// Fallback if no structured tool results but content present
 		if len(msgs) == 0 && m.Content != "" {
 			msgs = append(msgs, openai.ToolMessage(m.Content, ""))
@@ -1346,28 +1350,6 @@ func openaiMessagesFromChatMessage(m chat.Message) []openai.ChatCompletionMessag
 	default:
 		return nil
 	}
-}
-
-func summarizeToolResults(results []chat.ToolResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(results))
-	for _, r := range results {
-		switch {
-		case r.Error != "" && r.Name != "":
-			parts = append(parts, fmt.Sprintf("%s error: %s", r.Name, r.Error))
-		case r.Error != "":
-			parts = append(parts, fmt.Sprintf("error: %s", r.Error))
-		case r.Name != "" && r.Content != "":
-			parts = append(parts, fmt.Sprintf("%s result: %s", r.Name, r.Content))
-		case r.Content != "":
-			parts = append(parts, r.Content)
-		default:
-			parts = append(parts, r.Name)
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 func (c *chatClient) History() (systemPrompt string, msgs []chat.Message) {

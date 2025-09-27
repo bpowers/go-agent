@@ -11,7 +11,7 @@ type Tool struct {
 	// Description helps the LLM understand when to use this tool.
 	Description string `json:"description"`
 	// Parameters defines the JSON schema for the tool's input parameters.
-	Parameters json.RawMessage `json:"parameters,omitempty"`
+	Parameters json.RawMessage `json:"parameters,omitzero"`
 }
 
 // ToolCall represents a request from the LLM to invoke a tool.
@@ -33,7 +33,7 @@ type ToolResult struct {
 	// Content is the result of the tool execution.
 	Content string `json:"content"`
 	// Error indicates if the tool execution failed.
-	Error string `json:"error,omitempty"`
+	Error string `json:"error,omitzero"`
 }
 
 // StreamEventType represents the type of content in a streaming event.
@@ -61,15 +61,15 @@ type StreamEvent struct {
 	// Content contains the text content for content events (was Delta).
 	Content string `json:"content,omitzero"`
 	// Delta contains the incremental text content (deprecated, use Content).
-	Delta string `json:"delta,omitempty"`
+	Delta string `json:"delta,omitzero"`
 	// ThinkingStatus contains status information for thinking events.
 	ThinkingStatus *ThinkingStatus `json:"thinking_status,omitzero"`
 	// ToolCalls contains any tool calls in this chunk.
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitzero"`
 	// ToolResults contains tool execution outputs in this chunk.
-	ToolResults []ToolResult `json:"tool_results,omitempty"`
+	ToolResults []ToolResult `json:"tool_results,omitzero"`
 	// FinishReason indicates why the stream ended (if applicable).
-	FinishReason string `json:"finish_reason,omitempty"`
+	FinishReason string `json:"finish_reason,omitzero"`
 }
 
 // ThinkingStatus represents the status of model reasoning/thinking.

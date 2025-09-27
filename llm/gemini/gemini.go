@@ -523,7 +523,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			stateMessages = append(stateMessages, chat.Message{
 				Role:        chat.ToolRole,
 				ToolResults: chatToolResults,
-				Content:     summarizeToolResults(chatToolResults),
 			})
 		}
 		c.state.AppendMessages(stateMessages, nil)
@@ -711,6 +710,36 @@ func geminiToolResultToPart(tr chat.ToolResult) *genai.Part {
 	}
 }
 
+// buildGeminiFunctionCalls converts chat.ToolCall array to Gemini function call parts
+func buildGeminiFunctionCalls(toolCalls []chat.ToolCall) []*genai.Part {
+	parts := make([]*genai.Part, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		var args map[string]any
+		if len(tc.Arguments) > 0 {
+			if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+				args = map[string]any{"raw": string(tc.Arguments)}
+			}
+		}
+		parts = append(parts, &genai.Part{
+			FunctionCall: &genai.FunctionCall{
+				ID:   tc.ID,
+				Name: tc.Name,
+				Args: args,
+			},
+		})
+	}
+	return parts
+}
+
+// buildGeminiToolResults converts chat.ToolResult array to Gemini function response parts
+func buildGeminiToolResults(toolResults []chat.ToolResult) []*genai.Part {
+	parts := make([]*genai.Part, 0, len(toolResults))
+	for _, tr := range toolResults {
+		parts = append(parts, geminiToolResultToPart(tr))
+	}
+	return parts
+}
+
 func geminiContentsFromChatMessage(m chat.Message) []*genai.Content {
 	switch m.Role {
 	case chat.UserRole:
@@ -726,70 +755,26 @@ func geminiContentsFromChatMessage(m chat.Message) []*genai.Content {
 		if m.Content != "" {
 			parts = append(parts, &genai.Part{Text: m.Content})
 		}
-		for _, tc := range m.ToolCalls {
-			var args map[string]any
-			if len(tc.Arguments) > 0 {
-				if err := json.Unmarshal(tc.Arguments, &args); err != nil {
-					args = map[string]any{"raw": string(tc.Arguments)}
-				}
-			}
-			parts = append(parts, &genai.Part{
-				FunctionCall: &genai.FunctionCall{
-					ID:   tc.ID,
-					Name: tc.Name,
-					Args: args,
-				},
-			})
-		}
-		contents := []*genai.Content{}
+		parts = append(parts, buildGeminiFunctionCalls(m.ToolCalls)...)
+		var contents []*genai.Content
 		if len(parts) > 0 {
 			contents = append(contents, &genai.Content{Role: "model", Parts: parts})
 		}
 		if len(m.ToolResults) > 0 {
-			resultParts := make([]*genai.Part, 0, len(m.ToolResults))
-			for _, tr := range m.ToolResults {
-				resultParts = append(resultParts, geminiToolResultToPart(tr))
-			}
-			contents = append(contents, &genai.Content{Role: "function", Parts: resultParts})
+			contents = append(contents, &genai.Content{Role: "function", Parts: buildGeminiToolResults(m.ToolResults)})
 		}
 		return contents
 	case chat.ToolRole:
 		if len(m.ToolResults) == 0 {
 			return nil
 		}
-		resultParts := make([]*genai.Part, 0, len(m.ToolResults))
-		for _, tr := range m.ToolResults {
-			resultParts = append(resultParts, geminiToolResultToPart(tr))
-		}
-		return []*genai.Content{{Role: "function", Parts: resultParts}}
+		return []*genai.Content{{Role: "function", Parts: buildGeminiToolResults(m.ToolResults)}}
 	default:
 		if m.Content == "" {
 			return nil
 		}
 		return []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: m.Content}}}}
 	}
-}
-
-func summarizeToolResults(results []chat.ToolResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(results))
-	for _, r := range results {
-		switch {
-		case r.Error != "" && r.Name != "":
-			parts = append(parts, fmt.Sprintf("%s error: %s", r.Name, r.Error))
-		case r.Error != "":
-			parts = append(parts, fmt.Sprintf("error: %s", r.Error))
-		case r.Name != "" && r.Content != "":
-			parts = append(parts, fmt.Sprintf("%s result: %s", r.Name, r.Content))
-		case r.Content != "":
-			parts = append(parts, r.Content)
-		default:
-			parts = append(parts, r.Name)
-		}
-	}
-	return strings.Join(parts, "\\n")
 }
 
 // handleFunctionCalls processes function calls from the model and returns function results
