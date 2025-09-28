@@ -183,47 +183,22 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		})
 	}
 
-	// Add history messages
+	// Add history messages using the new converter
 	for _, m := range history {
-		var role string
-		switch m.Role {
-		case chat.UserRole:
-			role = "user"
-		case chat.AssistantRole:
-			role = "model"
-		default:
-			// Skip system messages as they're handled separately
+		converted, err := messageToGemini(m)
+		if err != nil {
+			// Skip messages that can't be converted (e.g., system messages are handled separately)
 			continue
 		}
-
-		// Skip messages with empty content to avoid API errors
-		if m.HasText() {
-			contents = append(contents, &genai.Content{
-				Role: role,
-				Parts: []*genai.Part{
-					{Text: m.GetText()},
-				},
-			})
-		}
+		contents = append(contents, converted...)
 	}
 
-	// Add current message
-	var currentRole string
-	switch msg.Role {
-	case chat.UserRole:
-		currentRole = "user"
-	case chat.AssistantRole:
-		currentRole = "model"
-	default:
-		currentRole = "user"
+	// Add current message using the new converter
+	converted, err := messageToGemini(msg)
+	if err != nil {
+		return chat.Message{}, fmt.Errorf("converting current message: %w", err)
 	}
-
-	contents = append(contents, &genai.Content{
-		Role: currentRole,
-		Parts: []*genai.Part{
-			{Text: msg.GetText()},
-		},
-	})
+	contents = append(contents, converted...)
 
 	// Configure generation settings
 	config := &genai.GenerateContentConfig{}
@@ -478,34 +453,27 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		})
 	}
 
-	// Add history messages
+	// Add history messages using the new converter
 	for _, m := range history {
-		contents := geminiContentsFromChatMessage(m)
-		// Skip any contents with empty parts to avoid API errors
-		for _, content := range contents {
-			if len(content.Parts) > 0 {
-				// Verify parts have at least one field initialized
-				hasValidPart := false
-				for _, part := range content.Parts {
-					if part.Text != "" || part.FunctionCall != nil || part.FunctionResponse != nil {
-						hasValidPart = true
-						break
-					}
-				}
-				if hasValidPart {
-					msgs = append(msgs, content)
-				}
+		converted, err := messageToGemini(m)
+		if err != nil {
+			// Skip messages that can't be converted
+			continue
+		}
+		// Filter out nil results and empty contents
+		for _, content := range converted {
+			if content != nil && len(content.Parts) > 0 {
+				msgs = append(msgs, content)
 			}
 		}
 	}
 
-	// Add the initial user message
-	msgs = append(msgs, &genai.Content{
-		Role: "user",
-		Parts: []*genai.Part{
-			{Text: initialMsg.GetText()},
-		},
-	})
+	// Add the initial user message using the converter
+	converted, err := messageToGemini(initialMsg)
+	if err != nil {
+		return chat.Message{}, fmt.Errorf("converting initial message: %w", err)
+	}
+	msgs = append(msgs, converted...)
 
 	// Process tool calls in a loop until we get a final response
 	functionCalls := initialFunctionCalls
@@ -704,114 +672,6 @@ func geminiFunctionCallToChat(fc *genai.FunctionCall) chat.ToolCall {
 		ID:        fc.ID,
 		Name:      fc.Name,
 		Arguments: args,
-	}
-}
-
-func geminiToolResultToPart(tr chat.ToolResult) *genai.Part {
-	response := make(map[string]any)
-	if tr.Error != "" {
-		response["error"] = tr.Error
-	}
-	if tr.Content != "" {
-		if err := json.Unmarshal([]byte(tr.Content), &response); err != nil {
-			response["result"] = tr.Content
-		}
-	} else if tr.Error == "" {
-		response["result"] = ""
-	}
-	return &genai.Part{
-		FunctionResponse: &genai.FunctionResponse{
-			ID:       tr.ToolCallID,
-			Name:     tr.Name,
-			Response: response,
-		},
-	}
-}
-
-// buildGeminiFunctionCalls converts chat.ToolCall array to Gemini function call parts
-func buildGeminiFunctionCalls(toolCalls []chat.ToolCall) []*genai.Part {
-	parts := make([]*genai.Part, 0, len(toolCalls))
-	for _, tc := range toolCalls {
-		var args map[string]any
-		if len(tc.Arguments) > 0 {
-			if err := json.Unmarshal(tc.Arguments, &args); err != nil {
-				args = map[string]any{"raw": string(tc.Arguments)}
-			}
-		}
-		parts = append(parts, &genai.Part{
-			FunctionCall: &genai.FunctionCall{
-				ID:   tc.ID,
-				Name: tc.Name,
-				Args: args,
-			},
-		})
-	}
-	return parts
-}
-
-// buildGeminiToolResults converts chat.ToolResult array to Gemini function response parts
-func buildGeminiToolResults(toolResults []chat.ToolResult) []*genai.Part {
-	parts := make([]*genai.Part, 0, len(toolResults))
-	for _, tr := range toolResults {
-		parts = append(parts, geminiToolResultToPart(tr))
-	}
-	return parts
-}
-
-func geminiContentsFromChatMessage(m chat.Message) []*genai.Content {
-	switch m.Role {
-	case chat.UserRole:
-		if !m.HasText() {
-			return nil
-		}
-		return []*genai.Content{{
-			Role:  "user",
-			Parts: []*genai.Part{{Text: m.GetText()}},
-		}}
-	case chat.AssistantRole:
-		toolCalls := m.GetToolCalls()
-		parts := make([]*genai.Part, 0, len(toolCalls)+1)
-		if m.HasText() {
-			parts = append(parts, &genai.Part{Text: m.GetText()})
-		}
-		// Add tool calls
-		toolCallParts := buildGeminiFunctionCalls(toolCalls)
-		parts = append(parts, toolCallParts...)
-
-		var contents []*genai.Content
-		// Only add if we have valid parts (either text or tool calls)
-		if len(parts) > 0 {
-			// Skip assistant messages with no content and no tool calls
-			// These are intermediate tool-processing messages that shouldn't be in history
-			if !m.HasText() && len(toolCallParts) == 0 {
-				// Skip this message entirely
-			} else {
-				contents = append(contents, &genai.Content{Role: "model", Parts: parts})
-			}
-		}
-		toolResults := m.GetToolResults()
-		if len(toolResults) > 0 {
-			toolResultParts := buildGeminiToolResults(toolResults)
-			if len(toolResultParts) > 0 {
-				contents = append(contents, &genai.Content{Role: "function", Parts: toolResultParts})
-			}
-		}
-		return contents
-	case chat.ToolRole:
-		toolResults := m.GetToolResults()
-		if len(toolResults) == 0 {
-			return nil
-		}
-		toolResultParts := buildGeminiToolResults(toolResults)
-		if len(toolResultParts) == 0 {
-			return nil
-		}
-		return []*genai.Content{{Role: "function", Parts: toolResultParts}}
-	default:
-		if !m.HasText() {
-			return nil
-		}
-		return []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: m.GetText()}}}}
 	}
 }
 
