@@ -182,12 +182,19 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		if m.Role == "system" {
 			continue
 		}
-		msgs = append(msgs, claudeMessagesFromChat(m)...)
+		param, err := messageParam(m)
+		if err != nil {
+			return chat.Message{}, fmt.Errorf("converting history message to param: %w", err)
+		}
+		msgs = append(msgs, param)
 	}
 
 	// Add current message using the proper conversion function
-	currentMsgs := claudeMessagesFromChat(msg)
-	msgs = append(msgs, currentMsgs...)
+	currentParam, err := messageParam(msg)
+	if err != nil {
+		return chat.Message{}, fmt.Errorf("converting current message to param: %w", err)
+	}
+	msgs = append(msgs, currentParam)
 
 	// Build request parameters
 	params := anthropic.MessageNewParams{
@@ -631,6 +638,12 @@ func claudeToolResultBlock(tr chat.ToolResult) anthropic.ContentBlockParamUnion 
 }
 
 // messageParam converts a chat.Message to an anthropic.MessageParam.
+//
+// IMPORTANT INVARIANT: Tool results must NEVER be stored in assistant messages.
+// - Assistant messages contain only text content and tool calls (ToolUseBlock)
+// - Tool results must be in separate ToolRole messages (converted to User role by messageParam)
+// This separation is enforced throughout the codebase when constructing messages.
+//
 // Returns an error if the message has no contents or no valid content blocks.
 func messageParam(msg chat.Message) (anthropic.MessageParam, error) {
 	if len(msg.Contents) == 0 {
@@ -681,22 +694,6 @@ func messageParam(msg chat.Message) (anthropic.MessageParam, error) {
 	}
 }
 
-// claudeMessagesFromChat converts a chat.Message to Anthropic MessageParam(s).
-//
-// IMPORTANT INVARIANT: Tool results must NEVER be stored in assistant messages.
-// - Assistant messages contain only text content and tool calls (ToolUseBlock)
-// - Tool results must be in separate ToolRole messages (converted to User role by messageParam)
-// This separation is enforced throughout the codebase when constructing messages.
-func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
-	// Simple conversion - no special handling needed since messages are correctly structured
-	param, err := messageParam(m)
-	if err != nil {
-		// Return nil for messages that can't be converted (e.g., empty messages)
-		return nil
-	}
-	return []anthropic.MessageParam{param}
-}
-
 // handleToolCallRounds handles potentially multiple rounds of tool calls
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialContent string, initialToolCalls []anthropic.ToolUseBlock, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all content blocks for the conversation
@@ -708,7 +705,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Add history
 	for _, m := range history {
-		msgs = append(msgs, claudeMessagesFromChat(m)...)
+		param, err := messageParam(m)
+		if err != nil {
+			return chat.Message{}, fmt.Errorf("converting history message to param: %w", err)
+		}
+		msgs = append(msgs, param)
 	}
 
 	// Add the initial user message
