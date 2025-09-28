@@ -266,7 +266,7 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		})
 	}
 
-	// Add history messages
+	// Add history messages using direct Contents access
 	for _, m := range history {
 		var role responses.EasyInputMessageRole
 		switch m.Role {
@@ -278,15 +278,21 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 			role = responses.EasyInputMessageRoleDeveloper
 		}
 
+		// Extract text content directly from Contents array
+		text := extractText(m)
+		if text == "" {
+			continue // Skip messages without text content
+		}
+
 		inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 			OfMessage: &responses.EasyInputMessageParam{
 				Role:    role,
-				Content: responses.EasyInputMessageContentUnionParam{OfString: param.NewOpt(m.GetText())},
+				Content: responses.EasyInputMessageContentUnionParam{OfString: param.NewOpt(text)},
 			},
 		})
 	}
 
-	// Add current message
+	// Add current message using direct Contents access
 	var currentRole responses.EasyInputMessageRole
 	switch msg.Role {
 	case chat.UserRole:
@@ -297,10 +303,15 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		currentRole = responses.EasyInputMessageRoleDeveloper
 	}
 
+	text := extractText(msg)
+	if text == "" {
+		return chat.Message{}, fmt.Errorf("current message has no text content")
+	}
+
 	inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 		OfMessage: &responses.EasyInputMessageParam{
 			Role:    currentRole,
-			Content: responses.EasyInputMessageContentUnionParam{OfString: param.NewOpt(msg.GetText())},
+			Content: responses.EasyInputMessageContentUnionParam{OfString: param.NewOpt(text)},
 		},
 	})
 
@@ -490,27 +501,19 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 		messages = append(messages, openai.SystemMessage(systemPrompt))
 	}
 
-	// Add history
-	for _, m := range history {
-		switch m.Role {
-		case chat.UserRole:
-			messages = append(messages, openai.UserMessage(m.GetText()))
-		case chat.AssistantRole:
-			messages = append(messages, openai.AssistantMessage(m.GetText()))
-		default:
-			messages = append(messages, openai.SystemMessage(m.GetText()))
-		}
+	// Convert history messages using the new converter
+	historyMsgs, err := messagesToOpenAI(history)
+	if err != nil {
+		return chat.Message{}, fmt.Errorf("converting history messages: %w", err)
 	}
+	messages = append(messages, historyMsgs...)
 
-	// Add current message
-	switch msg.Role {
-	case chat.UserRole:
-		messages = append(messages, openai.UserMessage(msg.GetText()))
-	case chat.AssistantRole:
-		messages = append(messages, openai.AssistantMessage(msg.GetText()))
-	default:
-		messages = append(messages, openai.SystemMessage(msg.GetText()))
+	// Convert current message using the new converter
+	currentMsgs, err := messageToOpenAI(msg)
+	if err != nil {
+		return chat.Message{}, fmt.Errorf("converting current message: %w", err)
 	}
+	messages = append(messages, currentMsgs...)
 
 	// Build request parameters
 	params := openai.ChatCompletionNewParams{
@@ -963,13 +966,21 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	if systemPrompt != "" {
 		msgs = append(msgs, openai.SystemMessage(systemPrompt))
 	}
-	for _, m := range history {
-		msgs = append(msgs, openaiMessagesFromChatMessage(m)...)
+	historyMsgs, err := messagesToOpenAI(history)
+	if err != nil {
+		return chat.Message{}, fmt.Errorf("converting history messages: %w", err)
 	}
+	msgs = append(msgs, historyMsgs...)
+
 	// Add the initial user message to history
 	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
 
-	msgs = append(msgs, openai.UserMessage(initialMsg.GetText()))
+	// Convert initial message
+	initialMsgs, err := messageToOpenAI(initialMsg)
+	if err != nil {
+		return chat.Message{}, fmt.Errorf("converting initial message: %w", err)
+	}
+	msgs = append(msgs, initialMsgs...)
 
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
@@ -980,7 +991,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// Execute tool calls
-		toolResults, chatToolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
+		chatToolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("failed to execute tool calls: %w", err)
 		}
@@ -1004,30 +1015,21 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 		c.state.AppendMessages(toolMessages, nil)
 
-		// Add assistant message with tool calls
-		// Convert tool calls to the proper format
-		toolCallParams := make([]openai.ChatCompletionMessageToolCallParam, len(toolCalls))
-		for i, tc := range toolCalls {
-			toolCallParams[i] = openai.ChatCompletionMessageToolCallParam{
-				ID: tc.ID,
-				Function: openai.ChatCompletionMessageToolCallFunctionParam{
-					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
-				},
-			}
+		// Convert assistant message with tool calls using the new converter
+		assistantMsgs, err := messageToOpenAI(assistantMsg)
+		if err != nil {
+			return chat.Message{}, fmt.Errorf("converting assistant message with tool calls: %w", err)
 		}
-
-		// Create assistant message with tool calls
-		assistantWithTools := openai.ChatCompletionAssistantMessageParam{
-			ToolCalls: toolCallParams,
-		}
-		msgs = append(msgs, openai.ChatCompletionMessageParamUnion{
-			OfAssistant: &assistantWithTools,
-		})
+		msgs = append(msgs, assistantMsgs...)
 
 		// Add tool results to messages (only if non-empty to avoid potential API issues)
-		if len(toolResults) > 0 {
-			msgs = append(msgs, toolResults...)
+		if len(chatToolResults) > 0 {
+			// Convert tool messages using the new converter
+			toolResultMsgs, err := messageToOpenAI(toolMessages[len(toolMessages)-1])
+			if err != nil {
+				return chat.Message{}, fmt.Errorf("converting tool result messages: %w", err)
+			}
+			msgs = append(msgs, toolResultMsgs...)
 		}
 
 		// Check for system reminder after tool execution
@@ -1219,29 +1221,25 @@ func (c *chatClient) mcpToOpenAITool(mcpDef chat.ToolDef) (openai.ChatCompletion
 }
 
 // handleToolCalls processes tool calls from the model and returns tool results
-func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.ChatCompletionMessageToolCall, callback chat.StreamCallback) ([]openai.ChatCompletionMessageParamUnion, []chat.ToolResult, error) {
+func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.ChatCompletionMessageToolCall, callback chat.StreamCallback) ([]chat.ToolResult, error) {
 	if len(toolCalls) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 
-	var toolResults []openai.ChatCompletionMessageParamUnion
 	var chatResults []chat.ToolResult
 
 	for _, toolCall := range toolCalls {
 		result, err := c.tools.Execute(ctx, toolCall.Function.Name, toolCall.Function.Arguments)
 
 		// Emit tool result event if callback is provided
-		var resultContent string
 		toolResult := chat.ToolResult{
 			ToolCallID: toolCall.ID,
 			Name:       toolCall.Function.Name,
 		}
 
 		if err != nil {
-			resultContent = common.FormatToolErrorJSON(err.Error())
 			toolResult.Error = err.Error()
 		} else {
-			resultContent = result
 			toolResult.Content = result
 		}
 
@@ -1251,29 +1249,14 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.Cha
 				ToolResults: []chat.ToolResult{toolResult},
 			}
 			if callbackErr := callback(toolResultEvent); callbackErr != nil {
-				return nil, nil, fmt.Errorf("callback error: %w", callbackErr)
+				return nil, fmt.Errorf("callback error: %w", callbackErr)
 			}
 		}
 
-		if err != nil {
-			// Tool not found or execution error, return error message
-			toolResults = append(toolResults, openai.ToolMessage(
-				resultContent,
-				toolCall.ID,
-			))
-			chatResults = append(chatResults, toolResult)
-			continue
-		}
-
-		// Add tool result message
-		toolResults = append(toolResults, openai.ToolMessage(
-			result,
-			toolCall.ID,
-		))
 		chatResults = append(chatResults, toolResult)
 	}
 
-	return toolResults, chatResults, nil
+	return chatResults, nil
 }
 
 func openaiToolCallToChat(tc openai.ChatCompletionMessageToolCall) chat.ToolCall {
@@ -1285,73 +1268,6 @@ func openaiToolCallToChat(tc openai.ChatCompletionMessageToolCall) chat.ToolCall
 		ID:        tc.ID,
 		Name:      tc.Function.Name,
 		Arguments: args,
-	}
-}
-
-func openaiToolResultToMessage(tr chat.ToolResult) openai.ChatCompletionMessageParamUnion {
-	content := tr.Content
-	if tr.Error != "" {
-		content = common.FormatToolErrorJSON(tr.Error)
-	}
-	if content == "" {
-		content = "{}"
-	}
-	return openai.ToolMessage(content, tr.ToolCallID)
-}
-
-// buildOpenAIToolCalls converts chat.ToolCall array to OpenAI tool call params
-func buildOpenAIToolCalls(toolCalls []chat.ToolCall) []openai.ChatCompletionMessageToolCallParam {
-	params := make([]openai.ChatCompletionMessageToolCallParam, len(toolCalls))
-	for i, tc := range toolCalls {
-		params[i] = openai.ChatCompletionMessageToolCallParam{
-			ID: tc.ID,
-			Function: openai.ChatCompletionMessageToolCallFunctionParam{
-				Name:      tc.Name,
-				Arguments: string(tc.Arguments),
-			},
-		}
-	}
-	return params
-}
-
-// buildOpenAIToolResults converts chat.ToolResult array to OpenAI messages
-func buildOpenAIToolResults(toolResults []chat.ToolResult) []openai.ChatCompletionMessageParamUnion {
-	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(toolResults))
-	for _, tr := range toolResults {
-		msgs = append(msgs, openaiToolResultToMessage(tr))
-	}
-	return msgs
-}
-
-func openaiMessagesFromChatMessage(m chat.Message) []openai.ChatCompletionMessageParamUnion {
-	switch m.Role {
-	case chat.UserRole:
-		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(m.GetText())}
-	case chat.AssistantRole:
-		assistant := openai.ChatCompletionAssistantMessageParam{}
-		if m.HasText() {
-			assistant.Content.OfString = param.NewOpt(m.GetText())
-		}
-		toolCalls := m.GetToolCalls()
-		if len(toolCalls) > 0 {
-			assistant.ToolCalls = buildOpenAIToolCalls(toolCalls)
-		}
-		msgs := []openai.ChatCompletionMessageParamUnion{{OfAssistant: &assistant}}
-		toolResults := m.GetToolResults()
-		if len(toolResults) > 0 {
-			msgs = append(msgs, buildOpenAIToolResults(toolResults)...)
-		}
-		return msgs
-	case chat.ToolRole:
-		toolResults := m.GetToolResults()
-		msgs := buildOpenAIToolResults(toolResults)
-		// Fallback if no structured tool results but text present
-		if len(msgs) == 0 && m.HasText() {
-			msgs = append(msgs, openai.ToolMessage(m.GetText(), ""))
-		}
-		return msgs
-	default:
-		return nil
 	}
 }
 
