@@ -166,54 +166,32 @@ type chatClient struct {
 
 func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
 	// Apply options to get callback if provided
-	appliedOpts := chat.ApplyOptions(opts...)
-	callback := appliedOpts.StreamingCb
 	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
+	callback := reqOpts.StreamingCb
 
 	// Build message list for Claude
-	var messages []anthropic.MessageParam
+	var msgs []anthropic.MessageParam
 
 	// Snapshot history with minimal lock
 	systemPrompt, history := c.state.Snapshot()
 
-	// Add history
+	// Add history using the proper conversion function
 	for _, m := range history {
-		switch m.Role {
-		case chat.UserRole:
-			messages = append(messages, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(m.GetText()),
-			))
-		case chat.AssistantRole:
-			messages = append(messages, anthropic.NewAssistantMessage(
-				anthropic.NewTextBlock(m.GetText()),
-			))
-		default:
-			// Claude doesn't support system role in messages, only as a separate field
+		// Skip system messages as Claude handles them separately
+		if m.Role == "system" {
 			continue
 		}
+		msgs = append(msgs, claudeMessagesFromChat(m)...)
 	}
 
-	// Add current message
-	switch msg.Role {
-	case chat.UserRole:
-		messages = append(messages, anthropic.NewUserMessage(
-			anthropic.NewTextBlock(msg.GetText()),
-		))
-	case chat.AssistantRole:
-		messages = append(messages, anthropic.NewAssistantMessage(
-			anthropic.NewTextBlock(msg.GetText()),
-		))
-	default:
-		// If it's a system message, convert to user message
-		messages = append(messages, anthropic.NewUserMessage(
-			anthropic.NewTextBlock(msg.GetText()),
-		))
-	}
+	// Add current message using the proper conversion function
+	currentMsgs := claudeMessagesFromChat(msg)
+	msgs = append(msgs, currentMsgs...)
 
 	// Build request parameters
 	params := anthropic.MessageNewParams{
-		Messages:  messages,
+		Messages:  msgs,
 		Model:     anthropic.Model(c.modelName),
 		MaxTokens: getMaxOutputTokens(c.modelName), // Claude requires this
 	}
@@ -652,75 +630,112 @@ func claudeToolResultBlock(tr chat.ToolResult) anthropic.ContentBlockParamUnion 
 	return anthropic.NewToolResultBlock(tr.ToolCallID, content, isError)
 }
 
-// buildToolCallBlocks converts chat.ToolCall array to Claude content blocks
-func buildClaudeToolCallBlocks(toolCalls []chat.ToolCall) []anthropic.ContentBlockParamUnion {
-	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(toolCalls))
-	for _, tc := range toolCalls {
-		blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
+// messageParam converts a chat.Message to an anthropic.MessageParam.
+// Returns an error if the message has no contents or no valid content blocks.
+func messageParam(msg chat.Message) (anthropic.MessageParam, error) {
+	if len(msg.Contents) == 0 {
+		return anthropic.MessageParam{}, fmt.Errorf("message has no contents")
 	}
-	return blocks
-}
 
-// buildToolResultBlocks converts chat.ToolResult array to Claude content blocks
-func buildClaudeToolResultBlocks(toolResults []chat.ToolResult) []anthropic.ContentBlockParamUnion {
-	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(toolResults))
-	for _, tr := range toolResults {
-		blocks = append(blocks, claudeToolResultBlock(tr))
+	var blocks []anthropic.ContentBlockParamUnion
+
+	// Build content blocks from all contents
+	for _, content := range msg.Contents {
+		// Handle text content
+		if content.Text != "" {
+			blocks = append(blocks, anthropic.NewTextBlock(content.Text))
+		}
+
+		// Handle tool call content
+		if content.ToolCall != nil {
+			blocks = append(blocks, anthropic.NewToolUseBlock(
+				content.ToolCall.ID,
+				content.ToolCall.Arguments,
+				content.ToolCall.Name,
+			))
+		}
+
+		// Handle tool result content
+		if content.ToolResult != nil {
+			blocks = append(blocks, claudeToolResultBlock(*content.ToolResult))
+		}
 	}
-	return blocks
+
+	// Check if we have any valid blocks
+	if len(blocks) == 0 {
+		return anthropic.MessageParam{}, fmt.Errorf("message has no valid content blocks")
+	}
+
+	// Convert based on role
+	switch msg.Role {
+	case chat.UserRole, "system", chat.ToolRole:
+		// System and Tool roles are converted to User messages in Claude
+		return anthropic.NewUserMessage(blocks...), nil
+	case chat.AssistantRole:
+		return anthropic.NewAssistantMessage(blocks...), nil
+	default:
+		// Unknown role, treat as user message
+		return anthropic.NewUserMessage(blocks...), nil
+	}
 }
 
 func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
-	switch m.Role {
-	case chat.UserRole:
-		var blocks []anthropic.ContentBlockParamUnion
-		if m.HasText() {
-			blocks = append(blocks, anthropic.NewTextBlock(m.GetText()))
-		}
-		if len(blocks) == 0 {
-			return nil
-		}
-		return []anthropic.MessageParam{anthropic.NewUserMessage(blocks...)}
-	case chat.AssistantRole:
-		toolCalls := m.GetToolCalls()
-		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(toolCalls)+1)
-		if m.HasText() {
-			blocks = append(blocks, anthropic.NewTextBlock(m.GetText()))
-		}
-		blocks = append(blocks, buildClaudeToolCallBlocks(toolCalls)...)
-		if len(blocks) == 0 {
-			return nil
-		}
-		messages := []anthropic.MessageParam{anthropic.NewAssistantMessage(blocks...)}
+	// Special handling for assistant messages with tool results that need to be in separate messages
+	// This is a Claude API requirement: tool results must be in user messages following assistant messages
+	if m.Role == chat.AssistantRole {
+		// Check if there are tool results that need to be in a separate message
+		// This would happen if using the old API pattern where tool results are added separately
 		toolResults := m.GetToolResults()
 		if len(toolResults) > 0 {
-			resultBlocks := buildClaudeToolResultBlocks(toolResults)
-			if len(resultBlocks) > 0 {
-				messages = append(messages, anthropic.NewUserMessage(resultBlocks...))
+			// First, create the assistant message without tool results
+			assistantMsg := chat.Message{
+				Role:     chat.AssistantRole,
+				Contents: []chat.Content{},
 			}
-		}
-		return messages
-	case chat.ToolRole:
-		toolResults := m.GetToolResults()
-		if len(toolResults) == 0 {
-			if !m.HasText() {
-				return nil
+
+			// Copy over non-tool-result contents
+			for _, c := range m.Contents {
+				if c.ToolResult == nil {
+					assistantMsg.Contents = append(assistantMsg.Contents, c)
+				}
 			}
-			return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.GetText()))}
+
+			// Convert assistant message
+			var messages []anthropic.MessageParam
+			if len(assistantMsg.Contents) > 0 {
+				if param, err := messageParam(assistantMsg); err == nil {
+					messages = append(messages, param)
+				}
+			}
+
+			// Create separate user message for tool results
+			toolMsg := chat.Message{
+				Role:     chat.ToolRole,
+				Contents: []chat.Content{},
+			}
+			for _, tr := range toolResults {
+				toolMsg.Contents = append(toolMsg.Contents, chat.Content{
+					ToolResult: &tr,
+				})
+			}
+
+			if len(toolMsg.Contents) > 0 {
+				if param, err := messageParam(toolMsg); err == nil {
+					messages = append(messages, param)
+				}
+			}
+
+			return messages
 		}
-		// Build tool result blocks and ensure we have content
-		resultBlocks := buildClaudeToolResultBlocks(toolResults)
-		if len(resultBlocks) == 0 {
-			// No valid tool results to send, return nil to avoid empty message
-			return nil
-		}
-		return []anthropic.MessageParam{anthropic.NewUserMessage(resultBlocks...)}
-	default:
-		if !m.HasText() {
-			return nil
-		}
-		return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.GetText()))}
 	}
+
+	// For all other cases, use messageParam directly
+	param, err := messageParam(m)
+	if err != nil {
+		// Return nil for messages that can't be converted (e.g., empty messages)
+		return nil
+	}
+	return []anthropic.MessageParam{param}
 }
 
 // handleToolCallRounds handles potentially multiple rounds of tool calls
