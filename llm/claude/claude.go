@@ -182,11 +182,11 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		switch m.Role {
 		case chat.UserRole:
 			messages = append(messages, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(m.Content),
+				anthropic.NewTextBlock(m.GetText()),
 			))
 		case chat.AssistantRole:
 			messages = append(messages, anthropic.NewAssistantMessage(
-				anthropic.NewTextBlock(m.Content),
+				anthropic.NewTextBlock(m.GetText()),
 			))
 		default:
 			// Claude doesn't support system role in messages, only as a separate field
@@ -198,16 +198,16 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	switch msg.Role {
 	case chat.UserRole:
 		messages = append(messages, anthropic.NewUserMessage(
-			anthropic.NewTextBlock(msg.Content),
+			anthropic.NewTextBlock(msg.GetText()),
 		))
 	case chat.AssistantRole:
 		messages = append(messages, anthropic.NewAssistantMessage(
-			anthropic.NewTextBlock(msg.Content),
+			anthropic.NewTextBlock(msg.GetText()),
 		))
 	default:
 		// If it's a system message, convert to user message
 		messages = append(messages, anthropic.NewUserMessage(
-			anthropic.NewTextBlock(msg.Content),
+			anthropic.NewTextBlock(msg.GetText()),
 		))
 	}
 
@@ -495,10 +495,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		log.Printf("[Claude] Initial response has no tool calls, returning content: %q\n", respContent.String())
 	}
 
-	respMsg := chat.Message{
-		Role:    chat.AssistantRole,
-		Content: respContent.String(),
-	}
+	respMsg := chat.AssistantMessage(respContent.String())
 
 	// Update history
 	c.state.AppendMessages([]chat.Message{reqMsg, respMsg}, nil)
@@ -677,49 +674,52 @@ func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
 	switch m.Role {
 	case chat.UserRole:
 		var blocks []anthropic.ContentBlockParamUnion
-		if m.Content != "" {
-			blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+		if m.HasText() {
+			blocks = append(blocks, anthropic.NewTextBlock(m.GetText()))
 		}
 		if len(blocks) == 0 {
 			return nil
 		}
 		return []anthropic.MessageParam{anthropic.NewUserMessage(blocks...)}
 	case chat.AssistantRole:
-		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
-		if m.Content != "" {
-			blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+		toolCalls := m.GetToolCalls()
+		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(toolCalls)+1)
+		if m.HasText() {
+			blocks = append(blocks, anthropic.NewTextBlock(m.GetText()))
 		}
-		blocks = append(blocks, buildClaudeToolCallBlocks(m.ToolCalls)...)
+		blocks = append(blocks, buildClaudeToolCallBlocks(toolCalls)...)
 		if len(blocks) == 0 {
 			return nil
 		}
 		messages := []anthropic.MessageParam{anthropic.NewAssistantMessage(blocks...)}
-		if len(m.ToolResults) > 0 {
-			resultBlocks := buildClaudeToolResultBlocks(m.ToolResults)
+		toolResults := m.GetToolResults()
+		if len(toolResults) > 0 {
+			resultBlocks := buildClaudeToolResultBlocks(toolResults)
 			if len(resultBlocks) > 0 {
 				messages = append(messages, anthropic.NewUserMessage(resultBlocks...))
 			}
 		}
 		return messages
 	case chat.ToolRole:
-		if len(m.ToolResults) == 0 {
-			if m.Content == "" {
+		toolResults := m.GetToolResults()
+		if len(toolResults) == 0 {
+			if !m.HasText() {
 				return nil
 			}
-			return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content))}
+			return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.GetText()))}
 		}
 		// Build tool result blocks and ensure we have content
-		resultBlocks := buildClaudeToolResultBlocks(m.ToolResults)
+		resultBlocks := buildClaudeToolResultBlocks(toolResults)
 		if len(resultBlocks) == 0 {
 			// No valid tool results to send, return nil to avoid empty message
 			return nil
 		}
 		return []anthropic.MessageParam{anthropic.NewUserMessage(resultBlocks...)}
 	default:
-		if m.Content == "" {
+		if !m.HasText() {
 			return nil
 		}
-		return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content))}
+		return []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(m.GetText()))}
 	}
 }
 
@@ -739,7 +739,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Add the initial user message
 	msgs = append(msgs, anthropic.NewUserMessage(
-		anthropic.NewTextBlock(initialMsg.Content),
+		anthropic.NewTextBlock(initialMsg.GetText()),
 	))
 
 	// Process tool calls in a loop until we get a final response
@@ -777,16 +777,17 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		assistantMsg := anthropic.NewAssistantMessage(assistantContentBlocks...)
 		msgs = append(msgs, assistantMsg)
 
-		stateMessages := []chat.Message{{
-			Role:      chat.AssistantRole,
-			Content:   initialContent,
-			ToolCalls: chatToolCalls,
-		}}
+		chatAssistantMsg := chat.AssistantMessage(initialContent)
+		for _, tc := range chatToolCalls {
+			chatAssistantMsg.AddToolCall(tc)
+		}
+		stateMessages := []chat.Message{chatAssistantMsg}
 		if len(chatToolResults) > 0 {
-			stateMessages = append(stateMessages, chat.Message{
-				Role:        chat.ToolRole,
-				ToolResults: chatToolResults,
-			})
+			toolMsg := chat.Message{Role: chat.ToolRole}
+			for _, tr := range chatToolResults {
+				toolMsg.AddToolResult(tr)
+			}
+			stateMessages = append(stateMessages, toolMsg)
 		}
 		c.state.AppendMessages(stateMessages, nil)
 		initialContent = ""
@@ -998,13 +999,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// No more tool calls, we have the final response
 		// The content includes both initial text (if any) and follow-up response
-		finalMsg := chat.Message{
-			Role:    chat.AssistantRole,
-			Content: respContent.String(),
-		}
+		finalMsg := chat.AssistantMessage(respContent.String())
 
 		if c.debug {
-			log.Printf("[Claude] Returning final response from tool handler, content length: %d\n", len(finalMsg.Content))
+			log.Printf("[Claude] Returning final response from tool handler, content length: %d\n", len(finalMsg.GetText()))
 		}
 
 		// Update history - update both messages at once

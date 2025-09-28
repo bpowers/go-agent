@@ -197,11 +197,11 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		}
 
 		// Skip messages with empty content to avoid API errors
-		if m.Content != "" {
+		if m.HasText() {
 			contents = append(contents, &genai.Content{
 				Role: role,
 				Parts: []*genai.Part{
-					{Text: m.Content},
+					{Text: m.GetText()},
 				},
 			})
 		}
@@ -221,7 +221,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	contents = append(contents, &genai.Content{
 		Role: currentRole,
 		Parts: []*genai.Part{
-			{Text: msg.Content},
+			{Text: msg.GetText()},
 		},
 	})
 
@@ -342,10 +342,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		return c.handleToolCallRounds(ctx, reqMsg, functionCalls, reqOpts, callback)
 	}
 
-	respMsg := chat.Message{
-		Role:    chat.AssistantRole,
-		Content: respContent.String(),
-	}
+	respMsg := chat.AssistantMessage(respContent.String())
 
 	// Update history
 	c.state.AppendMessages([]chat.Message{reqMsg, respMsg}, nil)
@@ -506,7 +503,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	msgs = append(msgs, &genai.Content{
 		Role: "user",
 		Parts: []*genai.Part{
-			{Text: initialMsg.Content},
+			{Text: initialMsg.GetText()},
 		},
 	})
 
@@ -684,10 +681,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// No more function calls, we have the final response
-		finalMsg := chat.Message{
-			Role:    chat.AssistantRole,
-			Content: respContent.String(),
-		}
+		finalMsg := chat.AssistantMessage(respContent.String())
 
 		// Update history - update both messages at once
 		c.state.AppendMessages([]chat.Message{initialMsg, finalMsg}, nil)
@@ -767,20 +761,21 @@ func buildGeminiToolResults(toolResults []chat.ToolResult) []*genai.Part {
 func geminiContentsFromChatMessage(m chat.Message) []*genai.Content {
 	switch m.Role {
 	case chat.UserRole:
-		if m.Content == "" {
+		if !m.HasText() {
 			return nil
 		}
 		return []*genai.Content{{
 			Role:  "user",
-			Parts: []*genai.Part{{Text: m.Content}},
+			Parts: []*genai.Part{{Text: m.GetText()}},
 		}}
 	case chat.AssistantRole:
-		parts := make([]*genai.Part, 0, len(m.ToolCalls)+1)
-		if m.Content != "" {
-			parts = append(parts, &genai.Part{Text: m.Content})
+		toolCalls := m.GetToolCalls()
+		parts := make([]*genai.Part, 0, len(toolCalls)+1)
+		if m.HasText() {
+			parts = append(parts, &genai.Part{Text: m.GetText()})
 		}
 		// Add tool calls
-		toolCallParts := buildGeminiFunctionCalls(m.ToolCalls)
+		toolCallParts := buildGeminiFunctionCalls(toolCalls)
 		parts = append(parts, toolCallParts...)
 
 		var contents []*genai.Content
@@ -788,33 +783,35 @@ func geminiContentsFromChatMessage(m chat.Message) []*genai.Content {
 		if len(parts) > 0 {
 			// Skip assistant messages with no content and no tool calls
 			// These are intermediate tool-processing messages that shouldn't be in history
-			if m.Content == "" && len(toolCallParts) == 0 {
+			if !m.HasText() && len(toolCallParts) == 0 {
 				// Skip this message entirely
 			} else {
 				contents = append(contents, &genai.Content{Role: "model", Parts: parts})
 			}
 		}
-		if len(m.ToolResults) > 0 {
-			toolResultParts := buildGeminiToolResults(m.ToolResults)
+		toolResults := m.GetToolResults()
+		if len(toolResults) > 0 {
+			toolResultParts := buildGeminiToolResults(toolResults)
 			if len(toolResultParts) > 0 {
 				contents = append(contents, &genai.Content{Role: "function", Parts: toolResultParts})
 			}
 		}
 		return contents
 	case chat.ToolRole:
-		if len(m.ToolResults) == 0 {
+		toolResults := m.GetToolResults()
+		if len(toolResults) == 0 {
 			return nil
 		}
-		toolResultParts := buildGeminiToolResults(m.ToolResults)
+		toolResultParts := buildGeminiToolResults(toolResults)
 		if len(toolResultParts) == 0 {
 			return nil
 		}
 		return []*genai.Content{{Role: "function", Parts: toolResultParts}}
 	default:
-		if m.Content == "" {
+		if !m.HasText() {
 			return nil
 		}
-		return []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: m.Content}}}}
+		return []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: m.GetText()}}}}
 	}
 }
 

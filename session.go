@@ -197,7 +197,9 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		for _, msg := range options.initialMessages {
 			options.store.AddRecord(options.sessionID, persistence.Record{
 				Role:         chat.Role(msg.Role),
-				Content:      msg.Content,
+				Content:      msg.GetText(),
+				ToolCalls:    msg.GetToolCalls(),
+				ToolResults:  msg.GetToolResults(),
 				Live:         true,
 				InputTokens:  0, // Initial messages' tokens counted with first query
 				OutputTokens: 0,
@@ -338,7 +340,9 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 	// Add user message to records (tokens will be updated after response)
 	userMsgID, _ := s.store.AddRecord(s.sessionID, persistence.Record{
 		Role:         chat.Role(msg.Role),
-		Content:      msg.Content,
+		Content:      msg.GetText(),
+		ToolCalls:    msg.GetToolCalls(),
+		ToolResults:  msg.GetToolResults(),
 		Live:         true,
 		InputTokens:  0, // Will be updated after response
 		OutputTokens: 0,
@@ -347,10 +351,7 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 
 	// Store message ID for later token update
 	s.lastUserMessageID = userMsgID
-	s.lastUserMessage = chat.Message{
-		Role:    msg.Role,
-		Content: msg.Content,
-	}
+	s.lastUserMessage = msg
 
 	// Check if we need to compact before sending
 	if s.shouldCompactLocked() {
@@ -423,7 +424,7 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 	newMessages := history[s.lastHistoryLen:]
 	if len(newMessages) > 0 {
 		first := newMessages[0]
-		if first.Role == s.lastUserMessage.Role && first.Content == s.lastUserMessage.Content && len(first.ToolCalls) == 0 && len(first.ToolResults) == 0 {
+		if first.Role == s.lastUserMessage.Role && first.GetText() == s.lastUserMessage.GetText() && !first.HasToolCalls() && !first.HasToolResults() {
 			newMessages = newMessages[1:]
 		}
 	}
@@ -431,9 +432,9 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 	for i, m := range newMessages {
 		rec := persistence.Record{
 			Role:        m.Role,
-			Content:     m.Content,
-			ToolCalls:   cloneToolCalls(m.ToolCalls),
-			ToolResults: cloneToolResults(m.ToolResults),
+			Content:     m.GetText(),
+			ToolCalls:   cloneToolCalls(m.GetToolCalls()),
+			ToolResults: cloneToolResults(m.GetToolResults()),
 			Live:        true,
 			Timestamp:   now.Add(time.Millisecond * time.Duration(i)),
 		}
@@ -702,12 +703,17 @@ func (s *session) buildChatHistoryLocked() (string, []chat.Message) {
 				systemPrompt += "\n\n" + r.Content
 			}
 		} else {
-			msgs = append(msgs, chat.Message{
-				Role:        chat.Role(r.Role),
-				Content:     r.Content,
-				ToolCalls:   cloneToolCalls(r.ToolCalls),
-				ToolResults: cloneToolResults(r.ToolResults),
-			})
+			msg := chat.Message{Role: chat.Role(r.Role)}
+			if r.Content != "" {
+				msg.AddText(r.Content)
+			}
+			for _, tc := range cloneToolCalls(r.ToolCalls) {
+				msg.AddToolCall(tc)
+			}
+			for _, tr := range cloneToolResults(r.ToolResults) {
+				msg.AddToolResult(tr)
+			}
+			msgs = append(msgs, msg)
 		}
 	}
 

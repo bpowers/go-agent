@@ -26,8 +26,8 @@ func TestState_NewState(t *testing.T) {
 	t.Run("with initial messages", func(t *testing.T) {
 		t.Parallel()
 		initialMsgs := []chat.Message{
-			{Role: chat.UserRole, Content: "Hello"},
-			{Role: chat.AssistantRole, Content: "Hi there"},
+			chat.UserMessage("Hello"),
+			chat.AssistantMessage("Hi there"),
 		}
 
 		s := NewState("system", initialMsgs)
@@ -41,17 +41,17 @@ func TestState_NewState(t *testing.T) {
 	t.Run("copies initial messages", func(t *testing.T) {
 		t.Parallel()
 		initialMsgs := []chat.Message{
-			{Role: chat.UserRole, Content: "Hello"},
+			chat.UserMessage("Hello"),
 		}
 
 		s := NewState("system", initialMsgs)
 
-		// Modify original slice
-		initialMsgs[0].Content = "Modified"
+		// Modify original slice by replacing the message
+		initialMsgs[0] = chat.UserMessage("Modified")
 
 		// State should have the original value
 		_, msgs := s.History()
-		assert.Equal(t, "Hello", msgs[0].Content)
+		assert.Equal(t, "Hello", msgs[0].GetText())
 	})
 }
 
@@ -59,7 +59,7 @@ func TestState_Snapshot(t *testing.T) {
 	t.Parallel()
 
 	s := NewState("system prompt", []chat.Message{
-		{Role: chat.UserRole, Content: "Hello"},
+		chat.UserMessage("Hello"),
 	})
 
 	systemPrompt, msgs := s.Snapshot()
@@ -67,10 +67,10 @@ func TestState_Snapshot(t *testing.T) {
 	assert.Len(t, msgs, 1)
 
 	// Modifying snapshot shouldn't affect state
-	msgs[0].Content = "Modified"
+	msgs[0] = chat.UserMessage("Modified")
 
 	_, originalMsgs := s.History()
-	assert.Equal(t, "Hello", originalMsgs[0].Content)
+	assert.Equal(t, "Hello", originalMsgs[0].GetText())
 }
 
 func TestState_AppendMessages(t *testing.T) {
@@ -81,8 +81,8 @@ func TestState_AppendMessages(t *testing.T) {
 		s := NewState("system", nil)
 
 		newMsgs := []chat.Message{
-			{Role: chat.UserRole, Content: "Question"},
-			{Role: chat.AssistantRole, Content: "Answer"},
+			chat.UserMessage("Question"),
+			chat.AssistantMessage("Answer"),
 		}
 
 		s.AppendMessages(newMsgs, nil)
@@ -109,7 +109,7 @@ func TestState_AppendMessages(t *testing.T) {
 		}
 
 		s.AppendMessages([]chat.Message{
-			{Role: chat.UserRole, Content: "Q1"},
+			chat.UserMessage("Q1"),
 		}, usage1)
 
 		tokenUsage, err := s.TokenUsage()
@@ -127,7 +127,7 @@ func TestState_AppendMessages(t *testing.T) {
 		}
 
 		s.AppendMessages([]chat.Message{
-			{Role: chat.AssistantRole, Content: "A1"},
+			chat.AssistantMessage("A1"),
 		}, usage2)
 
 		tokenUsage, err = s.TokenUsage()
@@ -147,7 +147,7 @@ func TestState_AppendMessages(t *testing.T) {
 			TotalTokens:  30,
 		}
 
-		s.AppendMessages([]chat.Message{{Role: chat.UserRole, Content: "Q"}}, usage1)
+		s.AppendMessages([]chat.Message{chat.UserMessage("Q")}, usage1)
 
 		// Append with zero usage
 		zeroUsage := &chat.TokenUsageDetails{
@@ -156,7 +156,7 @@ func TestState_AppendMessages(t *testing.T) {
 			TotalTokens:  0,
 		}
 
-		s.AppendMessages([]chat.Message{{Role: chat.AssistantRole, Content: "A"}}, zeroUsage)
+		s.AppendMessages([]chat.Message{chat.AssistantMessage("A")}, zeroUsage)
 
 		tokenUsage, err := s.TokenUsage()
 		require.NoError(t, err)
@@ -223,10 +223,7 @@ func TestState_Concurrency(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < msgsPerGoroutine; j++ {
-					msg := chat.Message{
-						Role:    chat.UserRole,
-						Content: "msg",
-					}
+					msg := chat.UserMessage("msg")
 					s.AppendMessages([]chat.Message{msg}, nil)
 				}
 			}(i)
@@ -241,7 +238,7 @@ func TestState_Concurrency(t *testing.T) {
 	t.Run("concurrent reads and writes", func(t *testing.T) {
 		t.Parallel()
 		s := NewState("system", []chat.Message{
-			{Role: chat.UserRole, Content: "initial"},
+			chat.UserMessage("initial"),
 		})
 
 		const numReaders = 50
@@ -270,10 +267,7 @@ func TestState_Concurrency(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < iterations; j++ {
-					msg := chat.Message{
-						Role:    chat.AssistantRole,
-						Content: "response",
-					}
+					msg := chat.AssistantMessage("response")
 					usage := &chat.TokenUsageDetails{
 						InputTokens:  1,
 						OutputTokens: 1,
@@ -336,8 +330,8 @@ func TestState_History(t *testing.T) {
 	t.Parallel()
 
 	initialMsgs := []chat.Message{
-		{Role: chat.UserRole, Content: "Hello"},
-		{Role: chat.AssistantRole, Content: "Hi"},
+		chat.UserMessage("Hello"),
+		chat.AssistantMessage("Hi"),
 	}
 
 	s := NewState("system", initialMsgs)
@@ -347,10 +341,10 @@ func TestState_History(t *testing.T) {
 	assert.Equal(t, initialMsgs, msgs)
 
 	// Modifying returned messages shouldn't affect internal state
-	msgs[0].Content = "Modified"
+	msgs[0] = chat.UserMessage("Modified")
 
 	_, originalMsgs := s.History()
-	assert.Equal(t, "Hello", originalMsgs[0].Content)
+	assert.Equal(t, "Hello", originalMsgs[0].GetText())
 }
 
 func TestState_TokenUsage(t *testing.T) {

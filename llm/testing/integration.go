@@ -64,21 +64,18 @@ func TestStreamingResponse(t testing.TB, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant that explains complex concepts clearly.", nil...)
 
 	// Test non-streaming first
-	response, err := chatSession.Message(context.Background(), chat.Message{
-		Role:    chat.UserRole,
-		Content: prompt,
-	})
+	response, err := chatSession.Message(context.Background(), chat.UserMessage(prompt))
 	if err != nil {
 		t.Fatalf("Failed to get response: %v", err)
 	}
 
 	// Validate response content
-	if response.Content == "" {
+	if response.GetText() == "" {
 		t.Error("Expected non-empty response content")
 	}
 
 	// Check for system dynamics keywords
-	content := strings.ToLower(response.Content)
+	content := strings.ToLower(response.GetText())
 	expectedKeywords := []string{"system", "dynamics", "feedback", "model"}
 	missingKeywords := []string{}
 	for _, keyword := range expectedKeywords {
@@ -91,7 +88,7 @@ func TestStreamingResponse(t testing.TB, client chat.Client) {
 	}
 
 	// Count paragraphs (rough approximation)
-	paragraphs := strings.Split(response.Content, "\n\n")
+	paragraphs := strings.Split(response.GetText(), "\n\n")
 	if len(paragraphs) < 3 {
 		t.Errorf("Expected at least 3 paragraphs, got %d", len(paragraphs))
 	}
@@ -102,10 +99,7 @@ func TestStreamingResponse(t testing.TB, client chat.Client) {
 
 	streamResponse, err := chatSession.Message(
 		context.Background(),
-		chat.Message{
-			Role:    chat.UserRole,
-			Content: "Now explain reinforcement loops in one paragraph.",
-		},
+		chat.UserMessage("Now explain reinforcement loops in one paragraph."),
 		chat.WithStreamingCb(func(event chat.StreamEvent) error {
 			if event.Type == chat.StreamEventTypeContent {
 				streamedContent.WriteString(event.Content)
@@ -124,7 +118,7 @@ func TestStreamingResponse(t testing.TB, client chat.Client) {
 	}
 
 	// Validate final response matches streamed content
-	if streamResponse.Content != streamedContent.String() {
+	if streamResponse.GetText() != streamedContent.String() {
 		t.Error("Final response doesn't match streamed content")
 	}
 
@@ -146,10 +140,7 @@ func TestTokenUsageCumulative(t testing.TB, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant. Be concise.")
 
 	// First message: request a long response (4 paragraphs)
-	_, err := chatSession.Message(context.Background(), chat.Message{
-		Role:    chat.UserRole,
-		Content: "Write exactly 4 paragraphs explaining the water cycle. Each paragraph should be at least 3 sentences long.",
-	})
+	_, err := chatSession.Message(context.Background(), chat.UserMessage("Write exactly 4 paragraphs explaining the water cycle. Each paragraph should be at least 3 sentences long."))
 	if err != nil {
 		t.Fatalf("Failed to get first response: %v", err)
 	}
@@ -187,10 +178,7 @@ func TestTokenUsageCumulative(t testing.TB, client chat.Client) {
 		usage1.Cumulative.InputTokens, usage1.Cumulative.OutputTokens, usage1.Cumulative.TotalTokens)
 
 	// Second message: request a very short response (1 word)
-	_, err = chatSession.Message(context.Background(), chat.Message{
-		Role:    chat.UserRole,
-		Content: "Reply with exactly one word: yes or no. Is water important?",
-	})
+	_, err = chatSession.Message(context.Background(), chat.UserMessage("Reply with exactly one word: yes or no. Is water important?"))
 	if err != nil {
 		t.Fatalf("Failed to get second response: %v", err)
 	}
@@ -290,10 +278,7 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 
 	_, err = chatSession.Message(
 		context.Background(),
-		chat.Message{
-			Role:    chat.UserRole,
-			Content: "Please use the echo tool to echo the message 'Hello World'",
-		},
+		chat.UserMessage("Please use the echo tool to echo the message 'Hello World'"),
 		chat.WithStreamingCb(func(event chat.StreamEvent) error {
 			switch event.Type {
 			case chat.StreamEventTypeToolCall:
@@ -395,10 +380,7 @@ func TestToolCallAndResultStreamEvents(t testing.TB, client chat.Client) {
 
 	_, err = chatSession.Message(
 		context.Background(),
-		chat.Message{
-			Role:    chat.UserRole,
-			Content: "Please use the echo tool to echo the message 'Hello World'",
-		},
+		chat.UserMessage("Please use the echo tool to echo the message 'Hello World'"),
 		chat.WithStreamingCb(func(event chat.StreamEvent) error {
 			switch event.Type {
 			case chat.StreamEventTypeToolCall:
@@ -591,10 +573,7 @@ func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 	// Test with a message that should trigger tool use
 	response, err := chatSession.Message(
 		context.Background(),
-		chat.Message{
-			Role:    chat.UserRole,
-			Content: "Please use the empty_result_tool to perform a test action.",
-		},
+		chat.UserMessage("Please use the empty_result_tool to perform a test action."),
 	)
 	// The request should succeed even with empty tool results
 	if err != nil {
@@ -602,7 +581,7 @@ func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 	}
 
 	// Verify we got a response
-	if response.Content == "" {
+	if response.GetText() == "" {
 		t.Error("Expected non-empty response content")
 	}
 
@@ -631,10 +610,7 @@ func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 	var streamedContent strings.Builder
 	streamResponse, err := streamingSession.Message(
 		context.Background(),
-		chat.Message{
-			Role:    chat.UserRole,
-			Content: "Please use the empty_result_tool to perform a test action.",
-		},
+		chat.UserMessage("Please use the empty_result_tool to perform a test action."),
 		chat.WithStreamingCb(func(event chat.StreamEvent) error {
 			if event.Type == chat.StreamEventTypeContent {
 				streamedContent.WriteString(event.Content)
@@ -648,7 +624,7 @@ func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 	}
 
 	// Verify we got a response
-	if streamResponse.Content == "" {
+	if streamResponse.GetText() == "" {
 		t.Error("Expected non-empty response content from streaming")
 	}
 
@@ -722,17 +698,14 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	// Test with a message that should trigger tool use
 	response, err := chatSession.Message(
 		ctx,
-		chat.Message{
-			Role:    chat.UserRole,
-			Content: "Please add 42 and 58 for me.",
-		},
+		chat.UserMessage("Please add 42 and 58 for me."),
 	)
 	if err != nil {
 		t.Fatalf("Failed to get response with system reminder: %v", err)
 	}
 
 	// Verify we got a response
-	if response.Content == "" {
+	if response.GetText() == "" {
 		t.Error("Expected non-empty response content")
 	}
 
@@ -742,11 +715,11 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	}
 
 	// The response should contain the result (100)
-	if !strings.Contains(response.Content, "100") {
+	if !strings.Contains(response.GetText(), "100") {
 		t.Error("Expected response to contain the calculation result '100'")
 	}
 
-	t.Logf("Tool executed %d times, response length: %d chars", toolExecutionCount, len(response.Content))
+	t.Logf("Tool executed %d times, response length: %d chars", toolExecutionCount, len(response.GetText()))
 
 	// Test with streaming to ensure reminders work with streaming too
 	streamingSession := client.NewChat("You are a helpful assistant with access to tools.")
@@ -794,10 +767,7 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	// Test with streaming
 	streamResponse, err := streamingSession.Message(
 		streamCtx,
-		chat.Message{
-			Role:    chat.UserRole,
-			Content: "Calculate 15 plus 25 for me.",
-		},
+		chat.UserMessage("Calculate 15 plus 25 for me."),
 		chat.WithStreamingCb(streamCallback),
 	)
 	if err != nil {
@@ -805,7 +775,7 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	}
 
 	// Verify streaming worked
-	if streamResponse.Content == "" {
+	if streamResponse.GetText() == "" {
 		t.Error("Expected non-empty response content from streaming")
 	}
 
@@ -814,7 +784,7 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	}
 
 	// The response should contain the result (40)
-	if !strings.Contains(streamResponse.Content, "40") {
+	if !strings.Contains(streamResponse.GetText(), "40") {
 		t.Error("Expected streaming response to contain the calculation result '40'")
 	}
 

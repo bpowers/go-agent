@@ -260,10 +260,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 		}
 
 		// Create user message
-		userMsg := chat.Message{
-			Role:    chat.UserRole,
-			Content: userInput,
-		}
+		userMsg := chat.UserMessage(userInput)
 
 		// Send message and get response
 		_, _ = fmt.Fprint(output, "\nAssistant: ")

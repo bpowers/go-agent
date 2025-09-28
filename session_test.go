@@ -39,15 +39,12 @@ func (m *mockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.O
 	callback := appliedOpts.StreamingCb
 
 	// Simple mock response
-	response := chat.Message{
-		Role:    chat.AssistantRole,
-		Content: fmt.Sprintf("Response to: %s", msg.Content),
-	}
+	response := chat.AssistantMessage(fmt.Sprintf("Response to: %s", msg.GetText()))
 
 	// If callback is provided, simulate streaming
 	if callback != nil {
 		m.messageStreamCalls++
-		for _, word := range strings.Fields(response.Content) {
+		for _, word := range strings.Fields(response.GetText()) {
 			if err := callback(chat.StreamEvent{
 				Type:    chat.StreamEventTypeContent,
 				Content: word + " ",
@@ -65,8 +62,8 @@ func (m *mockChat) Message(ctx context.Context, msg chat.Message, opts ...chat.O
 	m.messages = append(m.messages, response)
 
 	// Update token usage - new format with LastMessage and Cumulative
-	inputTokens := estimateTokens(msg.Content)
-	outputTokens := estimateTokens(response.Content)
+	inputTokens := estimateTokens(msg.GetText())
+	outputTokens := estimateTokens(response.GetText())
 
 	m.tokenUsage.LastMessage = chat.TokenUsageDetails{
 		InputTokens:  inputTokens,
@@ -140,33 +137,22 @@ func (m *toolMockChat) Message(ctx context.Context, msg chat.Message, opts ...ch
 	m.messageCalls++
 	m.messages = append(m.messages, msg)
 
-	toolCall := chat.Message{
-		Role: chat.AssistantRole,
-		ToolCalls: []chat.ToolCall{
-			{
-				ID:        "tool-call-1",
-				Name:      "echo",
-				Arguments: json.RawMessage(`{"message":"hi"}`),
-			},
-		},
-	}
+	toolCall := chat.Message{Role: chat.AssistantRole}
+	toolCall.AddToolCall(chat.ToolCall{
+		ID:        "tool-call-1",
+		Name:      "echo",
+		Arguments: json.RawMessage(`{"message":"hi"}`),
+	})
 
-	toolResult := chat.Message{
-		Role: chat.ToolRole,
-		ToolResults: []chat.ToolResult{
-			{
-				ToolCallID: "tool-call-1",
-				Name:       "echo",
-				Content:    `{"result":"Echo: hi"}`,
-			},
-		},
-		Content: `{"result":"Echo: hi"}`,
-	}
+	toolResult := chat.Message{Role: chat.ToolRole}
+	toolResult.AddToolResult(chat.ToolResult{
+		ToolCallID: "tool-call-1",
+		Name:       "echo",
+		Content:    `{"result":"Echo: hi"}`,
+	})
+	toolResult.AddText(`{"result":"Echo: hi"}`)
 
-	final := chat.Message{
-		Role:    chat.AssistantRole,
-		Content: "Echo complete",
-	}
+	final := chat.AssistantMessage("Echo complete")
 
 	m.messages = append(m.messages, toolCall, toolResult, final)
 
@@ -223,13 +209,10 @@ func TestSessionBasics(t *testing.T) {
 
 	// Test sending a message
 	ctx := context.Background()
-	response, err := session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Hello",
-	})
+	response, err := session.Message(ctx, chat.UserMessage("Hello"))
 	require.NoError(t, err)
 	assert.Equal(t, chat.AssistantRole, response.Role)
-	assert.Contains(t, response.Content, "Hello")
+	assert.Contains(t, response.GetText(), "Hello")
 
 	// Check records
 	records := session.LiveRecords()
@@ -246,10 +229,7 @@ func TestSessionStreaming(t *testing.T) {
 	ctx := context.Background()
 	var streamedContent strings.Builder
 
-	response, err := session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Stream test",
-	}, chat.WithStreamingCb(func(event chat.StreamEvent) error {
+	response, err := session.Message(ctx, chat.UserMessage("Stream test"), chat.WithStreamingCb(func(event chat.StreamEvent) error {
 		if event.Type == chat.StreamEventTypeContent {
 			streamedContent.WriteString(event.Content)
 		}
@@ -257,7 +237,7 @@ func TestSessionStreaming(t *testing.T) {
 	}))
 
 	require.NoError(t, err)
-	assert.Contains(t, response.Content, "Stream test")
+	assert.Contains(t, response.GetText(), "Stream test")
 	assert.Contains(t, streamedContent.String(), "Stream test")
 
 	// Check that it was recorded
@@ -269,8 +249,8 @@ func TestSessionStreaming(t *testing.T) {
 func TestSessionHistory(t *testing.T) {
 	client := &mockClient{}
 	initialMsgs := []chat.Message{
-		{Role: chat.UserRole, Content: "Initial message"},
-		{Role: chat.AssistantRole, Content: "Initial response"},
+		chat.UserMessage("Initial message"),
+		chat.AssistantMessage("Initial response"),
 	}
 
 	session := NewSession(client, "System prompt",
@@ -279,15 +259,12 @@ func TestSessionHistory(t *testing.T) {
 	systemPrompt, msgs := session.History()
 	assert.Equal(t, "System prompt", systemPrompt)
 	assert.Len(t, msgs, 2)
-	assert.Equal(t, "Initial message", msgs[0].Content)
-	assert.Equal(t, "Initial response", msgs[1].Content)
+	assert.Equal(t, "Initial message", msgs[0].GetText())
+	assert.Equal(t, "Initial response", msgs[1].GetText())
 
 	// Add more messages
 	ctx := context.Background()
-	session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Another message",
-	})
+	session.Message(ctx, chat.UserMessage("Another message"))
 
 	systemPrompt, msgs = session.History()
 	assert.Equal(t, "System prompt", systemPrompt)
@@ -328,10 +305,7 @@ func TestSessionMetrics(t *testing.T) {
 
 	// Send several messages
 	for i := 0; i < 3; i++ {
-		_, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: fmt.Sprintf("Message %d", i),
-		})
+		_, err := session.Message(ctx, chat.UserMessage(fmt.Sprintf("Message %d", i)))
 		require.NoError(t, err)
 	}
 
@@ -353,10 +327,7 @@ func TestSessionCompaction(t *testing.T) {
 
 	// Add enough messages to trigger compaction
 	for i := 0; i < 10; i++ {
-		_, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: strings.Repeat("Long message ", 100), // Make it long to use more tokens
-		})
+		_, err := session.Message(ctx, chat.UserMessage(strings.Repeat("Long message ", 100))) // Make it long to use more tokens
 		require.NoError(t, err)
 	}
 
@@ -380,10 +351,7 @@ func TestManualCompaction(t *testing.T) {
 
 	// Add several messages
 	for i := 0; i < 5; i++ {
-		_, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: fmt.Sprintf("Message %d with some content", i),
-		})
+		_, err := session.Message(ctx, chat.UserMessage(fmt.Sprintf("Message %d with some content", i)))
 		require.NoError(t, err)
 	}
 
@@ -420,10 +388,7 @@ func TestSessionTokenTracking(t *testing.T) {
 	ctx := context.Background()
 
 	// Send a message
-	_, err := session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Test message",
-	})
+	_, err := session.Message(ctx, chat.UserMessage("Test message"))
 	require.NoError(t, err)
 
 	// Check token usage
@@ -435,10 +400,7 @@ func TestSessionTokenTracking(t *testing.T) {
 	assert.Greater(t, usage.LastMessage.OutputTokens, 0)
 
 	// Send another message
-	_, err = session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Another test",
-	})
+	_, err = session.Message(ctx, chat.UserMessage("Another test"))
 	require.NoError(t, err)
 
 	// Token usage should increase
@@ -467,10 +429,7 @@ func TestSessionRecordTimestamps(t *testing.T) {
 	ctx := context.Background()
 
 	// Send a message
-	_, err := session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Test",
-	})
+	_, err := session.Message(ctx, chat.UserMessage("Test"))
 	require.NoError(t, err)
 
 	// Check that records have timestamps
@@ -491,10 +450,10 @@ func TestSessionWithInitialMessages(t *testing.T) {
 	client := &mockClient{}
 
 	initialMsgs := []chat.Message{
-		{Role: chat.UserRole, Content: "First message"},
-		{Role: chat.AssistantRole, Content: "First response"},
-		{Role: chat.UserRole, Content: "Second message"},
-		{Role: chat.AssistantRole, Content: "Second response"},
+		chat.UserMessage("First message"),
+		chat.AssistantMessage("First response"),
+		chat.UserMessage("Second message"),
+		chat.AssistantMessage("Second response"),
 	}
 
 	session := NewSession(client, "System",
@@ -550,10 +509,7 @@ func TestSummarizerContextCancellation(t *testing.T) {
 	// Add enough messages to trigger compaction
 	session.SetCompactionThreshold(0.1)
 	for i := 0; i < 5; i++ {
-		_, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: strings.Repeat("Message ", 100),
-		})
+		_, err := session.Message(ctx, chat.UserMessage(strings.Repeat("Message ", 100)))
 		require.NoError(t, err)
 	}
 
@@ -561,10 +517,7 @@ func TestSummarizerContextCancellation(t *testing.T) {
 	cancel()
 
 	// This should fail because context is cancelled
-	_, err := session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: strings.Repeat("Trigger compaction ", 200),
-	})
+	_, err := session.Message(ctx, chat.UserMessage(strings.Repeat("Trigger compaction ", 200)))
 
 	// Should get a context cancellation error
 	assert.Error(t, err)
@@ -609,10 +562,7 @@ func TestCompactionThresholdZeroPersistence(t *testing.T) {
 	// Send messages to test that compaction doesn't occur
 	ctx := context.Background()
 	for i := 0; i < 20; i++ {
-		_, err := session2.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: strings.Repeat("Long message ", 100),
-		})
+		_, err := session2.Message(ctx, chat.UserMessage(strings.Repeat("Long message ", 100)))
 		require.NoError(t, err)
 	}
 
@@ -632,10 +582,7 @@ func TestRecordStatus(t *testing.T) {
 
 	// Send a successful message
 	ctx := context.Background()
-	_, err := session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Test message",
-	})
+	_, err := session.Message(ctx, chat.UserMessage("Test message"))
 	require.NoError(t, err)
 
 	// Check that records have success status
@@ -697,10 +644,7 @@ func TestSessionPersistsToolInteractions(t *testing.T) {
 	client := &toolClient{}
 	session := NewSession(client, "You are a tool tester", WithStore(store))
 
-	_, err := session.Message(context.Background(), chat.Message{
-		Role:    chat.UserRole,
-		Content: "Trigger a tool call",
-	})
+	_, err := session.Message(context.Background(), chat.UserMessage("Trigger a tool call"))
 	require.NoError(t, err)
 
 	records := session.LiveRecords()
@@ -719,8 +663,8 @@ func TestSessionPersistsToolInteractions(t *testing.T) {
 	require.Len(t, history, 4)
 	assert.Equal(t, chat.UserRole, history[0].Role)
 	assert.Equal(t, chat.AssistantRole, history[1].Role)
-	require.Len(t, history[1].ToolCalls, 1)
+	require.Len(t, history[1].GetToolCalls(), 1)
 	assert.Equal(t, chat.ToolRole, history[2].Role)
-	require.Len(t, history[2].ToolResults, 1)
+	require.Len(t, history[2].GetToolResults(), 1)
 	assert.Equal(t, chat.AssistantRole, history[3].Role)
 }

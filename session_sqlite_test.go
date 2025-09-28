@@ -38,12 +38,9 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 
 	// Test basic messaging
 	ctx := context.Background()
-	response, err := session.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Hello persistent world",
-	})
+	response, err := session.Message(ctx, chat.UserMessage("Hello persistent world"))
 	require.NoError(t, err)
-	assert.Contains(t, response.Content, "Hello persistent world")
+	assert.Contains(t, response.GetText(), "Hello persistent world")
 
 	// Check records are persisted
 	records := session.LiveRecords()
@@ -86,10 +83,7 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 
 	// Add some messages
 	for i := 0; i < 3; i++ {
-		_, err := session1.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: "Message",
-		})
+		_, err := session1.Message(ctx, chat.UserMessage("Message"))
 		require.NoError(t, err)
 	}
 
@@ -133,10 +127,7 @@ func TestSessionCompactionWithSQLite(t *testing.T) {
 
 	// Add enough messages to trigger compaction
 	for i := 0; i < 5; i++ {
-		_, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: "Test message",
-		})
+		_, err := session.Message(ctx, chat.UserMessage("Test message"))
 		require.NoError(t, err)
 	}
 
@@ -186,21 +177,15 @@ func TestSessionResumption(t *testing.T) {
 
 		// Send first message introducing the name
 		msg1 := fmt.Sprintf("Hello! My name is %s", userName)
-		response1, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: msg1,
-		})
+		response1, err := session.Message(ctx, chat.UserMessage(msg1))
 		require.NoError(t, err)
-		assert.Contains(t, response1.Content, msg1)
+		assert.Contains(t, response1.GetText(), msg1)
 
 		// Send second message with some other context
 		msg2 := "I'm interested in learning about Go programming"
-		response2, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: msg2,
-		})
+		response2, err := session.Message(ctx, chat.UserMessage(msg2))
 		require.NoError(t, err)
-		assert.Contains(t, response2.Content, msg2)
+		assert.Contains(t, response2.GetText(), msg2)
 
 		// Verify we have the expected records
 		records := session.LiveRecords()
@@ -253,16 +238,13 @@ func TestSessionResumption(t *testing.T) {
 
 		// Now ask the LLM to recall the user's name
 		ctx := context.Background()
-		response, err := resumedSession.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: "What is my name? Reply with just the name in one word.",
-		})
+		response, err := resumedSession.Message(ctx, chat.UserMessage("What is my name? Reply with just the name in one word."))
 		require.NoError(t, err)
 
 		// The mock client echoes back the content, so check if it contains the question
 		// In a real scenario with an actual LLM, we'd check if it recalls "bobby"
 		// For our mock, we just verify the message was processed
-		assert.Contains(t, response.Content, "What is my name")
+		assert.Contains(t, response.GetText(), "What is my name")
 
 		// Verify cumulative tokens were preserved
 		metrics := resumedSession.Metrics()
@@ -312,21 +294,15 @@ func TestSessionResumptionWithLLM(t *testing.T) {
 
 		// Send first message introducing the name
 		msg1 := fmt.Sprintf("Hello! My name is %s. Please remember this for later.", userName)
-		response1, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: msg1,
-		})
+		response1, err := session.Message(ctx, chat.UserMessage(msg1))
 		require.NoError(t, err)
-		require.NotEmpty(t, response1.Content)
+		require.NotEmpty(t, response1.GetText())
 
 		// Send second message with some other context
 		msg2 := "I'm interested in learning about Go programming. What's a good starting point?"
-		response2, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: msg2,
-		})
+		response2, err := session.Message(ctx, chat.UserMessage(msg2))
 		require.NoError(t, err)
-		require.NotEmpty(t, response2.Content)
+		require.NotEmpty(t, response2.GetText())
 
 		// Verify we have the expected records
 		records := session.LiveRecords()
@@ -374,16 +350,13 @@ func TestSessionResumptionWithLLM(t *testing.T) {
 
 		// Now ask the LLM to recall the user's name
 		ctx := context.Background()
-		response, err := resumedSession.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: "What is my name? Reply with just the name in one word.",
-		})
+		response, err := resumedSession.Message(ctx, chat.UserMessage("What is my name? Reply with just the name in one word."))
 		require.NoError(t, err)
 
 		// The LLM should recall the name "bobby" from the previous conversation
-		responseLower := strings.ToLower(response.Content)
+		responseLower := strings.ToLower(response.GetText())
 		assert.Contains(t, responseLower, strings.ToLower(userName),
-			"LLM should recall the name %s from the resumed session, got: %s", userName, response.Content)
+			"LLM should recall the name %s from the resumed session, got: %s", userName, response.GetText())
 
 		// Verify cumulative tokens were preserved and increased
 		metrics := resumedSession.Metrics()

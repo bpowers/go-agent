@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bpowers/go-agent/schema"
 )
@@ -105,12 +106,25 @@ type Client interface {
 	NewChat(systemPrompt string, initialMsgs ...Message) Chat
 }
 
+// Content represents a single piece of content within a message.
+// It uses a union-like structure where only one field should be set.
+type Content struct {
+	// Text content (most common case)
+	Text string `json:"text,omitzero"`
+
+	// Tool-related content
+	ToolCall   *ToolCall   `json:"tool_call,omitzero"`
+	ToolResult *ToolResult `json:"tool_result,omitzero"`
+
+	// Future extensibility (not yet implemented)
+	// Image    *ImageContent    `json:"image,omitzero"`
+	// Thinking *ThinkingContent `json:"thinking,omitzero"`
+}
+
 // Message represents a message to or from an LLM.
 type Message struct {
-	Role        Role         `json:"role,omitzero"`
-	Content     string       `json:"content,omitzero"`
-	ToolCalls   []ToolCall   `json:"tool_calls,omitzero"`
-	ToolResults []ToolResult `json:"tool_results,omitzero"`
+	Role     Role      `json:"role,omitzero"`
+	Contents []Content `json:"contents,omitzero"`
 }
 
 // requestOpts is private so that Option can only be implemented by _this_ package.
@@ -208,4 +222,131 @@ func WithDebugDir(ctx context.Context, dir string) context.Context {
 // DebugDir returns the specified directory request and response bodies should be written to, if any.
 func DebugDir(ctx context.Context) string {
 	return ctx.Value(debugDirContextKey{}).(string)
+}
+
+// Helper functions for creating messages
+
+// TextMessage creates a message with text content.
+func TextMessage(role Role, text string) Message {
+	return Message{
+		Role: role,
+		Contents: []Content{
+			{Text: text},
+		},
+	}
+}
+
+// UserMessage creates a user message with text content.
+func UserMessage(text string) Message {
+	return TextMessage(UserRole, text)
+}
+
+// AssistantMessage creates an assistant message with text content.
+func AssistantMessage(text string) Message {
+	return TextMessage(AssistantRole, text)
+}
+
+// SystemMessage creates a system message with text content.
+func SystemMessage(text string) Message {
+	return Message{
+		Role: "system",
+		Contents: []Content{
+			{Text: text},
+		},
+	}
+}
+
+// Builder pattern methods for complex messages
+
+// AddText adds text content to the message.
+func (m *Message) AddText(text string) *Message {
+	m.Contents = append(m.Contents, Content{Text: text})
+	return m
+}
+
+// AddToolCall adds a tool call to the message.
+func (m *Message) AddToolCall(tc ToolCall) *Message {
+	m.Contents = append(m.Contents, Content{ToolCall: &tc})
+	return m
+}
+
+// AddToolResult adds a tool result to the message.
+func (m *Message) AddToolResult(tr ToolResult) *Message {
+	m.Contents = append(m.Contents, Content{ToolResult: &tr})
+	return m
+}
+
+// GetText returns all text content concatenated with newlines.
+// This is a convenience method for accessing text content.
+func (m Message) GetText() string {
+	var texts []string
+	for _, c := range m.Contents {
+		if c.Text != "" {
+			texts = append(texts, c.Text)
+		}
+	}
+	if len(texts) == 0 {
+		return ""
+	}
+	if len(texts) == 1 {
+		return texts[0]
+	}
+	return strings.Join(texts, "\n")
+}
+
+// GetToolCalls returns all tool calls in the message.
+func (m Message) GetToolCalls() []ToolCall {
+	var calls []ToolCall
+	for _, c := range m.Contents {
+		if c.ToolCall != nil {
+			calls = append(calls, *c.ToolCall)
+		}
+	}
+	return calls
+}
+
+// GetToolResults returns all tool results in the message.
+func (m Message) GetToolResults() []ToolResult {
+	var results []ToolResult
+	for _, c := range m.Contents {
+		if c.ToolResult != nil {
+			results = append(results, *c.ToolResult)
+		}
+	}
+	return results
+}
+
+// IsEmpty returns true if the message has no content.
+func (m Message) IsEmpty() bool {
+	return len(m.Contents) == 0
+}
+
+// HasText returns true if the message contains any text content.
+func (m Message) HasText() bool {
+	for _, c := range m.Contents {
+		if c.Text != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasToolCalls returns true if the message contains any tool calls.
+func (m Message) HasToolCalls() bool {
+	for _, c := range m.Contents {
+		if c.ToolCall != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// HasToolResults returns true if the message contains any tool results.
+func (m Message) HasToolResults() bool {
+	for _, c := range m.Contents {
+		if c.ToolResult != nil {
+			return true
+		}
+	}
+	return false
 }

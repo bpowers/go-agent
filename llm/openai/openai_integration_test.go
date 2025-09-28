@@ -140,14 +140,11 @@ func TestOpenAIIntegration_TokenUsage(t *testing.T) {
 
 			// Send a simple message
 			ctx := context.Background()
-			response, err := chatSession.Message(ctx, chat.Message{
-				Role:    chat.UserRole,
-				Content: "Say 'Hello World' and nothing else.",
-			})
+			response, err := chatSession.Message(ctx, chat.UserMessage("Say 'Hello World' and nothing else."))
 			require.NoError(t, err, "Failed to send message")
 
 			// Verify we got a response
-			assert.NotEmpty(t, response.Content, "Expected non-empty response")
+			assert.NotEmpty(t, response.GetText(), "Expected non-empty response")
 
 			// Check token usage
 			usage, err := chatSession.TokenUsage()

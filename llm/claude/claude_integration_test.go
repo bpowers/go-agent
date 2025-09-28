@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,14 +93,11 @@ func TestClaudeIntegration_TokenUsage(t *testing.T) {
 
 	// Send a simple message
 	ctx := context.Background()
-	response, err := chatSession.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Say 'Hello World' and nothing else.",
-	})
+	response, err := chatSession.Message(ctx, chat.UserMessage("Say 'Hello World' and nothing else."))
 	require.NoError(t, err)
 
 	// Verify we got a response
-	assert.NotEmpty(t, response.Content)
+	assert.NotEmpty(t, response.GetText())
 
 	// Check token usage
 	usage, err := chatSession.TokenUsage()
@@ -220,29 +218,68 @@ func TestClaudeIntegration_SimpleToolCall(t *testing.T) {
 		}`,
 	}
 
+	// Track if tool was called and with what parameters
+	toolCalled := false
+	var toolInput string
 	err = chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {
+		toolCalled = true
+		toolInput = input
+
 		var req struct {
 			Message string `json:"message"`
 		}
 		if err := json.Unmarshal([]byte(input), &req); err != nil {
 			return fmt.Sprintf(`{"error": "failed to parse input: %s"}`, err.Error())
 		}
-		return fmt.Sprintf(`{"result": "Echo: %s"}`, req.Message)
+		// Return a deterministic result that we can verify
+		return fmt.Sprintf(`{"result": "Echo: %s", "timestamp": "2024-01-01T00:00:00Z"}`, req.Message)
 	})
 	require.NoError(t, err)
 
 	// Ask Claude to use the tool
 	ctx := context.Background()
-	response, err := chatSession.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Please use the echo tool to echo back the message 'Hello World'",
-	})
-
-	// Just make sure we get some response and no error for now
+	response, err := chatSession.Message(ctx, chat.UserMessage("Please use the echo tool to echo back the message 'Hello World'"))
 	require.NoError(t, err)
-	assert.NotEmpty(t, response.Content)
 
-	t.Logf("Response: %s", response.Content)
+	// Verify the tool was actually called
+	if !toolCalled {
+		t.Error("Expected tool to be called, but it wasn't")
+	}
+
+	// Verify the tool received the correct input parameters
+	var parsedInput struct {
+		Message string `json:"message"`
+	}
+	err = json.Unmarshal([]byte(toolInput), &parsedInput)
+	require.NoError(t, err, "Tool input should be valid JSON")
+
+	// Check that the input contains the expected message
+	// The LLM might format it slightly differently (e.g., "Hello World" vs "Hello World!")
+	if !strings.Contains(strings.ToLower(parsedInput.Message), "hello") ||
+		!strings.Contains(strings.ToLower(parsedInput.Message), "world") {
+		t.Errorf("Tool input doesn't contain expected message. Got: %s", parsedInput.Message)
+	}
+
+	// Verify the response exists and contains meaningful content
+	responseText := response.GetText()
+	if responseText == "" {
+		t.Error("Expected non-empty response content")
+	}
+
+	// The response should acknowledge the echo operation in some way
+	// Different LLMs might phrase this differently, so we check for key concepts
+	responseLower := strings.ToLower(responseText)
+	hasEchoMention := strings.Contains(responseLower, "echo") ||
+		strings.Contains(responseLower, "hello world") ||
+		strings.Contains(responseLower, "message")
+
+	if !hasEchoMention {
+		t.Logf("Response doesn't appear to reference the echo operation: %s", responseText)
+		// Don't fail the test as LLMs might express this differently
+	}
+
+	t.Logf("Tool calling test passed - Tool called: %v, Input: %s, Response: %s",
+		toolCalled, toolInput, responseText)
 }
 
 func TestClaudeIntegration_SystemReminderWithToolCalls(t *testing.T) {

@@ -76,8 +76,8 @@ func TestMessageConversion(t *testing.T) {
 	// Test that chat messages are properly converted for Responses API
 	systemPrompt := "You are a helpful assistant"
 	initialMsgs := []chat.Message{
-		{Role: chat.UserRole, Content: "Hello"},
-		{Role: chat.AssistantRole, Content: "Hi there!"},
+		chat.UserMessage("Hello"),
+		chat.AssistantMessage("Hi there!"),
 	}
 
 	client := &chatClient{

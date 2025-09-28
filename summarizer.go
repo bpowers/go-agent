@@ -60,15 +60,12 @@ func (s *llmSummarizer) Summarize(ctx context.Context, records []Record) (string
 	summaryChat := s.client.NewChat("You are an assistant tasked with summarizing conversations.")
 
 	// Get the summary
-	response, err := summaryChat.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: summaryPrompt,
-	})
+	response, err := summaryChat.Message(ctx, chat.UserMessage(summaryPrompt))
 	if err != nil {
 		return "", fmt.Errorf("summarization failed: %w", err)
 	}
 
-	return response.Content, nil
+	return response.GetText(), nil
 }
 
 // defaultSummarizationPrompt is the default prompt for LLM-based summarization.

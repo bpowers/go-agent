@@ -19,67 +19,50 @@ func TestClaudeMessagesFromChat_EmptyToolResults(t *testing.T) {
 		description string
 	}{
 		{
-			name: "tool_role_with_empty_tool_results",
-			message: chat.Message{
-				Role:        chat.ToolRole,
-				ToolResults: []chat.ToolResult{}, // Empty array
-				Content:     "",
-			},
-			wantNil:     true, // Should return nil to avoid empty message
+			name:        "tool_role_with_empty_tool_results",
+			message:     chat.Message{Role: chat.ToolRole}, // Empty message
+			wantNil:     true,                              // Should return nil to avoid empty message
 			description: "Empty ToolResults array should not create an empty message",
 		},
 		{
-			name: "tool_role_with_nil_tool_results_no_content",
-			message: chat.Message{
-				Role:        chat.ToolRole,
-				ToolResults: nil,
-				Content:     "",
-			},
+			name:        "tool_role_with_nil_tool_results_no_content",
+			message:     chat.Message{Role: chat.ToolRole}, // Empty message
 			wantNil:     true,
 			description: "Nil ToolResults with no content should return nil",
 		},
 		{
 			name: "tool_role_with_nil_tool_results_with_content",
-			message: chat.Message{
-				Role:        chat.ToolRole,
-				ToolResults: nil,
-				Content:     "Some content",
-			},
+			message: func() chat.Message {
+				m := chat.Message{Role: chat.ToolRole}
+				m.AddText("Some content")
+				return m
+			}(),
 			wantNil:     false,
 			description: "Nil ToolResults with content should create a valid message",
 		},
 		{
 			name: "tool_role_with_valid_tool_results",
-			message: chat.Message{
-				Role: chat.ToolRole,
-				ToolResults: []chat.ToolResult{
-					{
-						ToolCallID: "test_id",
-						Content:    "test result",
-						Name:       "test_tool",
-					},
-				},
-				Content: "",
-			},
+			message: func() chat.Message {
+				m := chat.Message{Role: chat.ToolRole}
+				m.AddToolResult(chat.ToolResult{
+					ToolCallID: "test_id",
+					Content:    "test result",
+					Name:       "test_tool",
+				})
+				return m
+			}(),
 			wantNil:     false,
 			description: "Valid ToolResults should create a message",
 		},
 		{
-			name: "assistant_role_with_empty_content_and_no_tool_calls",
-			message: chat.Message{
-				Role:      chat.AssistantRole,
-				Content:   "",
-				ToolCalls: []chat.ToolCall{},
-			},
+			name:        "assistant_role_with_empty_content_and_no_tool_calls",
+			message:     chat.Message{Role: chat.AssistantRole}, // Empty assistant message
 			wantNil:     true,
 			description: "Assistant message with no content and no tool calls should return nil",
 		},
 		{
-			name: "user_role_with_empty_content",
-			message: chat.Message{
-				Role:    chat.UserRole,
-				Content: "",
-			},
+			name:        "user_role_with_empty_content",
+			message:     chat.Message{Role: chat.UserRole}, // Empty user message
 			wantNil:     true,
 			description: "User message with empty content should return nil",
 		},

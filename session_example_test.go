@@ -61,24 +61,18 @@ func ExampleSession_resumption() {
 		fmt.Println("Session created")
 
 		// Have a conversation
-		_, err = session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: "Hi! My name is Bobby and I'm learning Go programming.",
-		})
+		_, err = session.Message(ctx, chat.UserMessage("Hi! My name is Bobby and I'm learning Go programming."))
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		response, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: "What are some good resources for learning Go concurrency?",
-		})
+		response, err := session.Message(ctx, chat.UserMessage("What are some good resources for learning Go concurrency?"))
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		// The assistant will provide helpful resources
-		if len(response.Content) > 0 {
+		if len(response.GetText()) > 0 {
 			fmt.Println("Conversation established")
 		}
 
@@ -115,16 +109,13 @@ func ExampleSession_resumption() {
 		fmt.Println("Session resumed")
 
 		// The assistant should remember our previous conversation
-		response, err := session.Message(ctx, chat.Message{
-			Role:    chat.UserRole,
-			Content: "What was my name again?",
-		})
+		response, err := session.Message(ctx, chat.UserMessage("What was my name again?"))
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		// Check if the assistant remembers Bobby from the earlier conversation
-		if strings.Contains(strings.ToLower(response.Content), "bobby") {
+		if strings.Contains(strings.ToLower(response.GetText()), "bobby") {
 			fmt.Println("Context preserved: true")
 		}
 	}()

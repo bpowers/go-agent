@@ -78,10 +78,7 @@ type mockSummarizerChat struct {
 }
 
 func (m *mockSummarizerChat) Message(ctx context.Context, msg chat.Message, opts ...chat.Option) (chat.Message, error) {
-	return chat.Message{
-		Role:    chat.AssistantRole,
-		Content: m.response,
-	}, nil
+	return chat.AssistantMessage(m.response), nil
 }
 
 func (m *mockSummarizerChat) History() (systemPrompt string, msgs []chat.Message) {

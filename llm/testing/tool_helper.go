@@ -57,16 +57,13 @@ The methodology has proven especially useful in strategy consulting, where it he
 	// Ask the LLM to find and summarize the file
 	prompt := "Using your tools, find the file we have and summarize it in 1 paragraph into a new file called summary.md"
 
-	response, err := chatSession.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: prompt,
-	})
+	response, err := chatSession.Message(ctx, chat.UserMessage(prompt))
 	if err != nil {
 		t.Fatalf("Failed to get response: %v", err)
 	}
 
 	// Check that the response indicates success
-	if response.Content == "" {
+	if response.GetText() == "" {
 		t.Error("Expected non-empty response content")
 	}
 
@@ -119,13 +116,10 @@ func TestWritesFile(t testing.TB, client chat.Client) {
 	require.NoError(t, err)
 
 	// Ask the LLM to create a file
-	response, err := chatSession.Message(ctx, chat.Message{
-		Role:    chat.UserRole,
-		Content: "Please create a file called test.txt with the content 'Hello from tools!'",
-	})
+	response, err := chatSession.Message(ctx, chat.UserMessage("Please create a file called test.txt with the content 'Hello from tools!'"))
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, response.Content)
+	assert.NotEmpty(t, response.GetText())
 
 	data, err := fs.ReadFile(testFS, "test.txt")
 	require.NoError(t, err)

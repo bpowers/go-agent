@@ -159,20 +159,14 @@ func TestMessage(t *testing.T) {
 		content string
 	}{
 		{
-			name: "User message",
-			message: Message{
-				Role:    UserRole,
-				Content: "What is the weather?",
-			},
+			name:    "User message",
+			message: UserMessage("What is the weather?"),
 			role:    UserRole,
 			content: "What is the weather?",
 		},
 		{
-			name: "Assistant message",
-			message: Message{
-				Role:    AssistantRole,
-				Content: "I can help you with that.",
-			},
+			name:    "Assistant message",
+			message: AssistantMessage("I can help you with that."),
 			role:    AssistantRole,
 			content: "I can help you with that.",
 		},
@@ -182,7 +176,7 @@ func TestMessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.role, tt.message.Role)
-			assert.Equal(t, tt.content, tt.message.Content)
+			assert.Equal(t, tt.content, tt.message.GetText())
 		})
 	}
 }
@@ -291,7 +285,7 @@ func (m *MockChat) Message(ctx context.Context, msg Message, opts ...Option) (Me
 		// Simulate content
 		err = callback(StreamEvent{
 			Type:    StreamEventTypeContent,
-			Content: m.nextResponse.Content,
+			Content: m.nextResponse.GetText(),
 		})
 		if err != nil {
 			return Message{}, err
@@ -337,22 +331,16 @@ func TestChatInterface(t *testing.T) {
 		t.Parallel()
 		mock := &MockChat{
 			systemPrompt: "You are a helpful assistant",
-			nextResponse: Message{
-				Role:    AssistantRole,
-				Content: "I can help with that!",
-			},
+			nextResponse: AssistantMessage("I can help with that!"),
 		}
 
 		ctx := context.Background()
-		userMsg := Message{
-			Role:    UserRole,
-			Content: "Hello",
-		}
+		userMsg := UserMessage("Hello")
 
 		resp, err := mock.Message(ctx, userMsg)
 		assert.NoError(t, err)
 		assert.Equal(t, AssistantRole, resp.Role)
-		assert.Equal(t, "I can help with that!", resp.Content)
+		assert.Equal(t, "I can help with that!", resp.GetText())
 		assert.Len(t, mock.messages, 1)
 	})
 
@@ -360,17 +348,11 @@ func TestChatInterface(t *testing.T) {
 		t.Parallel()
 		mock := &MockChat{
 			systemPrompt: "You are a helpful assistant",
-			nextResponse: Message{
-				Role:    AssistantRole,
-				Content: "I can help with that!",
-			},
+			nextResponse: AssistantMessage("I can help with that!"),
 		}
 
 		ctx := context.Background()
-		userMsg := Message{
-			Role:    UserRole,
-			Content: "Hello",
-		}
+		userMsg := UserMessage("Hello")
 
 		var receivedEvents []StreamEvent
 		callback := func(event StreamEvent) error {
@@ -381,7 +363,7 @@ func TestChatInterface(t *testing.T) {
 		resp, err := mock.Message(ctx, userMsg, WithStreamingCb(callback))
 		assert.NoError(t, err)
 		assert.Equal(t, AssistantRole, resp.Role)
-		assert.Equal(t, "I can help with that!", resp.Content)
+		assert.Equal(t, "I can help with that!", resp.GetText())
 		assert.Len(t, mock.messages, 1)
 		assert.Len(t, receivedEvents, 2) // Thinking + Content
 	})
@@ -391,7 +373,7 @@ func TestChatInterface(t *testing.T) {
 		mock := &MockChat{
 			systemPrompt: "You are a helpful assistant",
 			messages: []Message{
-				{Role: UserRole, Content: "Hello"},
+				UserMessage("Hello"),
 			},
 		}
 
