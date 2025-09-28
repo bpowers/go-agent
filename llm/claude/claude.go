@@ -669,7 +669,9 @@ func messageParam(msg chat.Message) (anthropic.MessageParam, error) {
 	// Convert based on role
 	switch msg.Role {
 	case chat.UserRole, "system", chat.ToolRole:
-		// System and Tool roles are converted to User messages in Claude
+		// Claude API requirement: Tool results must be in User role messages, not a separate tool role.
+		// System messages and ToolRole messages are converted to User messages.
+		// This is different from OpenAI (which has a "tool" role) and Gemini (which uses "function" role).
 		return anthropic.NewUserMessage(blocks...), nil
 	case chat.AssistantRole:
 		return anthropic.NewAssistantMessage(blocks...), nil
@@ -679,57 +681,14 @@ func messageParam(msg chat.Message) (anthropic.MessageParam, error) {
 	}
 }
 
+// claudeMessagesFromChat converts a chat.Message to Anthropic MessageParam(s).
+//
+// IMPORTANT INVARIANT: Tool results must NEVER be stored in assistant messages.
+// - Assistant messages contain only text content and tool calls (ToolUseBlock)
+// - Tool results must be in separate ToolRole messages (converted to User role by messageParam)
+// This separation is enforced throughout the codebase when constructing messages.
 func claudeMessagesFromChat(m chat.Message) []anthropic.MessageParam {
-	// Special handling for assistant messages with tool results that need to be in separate messages
-	// This is a Claude API requirement: tool results must be in user messages following assistant messages
-	if m.Role == chat.AssistantRole {
-		// Check if there are tool results that need to be in a separate message
-		// This would happen if using the old API pattern where tool results are added separately
-		toolResults := m.GetToolResults()
-		if len(toolResults) > 0 {
-			// First, create the assistant message without tool results
-			assistantMsg := chat.Message{
-				Role:     chat.AssistantRole,
-				Contents: []chat.Content{},
-			}
-
-			// Copy over non-tool-result contents
-			for _, c := range m.Contents {
-				if c.ToolResult == nil {
-					assistantMsg.Contents = append(assistantMsg.Contents, c)
-				}
-			}
-
-			// Convert assistant message
-			var messages []anthropic.MessageParam
-			if len(assistantMsg.Contents) > 0 {
-				if param, err := messageParam(assistantMsg); err == nil {
-					messages = append(messages, param)
-				}
-			}
-
-			// Create separate user message for tool results
-			toolMsg := chat.Message{
-				Role:     chat.ToolRole,
-				Contents: []chat.Content{},
-			}
-			for _, tr := range toolResults {
-				toolMsg.Contents = append(toolMsg.Contents, chat.Content{
-					ToolResult: &tr,
-				})
-			}
-
-			if len(toolMsg.Contents) > 0 {
-				if param, err := messageParam(toolMsg); err == nil {
-					messages = append(messages, param)
-				}
-			}
-
-			return messages
-		}
-	}
-
-	// For all other cases, use messageParam directly
+	// Simple conversion - no special handling needed since messages are correctly structured
 	param, err := messageParam(m)
 	if err != nil {
 		// Return nil for messages that can't be converted (e.g., empty messages)

@@ -136,3 +136,140 @@ func TestAnthropicNewUserMessage_RequiresContent(t *testing.T) {
 	// The API would reject this message with:
 	// "messages: text content blocks must be non-empty"
 }
+
+func TestMessageParamRoleConversion(t *testing.T) {
+	// This test verifies that messageParam correctly converts roles for the Claude API
+	// Critical invariant: ToolRole must convert to User role (Claude API requirement)
+
+	tests := []struct {
+		name         string
+		message      chat.Message
+		expectedRole string
+		description  string
+	}{
+		{
+			name: "tool_role_converts_to_user",
+			message: func() chat.Message {
+				m := chat.Message{Role: chat.ToolRole}
+				m.AddToolResult(chat.ToolResult{
+					ToolCallID: "test_id",
+					Content:    "test result",
+					Name:       "test_tool",
+				})
+				return m
+			}(),
+			expectedRole: "user",
+			description:  "ToolRole messages must convert to user role for Claude API",
+		},
+		{
+			name: "user_role_stays_user",
+			message: func() chat.Message {
+				return chat.UserMessage("test message")
+			}(),
+			expectedRole: "user",
+			description:  "UserRole messages should remain user role",
+		},
+		{
+			name: "assistant_role_stays_assistant",
+			message: func() chat.Message {
+				m := chat.AssistantMessage("test response")
+				m.AddToolCall(chat.ToolCall{
+					ID:        "tool_1",
+					Name:      "test_tool",
+					Arguments: []byte(`{"key":"value"}`),
+				})
+				return m
+			}(),
+			expectedRole: "assistant",
+			description:  "AssistantRole messages should remain assistant role",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			param, err := messageParam(tt.message)
+			require.NoError(t, err, "messageParam should not error for valid messages")
+
+			// Check the actual role field in the MessageParam struct
+			if tt.expectedRole == "user" {
+				// For user/tool messages, verify it's converted to user
+				assert.Equal(t, anthropic.MessageParamRoleUser, param.Role, tt.description)
+			} else if tt.expectedRole == "assistant" {
+				assert.Equal(t, anthropic.MessageParamRoleAssistant, param.Role, tt.description)
+			}
+		})
+	}
+}
+
+func TestAssistantMessagesNeverContainToolResults(t *testing.T) {
+	// This test verifies that the invariant is maintained: assistant messages
+	// must NEVER contain tool results - only tool calls are allowed
+
+	t.Run("assistant_with_tool_calls_only", func(t *testing.T) {
+		// Create an assistant message with tool calls (allowed)
+		assistantMsg := chat.AssistantMessage("I'll help you with that")
+		assistantMsg.AddToolCall(chat.ToolCall{
+			ID:        "call_1",
+			Name:      "allowed_tool",
+			Arguments: []byte(`{}`),
+		})
+
+		// Verify the message has tool calls
+		assert.True(t, assistantMsg.HasToolCalls(), "Assistant messages can contain tool calls")
+		assert.Equal(t, 1, len(assistantMsg.GetToolCalls()), "Should have one tool call")
+		assert.False(t, assistantMsg.HasToolResults(), "Assistant messages should not have tool results")
+
+		// Verify claudeMessagesFromChat handles this correctly
+		params := claudeMessagesFromChat(assistantMsg)
+		require.NotNil(t, params, "Should convert assistant message with tool calls")
+		require.Len(t, params, 1, "Should produce single message")
+
+		// Verify it's an assistant message
+		assert.Equal(t, anthropic.MessageParamRoleAssistant, params[0].Role)
+	})
+
+	t.Run("assistant_with_tool_results_violates_invariant", func(t *testing.T) {
+		// This test documents what happens if the invariant is violated
+		// In production code, this should never occur
+		assistantMsg := chat.AssistantMessage("I'll help you with that")
+
+		// Incorrectly add a tool result to assistant message (violates invariant)
+		assistantMsg.AddToolResult(chat.ToolResult{
+			ToolCallID: "result_1",
+			Content:    "result content",
+			Name:       "test_tool",
+		})
+
+		// Verify the invariant is violated
+		assert.True(t, assistantMsg.HasToolResults(), "Message incorrectly has tool results")
+
+		// The simplified claudeMessagesFromChat will still convert this but it will
+		// create an incorrect message structure for the Claude API
+		params := claudeMessagesFromChat(assistantMsg)
+		require.NotNil(t, params, "Converts even with violated invariant")
+
+		// This would create an assistant message with tool results, which Claude API rejects
+		// The invariant must be maintained by message construction code, not by conversion
+		assert.Equal(t, anthropic.MessageParamRoleAssistant, params[0].Role,
+			"Creates assistant message with tool results - Claude API would reject this")
+	})
+
+	t.Run("tool_results_in_tool_role_correct", func(t *testing.T) {
+		// This is the correct way: tool results in ToolRole messages
+		toolMsg := chat.Message{Role: chat.ToolRole}
+		toolMsg.AddToolResult(chat.ToolResult{
+			ToolCallID: "result_1",
+			Content:    "result content",
+			Name:       "test_tool",
+		})
+
+		// Verify conversion to user message for Claude API
+		params := claudeMessagesFromChat(toolMsg)
+		require.NotNil(t, params, "Should convert tool message")
+		require.Len(t, params, 1, "Should produce single message")
+
+		// Verify it's converted to user message (Claude API requirement)
+		assert.Equal(t, anthropic.MessageParamRoleUser, params[0].Role,
+			"ToolRole messages must convert to user role for Claude API")
+	})
+}
