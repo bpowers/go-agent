@@ -135,6 +135,61 @@ func getMaxOutputTokens(modelName string) int64 {
 	return t
 }
 
+// set represents a generic set of comparable items
+type set[T comparable] struct {
+	items map[T]struct{}
+}
+
+// newSet creates a new set with the given items
+func newSet[T comparable](items ...T) *set[T] {
+	s := &set[T]{
+		items: make(map[T]struct{}),
+	}
+	for _, item := range items {
+		s.items[item] = struct{}{}
+	}
+	return s
+}
+
+// contains checks if the set contains the exact item
+func (s *set[T]) contains(item T) bool {
+	_, ok := s.items[item]
+	return ok
+}
+
+// containsWithPredicate checks if any item in the set satisfies the predicate
+func (s *set[T]) containsWithPredicate(predicate func(T) bool) bool {
+	for item := range s.items {
+		if predicate(item) {
+			return true
+		}
+	}
+	return false
+}
+
+// modelsWithThinking defines which Claude models support thinking/reasoning capabilities
+var modelsWithThinking = newSet(
+	"claude-opus-4-1",
+	"claude-opus-4",
+	"claude-sonnet-4",
+	"claude-3-7-sonnet",
+	"claude-3-5-sonnet", // Legacy naming, keep for compatibility
+	// Note: haiku models do not support thinking
+)
+
+// supportsThinking checks if a model supports thinking/reasoning capabilities
+func supportsThinking(modelName string) bool {
+	// Check exact match first
+	if modelsWithThinking.contains(modelName) {
+		return true
+	}
+
+	// Check for partial matches for versioned models (e.g., "claude-3-5-sonnet-20241022")
+	return modelsWithThinking.containsWithPredicate(func(model string) bool {
+		return strings.Contains(modelName, model)
+	})
+}
+
 var modelLimits = []chat.ModelTokenLimits{
 	{Model: "claude-opus-4-1", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
 	{Model: "claude-opus-4", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
@@ -270,9 +325,9 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		// Handle different event types
 		switch event.Type {
 		case "message_start":
-			// Check if this is a model that supports thinking (e.g., claude-3-5-sonnet-20241022)
-			if strings.Contains(c.modelName, "claude-3-5-sonnet") && callback != nil {
-				// Some Claude models might support thinking, emit initial thinking event
+			// Check if this is a model that supports thinking
+			if supportsThinking(c.modelName) && callback != nil {
+				// Emit initial thinking event for models that support it
 				thinkingEvent := chat.StreamEvent{
 					Type: chat.StreamEventTypeThinking,
 					ThinkingStatus: &chat.ThinkingStatus{
