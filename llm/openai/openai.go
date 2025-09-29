@@ -18,6 +18,21 @@ import (
 	"github.com/bpowers/go-agent/llm/internal/common"
 )
 
+// debugLogUnhandledEvent logs unhandled events when GO_AGENT_DEBUG=1
+func debugLogUnhandledEvent(apiName, eventType string, rawData interface{}) {
+	if os.Getenv("GO_AGENT_DEBUG") == "1" {
+		if rawData != nil {
+			if jsonBytes, err := json.Marshal(rawData); err == nil {
+				log.Printf("[OpenAI %s] Unhandled event type: %s, data: %s\n", apiName, eventType, string(jsonBytes))
+			} else {
+				log.Printf("[OpenAI %s] Unhandled event type: %s, data: %+v\n", apiName, eventType, rawData)
+			}
+		} else {
+			log.Printf("[OpenAI %s] Unhandled event type: %s\n", apiName, eventType)
+		}
+	}
+}
+
 const (
 	OpenAIURL = "https://api.openai.com/v1"
 	OllamaURL = "http://localhost:11434/v1"
@@ -342,6 +357,12 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 	var inReasoning bool
 	eventCount := 0
 	var lastUsage chat.TokenUsageDetails
+	// For tracking tool calls in Responses API
+	var toolCalls []responses.ResponseFunctionToolCall
+	var currentToolCall *responses.ResponseFunctionToolCall
+	_ = currentToolCall // Used in response.output_item.added
+	var toolCallArgs strings.Builder
+	_ = toolCallArgs // Will be used when we fully implement tool call argument streaming
 
 	for stream.Next() {
 		event := stream.Current()
@@ -454,16 +475,63 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 				log.Printf("[OpenAI Responses API] Output text done\n")
 			}
 
+		case "response.created", "response.in_progress":
+			// Status events - just log if debugging
+			if debugSSE {
+				log.Printf("[OpenAI Responses API] Status event: %s\n", event.Type)
+			}
+
+		case "response.output_item.added":
+			// Check if this is a function call item
+			if event.Item.Type == "function_call" && event.Item.ID != "" && event.Item.Name != "" {
+				currentToolCall = &responses.ResponseFunctionToolCall{
+					ID:   event.Item.ID,
+					Name: event.Item.Name,
+				}
+				if debugSSE {
+					log.Printf("[OpenAI Responses API] Tool call started: ID=%s, Name=%s\n", event.Item.ID, event.Item.Name)
+				}
+			} else {
+				// Non-function item added (reasoning, message, etc.)
+				if debugSSE {
+					log.Printf("[OpenAI Responses API] Output item added: type=%s\n", event.Item.Type)
+				}
+			}
+
+		case "response.output_item.done", "response.content_part.added", "response.content_part.done":
+			// Informational events about content structure
+			if debugSSE {
+				log.Printf("[OpenAI Responses API] Content structure event: %s\n", event.Type)
+			}
+
 		case "error":
 			// Handle error events
 			if debugSSE {
 				log.Printf("[OpenAI Responses API] Error event received\n")
 			}
+
+		default:
+			// Log unhandled event types for debugging
+			debugLogUnhandledEvent("Responses API", event.Type, event)
 		}
 	}
 
 	if err := stream.Err(); err != nil {
 		return chat.Message{}, fmt.Errorf("responses API streaming error: %w", err)
+	}
+
+	// Note: Tool calls in Responses API would need different handling than ChatCompletions
+	// The Responses API handles tools differently - it doesn't use the multi-round pattern
+	// For now, we log if tools were detected but not fully implemented
+	if len(toolCalls) > 0 {
+		if debugSSE {
+			log.Printf("[OpenAI Responses API] Warning: Tool calls detected but not yet fully implemented for Responses API: %d tools\n", len(toolCalls))
+			for _, tc := range toolCalls {
+				log.Printf("[OpenAI Responses API]   Tool: %s (ID: %s)\n", tc.Name, tc.ID)
+			}
+		}
+		// For now, just include any tool call info in the response
+		// TODO: Implement proper tool handling for Responses API
 	}
 
 	respMsg := chat.AssistantMessage(respContent.String())
@@ -616,51 +684,23 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
 
-			// Check for reasoning content in ExtraFields
-			// OpenAI might use different field names: reasoning_content, reasoning, thinking_content, etc.
-			reasoningFieldNames := []string{"reasoning_content", "reasoning", "thinking_content", "thinking"}
-			var reasoningFieldRaw string
-			var foundFieldName string
+			// Check for refusal content
+			if choice.Delta.Refusal != "" {
+				refusalContent := choice.Delta.Refusal
+				respContent.WriteString(refusalContent)
 
-			for _, fieldName := range reasoningFieldNames {
-				if field, exists := choice.Delta.JSON.ExtraFields[fieldName]; exists && field.Valid() {
-					reasoningFieldRaw = field.Raw()
-					foundFieldName = fieldName
-					break
+				if callback != nil {
+					event := chat.StreamEvent{
+						Type:    chat.StreamEventTypeContent,
+						Content: refusalContent,
+					}
+					if err := callback(event); err != nil {
+						return chat.Message{}, err
+					}
 				}
-			}
 
-			if reasoningFieldRaw != "" {
 				if debugSSE {
-					log.Printf("[OpenAI SSE] Found %s field! Raw: %s\n", foundFieldName, reasoningFieldRaw)
-				}
-				// Try to extract the reasoning content
-				var reasoningContent string
-				if err := json.Unmarshal([]byte(reasoningFieldRaw), &reasoningContent); err == nil && reasoningContent != "" {
-					if !inThinking && callback != nil {
-						// Start thinking
-						inThinking = true
-						event := chat.StreamEvent{
-							Type:           chat.StreamEventTypeThinking,
-							ThinkingStatus: &chat.ThinkingStatus{},
-						}
-						if err := callback(event); err != nil {
-							return chat.Message{}, err
-						}
-					}
-
-					thinkingContent.WriteString(reasoningContent)
-					if callback != nil {
-						// Stream thinking content
-						event := chat.StreamEvent{
-							Type:           chat.StreamEventTypeThinking,
-							Content:        reasoningContent,
-							ThinkingStatus: &chat.ThinkingStatus{},
-						}
-						if err := callback(event); err != nil {
-							return chat.Message{}, err
-						}
-					}
+					log.Printf("[OpenAI ChatCompletions] Refusal content: %s\n", refusalContent)
 				}
 			}
 
@@ -747,18 +787,18 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 				}
 			}
 
-			// Check if stream is done and we were still thinking
-			if choice.FinishReason != "" && inThinking && callback != nil {
-				inThinking = false
-				if thinkingContent.Len() > 0 {
-					event := chat.StreamEvent{
-						Type: chat.StreamEventTypeThinkingSummary,
-						ThinkingStatus: &chat.ThinkingStatus{
-							Summary: thinkingContent.String(),
-						},
-					}
-					if err := callback(event); err != nil {
-						return chat.Message{}, err
+			// Check if stream is done
+			if choice.FinishReason != "" {
+				if debugSSE {
+					log.Printf("[OpenAI ChatCompletions] Stream finished with reason: %s\n", choice.FinishReason)
+				}
+			}
+
+			// Log any unhandled extra fields
+			if debugSSE && len(choice.Delta.JSON.ExtraFields) > 0 {
+				for fieldName, field := range choice.Delta.JSON.ExtraFields {
+					if field.Valid() {
+						log.Printf("[OpenAI ChatCompletions] Unhandled ExtraField %s: %s\n", fieldName, field.Raw())
 					}
 				}
 			}
@@ -1075,6 +1115,26 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
+
+				// Check for refusal content in follow-up
+				if choice.Delta.Refusal != "" {
+					refusalContent := choice.Delta.Refusal
+					respContent.WriteString(refusalContent)
+
+					if callback != nil {
+						event := chat.StreamEvent{
+							Type:    chat.StreamEventTypeContent,
+							Content: refusalContent,
+						}
+						if err := callback(event); err != nil {
+							return chat.Message{}, err
+						}
+					}
+
+					if debugSSE {
+						log.Printf("[OpenAI Follow-up] Refusal content: %s\n", refusalContent)
+					}
+				}
 
 				// Check for tool calls
 				if len(choice.Delta.ToolCalls) > 0 {
