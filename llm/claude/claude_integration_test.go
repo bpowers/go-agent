@@ -339,3 +339,29 @@ func TestClaudeIntegration_MessagePersistenceAfterRestore(t *testing.T) {
 
 	llmtesting.TestMessagePersistenceAfterRestore(t, client)
 }
+
+func TestClaudeIntegration_ThinkingPreservedInHistory(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	// Use a thinking-capable model
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel("claude-sonnet-4-5-20250929"))
+	require.NoError(t, err, "Failed to create Claude client")
+	require.NotNil(t, client)
+
+	// Use the test helper for thinking preservation
+	llmtesting.TestThinkingPreservedInHistory(t, client)
+}
+
+func TestClaudeIntegration_ThinkingPreservedWithToolCalls(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	// Use a thinking-capable model
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel("claude-sonnet-4-5-20250929"))
+	require.NoError(t, err, "Failed to create Claude client")
+	require.NotNil(t, client)
+
+	// Use the test helper for thinking preservation with tool calls
+	llmtesting.TestThinkingPreservedWithToolCalls(t, client)
+}

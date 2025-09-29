@@ -58,7 +58,7 @@ func TestDetectProvider(t *testing.T) {
 
 		// Claude models
 		{"Claude 3 Opus", "claude-3-opus-20240229", ProviderClaude},
-		{"Claude 3.5 Sonnet", "claude-3-5-sonnet-20241022", ProviderClaude},
+		{"Claude Sonnet 4.5", "claude-sonnet-4-5-20250929", ProviderClaude},
 		{"Claude 3 Haiku", "claude-3-haiku-20240307", ProviderClaude},
 		{"Claude Instant", "claude-instant-1.2", ProviderClaude},
 

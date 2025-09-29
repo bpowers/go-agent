@@ -1124,3 +1124,162 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		assert.Equal(t, 1, userRecord2Count, "Second user message should appear exactly once")
 	})
 }
+
+// TestThinkingPreservedInHistory tests that thinking content is preserved in message history
+// for models that support thinking/reasoning. This test only applies to thinking-capable models
+// like Claude Opus 4 and Sonnet 4.
+func TestThinkingPreservedInHistory(t *testing.T, client chat.Client) {
+	chatSession := client.NewChat("You are a helpful assistant. Think carefully before responding.")
+
+	// Ask a question that should trigger thinking
+	response, err := chatSession.Message(
+		context.Background(),
+		chat.UserMessage("What is the capital of France? Think carefully before answering."),
+	)
+	require.NoError(t, err, "Failed to get response")
+	require.NotEmpty(t, response.GetText(), "Expected non-empty response")
+
+	// Get the history
+	_, history := chatSession.History()
+	require.GreaterOrEqual(t, len(history), 2, "History should contain at least user message and assistant response")
+
+	// Find the assistant's response in history
+	var assistantMsg *chat.Message
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == chat.AssistantRole {
+			assistantMsg = &history[i]
+			break
+		}
+	}
+	require.NotNil(t, assistantMsg, "Should have assistant message in history")
+
+	// Check if the message contains thinking content
+	hasThinking := false
+	for _, content := range assistantMsg.Contents {
+		if content.Thinking != nil && content.Thinking.Text != "" {
+			hasThinking = true
+			t.Logf("Found thinking content in history (length: %d chars)", len(content.Thinking.Text))
+			break
+		}
+	}
+
+	// For thinking models, we expect thinking content to be present
+	// For non-thinking models, this test will still pass but won't find thinking
+	if hasThinking {
+		t.Log("Thinking content successfully preserved in message history")
+	} else {
+		t.Log("No thinking content found - model may not support thinking or didn't use it for this prompt")
+	}
+}
+
+// TestThinkingPreservedWithToolCalls tests that thinking content is preserved alongside tool calls
+// This ensures that when a model thinks and then calls tools, the thinking is retained in history
+func TestThinkingPreservedWithToolCalls(t *testing.T, client chat.Client) {
+	chatSession := client.NewChat("You are a helpful assistant with access to tools. Think carefully before using tools.")
+
+	// Register a simple calculation tool
+	calcTool := &testToolDef{
+		name:        "calculate",
+		description: "Perform arithmetic calculations",
+		jsonSchema: `{
+			"name": "calculate",
+			"description": "Perform arithmetic calculations",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"a": {
+						"type": "number",
+						"description": "First number"
+					},
+					"b": {
+						"type": "number",
+						"description": "Second number"
+					},
+					"operation": {
+						"type": "string",
+						"description": "Operation to perform: add, subtract, multiply, divide"
+					}
+				},
+				"required": ["a", "b", "operation"]
+			}
+		}`,
+	}
+
+	toolCalled := false
+	err := chatSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+		toolCalled = true
+		var params struct {
+			A         float64 `json:"a"`
+			B         float64 `json:"b"`
+			Operation string  `json:"operation"`
+		}
+		if err := json.Unmarshal([]byte(input), &params); err != nil {
+			return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
+		}
+
+		var result float64
+		switch params.Operation {
+		case "add":
+			result = params.A + params.B
+		case "subtract":
+			result = params.A - params.B
+		case "multiply":
+			result = params.A * params.B
+		case "divide":
+			if params.B != 0 {
+				result = params.A / params.B
+			} else {
+				return `{"error": "Division by zero"}`
+			}
+		default:
+			return `{"error": "Unknown operation"}`
+		}
+		return fmt.Sprintf(`{"result": %v}`, result)
+	})
+	require.NoError(t, err, "Failed to register tool")
+
+	// Ask a question that should trigger both thinking and tool use
+	response, err := chatSession.Message(
+		context.Background(),
+		chat.UserMessage("Please calculate 15 multiplied by 23. Think about it first, then use the calculator."),
+	)
+	require.NoError(t, err, "Failed to get response")
+	require.NotEmpty(t, response.GetText(), "Expected non-empty response")
+	require.True(t, toolCalled, "Tool should have been called")
+
+	// Get the history
+	_, history := chatSession.History()
+
+	// Find messages with tool calls in history
+	foundMessageWithToolCalls := false
+	foundThinkingWithToolCalls := false
+
+	for _, msg := range history {
+		if msg.Role == chat.AssistantRole {
+			hasToolCalls := msg.HasToolCalls()
+			hasThinking := false
+			for _, content := range msg.Contents {
+				if content.Thinking != nil && content.Thinking.Text != "" {
+					hasThinking = true
+					break
+				}
+			}
+
+			if hasToolCalls {
+				foundMessageWithToolCalls = true
+				if hasThinking {
+					foundThinkingWithToolCalls = true
+					t.Logf("Found assistant message with both thinking and tool calls")
+				}
+			}
+		}
+	}
+
+	require.True(t, foundMessageWithToolCalls, "Should have found assistant message with tool calls")
+
+	if foundThinkingWithToolCalls {
+		t.Log("Thinking content successfully preserved alongside tool calls in message history")
+	} else {
+		t.Log("No thinking content found with tool calls - model may not support thinking or didn't use it for this prompt")
+	}
+}

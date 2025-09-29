@@ -23,6 +23,7 @@ func TestSupportsThinking(t *testing.T) {
 		{"opus-4-1 versioned", "claude-opus-4-1-20250805", true},
 		{"opus-4 versioned", "claude-opus-4-20241029", true},
 		{"sonnet-4 versioned", "claude-sonnet-4-20241022", true},
+		{"sonnet-4-5 versioned", "claude-sonnet-4-5-20250929", true},
 		{"3-7-sonnet versioned", "claude-3-7-sonnet-20241029", true},
 		{"3-5-sonnet versioned", "claude-3-5-sonnet-20241022", true},
 

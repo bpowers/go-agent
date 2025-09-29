@@ -92,6 +92,14 @@ type ThinkingStatus struct {
 	RedactedData string `json:"redacted_data,omitzero"`
 }
 
+// ThinkingContent represents thinking/reasoning content in a message.
+type ThinkingContent struct {
+	// Text contains the thinking content.
+	Text string `json:"text,omitzero"`
+	// Signature contains the encrypted signature for thinking block verification.
+	Signature string `json:"signature,omitzero"`
+}
+
 // StreamCallback is called for each streaming event.
 // If it returns an error, streaming will be stopped.
 type StreamCallback func(event StreamEvent) error
@@ -209,9 +217,8 @@ type Content struct {
 	ToolCall   *ToolCall   `json:"tool_call,omitzero"`
 	ToolResult *ToolResult `json:"tool_result,omitzero"`
 
-	// Future extensibility (not yet implemented)
-	// Image    *ImageContent    `json:"image,omitzero"`
-	// Thinking *ThinkingContent `json:"thinking,omitzero"`
+	// Thinking/reasoning content
+	Thinking *ThinkingContent `json:"thinking,omitzero"`
 }
 
 // Message represents a message to or from an LLM.
@@ -366,6 +373,17 @@ func (m *Message) AddToolCall(tc ToolCall) *Message {
 // AddToolResult adds a tool result to the message.
 func (m *Message) AddToolResult(tr ToolResult) *Message {
 	m.Contents = append(m.Contents, Content{ToolResult: &tr})
+	return m
+}
+
+// AddThinking adds thinking/reasoning content to the message.
+func (m *Message) AddThinking(text, signature string) *Message {
+	m.Contents = append(m.Contents, Content{
+		Thinking: &ThinkingContent{
+			Text:      text,
+			Signature: signature,
+		},
+	})
 	return m
 }
 

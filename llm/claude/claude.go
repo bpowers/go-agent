@@ -120,6 +120,7 @@ func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.C
 var modelMaxOutputTokens = map[string]int64{
 	"claude-opus-4-1":   32000,
 	"claude-opus-4":     32000,
+	"claude-sonnet-4-5": 64000,
 	"claude-sonnet-4":   64000,
 	"claude-3-7-sonnet": 64000,
 	"claude-3-5-haiku":  8192,
@@ -171,6 +172,7 @@ func (s *set[T]) containsWithPredicate(predicate func(T) bool) bool {
 var modelsWithThinking = newSet(
 	"claude-opus-4-1",
 	"claude-opus-4",
+	"claude-sonnet-4-5",
 	"claude-sonnet-4",
 	"claude-3-7-sonnet",
 	"claude-3-5-sonnet", // Legacy naming, keep for compatibility
@@ -184,7 +186,7 @@ func supportsThinking(modelName string) bool {
 		return true
 	}
 
-	// Check for partial matches for versioned models (e.g., "claude-3-5-sonnet-20241022")
+	// Check for partial matches for versioned models (e.g., "claude-sonnet-4-5-20250929")
 	return modelsWithThinking.containsWithPredicate(func(model string) bool {
 		return strings.Contains(modelName, model)
 	})
@@ -193,6 +195,7 @@ func supportsThinking(modelName string) bool {
 var modelLimits = []chat.ModelTokenLimits{
 	{Model: "claude-opus-4-1", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
 	{Model: "claude-opus-4", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
+	{Model: "claude-sonnet-4-5", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-sonnet-4", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-3-7-sonnet", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-3-5-haiku", TokenLimits: chat.TokenLimits{Context: 200000, Output: 8192}},
@@ -639,7 +642,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 			log.Printf("[Claude] Initial response has %d tool calls, entering tool call handler\n", len(toolCalls))
 			log.Printf("[Claude] Initial text content before tool calls: %q\n", respContent.String())
 		}
-		return c.handleToolCallRounds(ctx, reqMsg, respContent.String(), toolCalls, reqOpts, callback)
+		return c.handleToolCallRounds(ctx, reqMsg, respContent.String(), thinkingContent.String(), thinkingSignature.String(), toolCalls, reqOpts, callback)
 	}
 
 	if c.debug {
@@ -647,6 +650,11 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	}
 
 	respMsg := chat.AssistantMessage(respContent.String())
+
+	// Add thinking content if present
+	if thinkingContent.Len() > 0 {
+		respMsg.AddThinking(thinkingContent.String(), thinkingSignature.String())
+	}
 
 	// Update history
 	c.state.AppendMessages([]chat.Message{reqMsg, respMsg}, nil)
@@ -861,7 +869,7 @@ func messageParam(msg chat.Message) (anthropic.MessageParam, error) {
 }
 
 // handleToolCallRounds handles potentially multiple rounds of tool calls
-func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialContent string, initialToolCalls []anthropic.ToolUseBlock, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
+func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialContent string, initialThinkingText string, initialThinkingSignature string, initialToolCalls []anthropic.ToolUseBlock, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all content blocks for the conversation
 	var msgs []anthropic.MessageParam
 
@@ -919,6 +927,9 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		msgs = append(msgs, assistantMsg)
 
 		chatAssistantMsg := chat.AssistantMessage(initialContent)
+		if initialThinkingText != "" {
+			chatAssistantMsg.AddThinking(initialThinkingText, initialThinkingSignature)
+		}
 		for _, tc := range chatToolCalls {
 			chatAssistantMsg.AddToolCall(tc)
 		}
@@ -998,6 +1009,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// Process the follow-up stream
 		var respContent strings.Builder
+		var followUpThinkingContent strings.Builder
+		var followUpThinkingSignature strings.Builder
 		// Preserve any initial content from before the tool calls
 		if initialContent != "" {
 			respContent.WriteString(initialContent)
@@ -1038,6 +1051,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					}
 				} else if event.ContentBlock.Type == "thinking" {
 					// Thinking block in follow-up
+					followUpThinkingContent.Reset()
+					followUpThinkingSignature.Reset()
 					if callback != nil {
 						thinkingEvent := chat.StreamEvent{
 							Type:           chat.StreamEventTypeThinking,
@@ -1117,6 +1132,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					}
 				case "thinking_delta":
 					// Direct thinking delta in follow-up
+					followUpThinkingContent.WriteString(event.Delta.Thinking)
 					if callback != nil {
 						thinkingEvent := chat.StreamEvent{
 							Type:           chat.StreamEventTypeThinking,
@@ -1129,6 +1145,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					}
 				case "signature_delta":
 					// Thinking block signature in follow-up
+					followUpThinkingSignature.WriteString(event.Delta.Signature)
 					if c.debug {
 						log.Printf("[Claude] Follow-up got signature_delta: %s\n", event.Delta.Signature)
 					}
@@ -1249,6 +1266,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// No more tool calls, we have the final response
 		// The content includes both initial text (if any) and follow-up response
 		finalMsg := chat.AssistantMessage(respContent.String())
+
+		// Add thinking content if present from follow-up rounds
+		if followUpThinkingContent.Len() > 0 {
+			finalMsg.AddThinking(followUpThinkingContent.String(), followUpThinkingSignature.String())
+		}
 
 		if c.debug {
 			log.Printf("[Claude] Returning final response from tool handler, content length: %d\n", len(finalMsg.GetText()))
