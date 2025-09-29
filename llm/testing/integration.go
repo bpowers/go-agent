@@ -935,14 +935,27 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		session := agent.NewSession(client, systemPrompt, agent.WithStore(store))
 		sessionID := session.SessionID()
 
+		// Baseline record count before first message
+		baselineRecords, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+		initialLen := len(baselineRecords)
+
 		// Send first message
 		userMsg1 := "Hello, how are you?"
-		_, err := session.Message(context.Background(), chat.UserMessage(userMsg1))
+		_, err = session.Message(context.Background(), chat.UserMessage(userMsg1))
 		require.NoError(t, err)
 
 		// Check that we have exactly 2 records (user + assistant)
 		records1, err := store.GetAllRecords(sessionID)
 		require.NoError(t, err)
+
+		// Verify ordering for the first exchange
+		require.GreaterOrEqual(t, len(records1), initialLen+2, "First exchange should add at least two records")
+		exchange1 := records1[initialLen:]
+		require.GreaterOrEqual(t, len(exchange1), 2)
+		require.Equal(t, chat.UserRole, exchange1[0].Role, "First exchange should start with user record")
+		require.Equal(t, userMsg1, exchange1[0].Content)
+		require.Equal(t, chat.AssistantRole, exchange1[1].Role, "Second record should be assistant response")
 
 		userRecordCount1 := 0
 		for _, r := range records1 {
@@ -965,6 +978,12 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		// Get all records after second message
 		records2, err := store.GetAllRecords(sessionID)
 		require.NoError(t, err)
+
+		// Newly added records should begin with the user message
+		newRecords := records2[len(records1):]
+		require.GreaterOrEqual(t, len(newRecords), 2, "Second exchange should add at least two records")
+		require.Equal(t, chat.UserRole, newRecords[0].Role, "Second exchange should start with user record")
+		require.Equal(t, userMsg2, newRecords[0].Content)
 
 		// Count occurrences of each user message in persistence
 		userRecord1Count := 0
@@ -1019,6 +1038,10 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		})
 		require.NoError(t, err)
 
+		baselineRecords, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+		initialLen := len(baselineRecords)
+
 		// Send message that triggers tool use
 		userMsg1 := "Calculate 6 times 7"
 		_, err = session.Message(context.Background(), chat.UserMessage(userMsg1))
@@ -1027,6 +1050,13 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		// Get initial record count
 		records1, err := store.GetAllRecords(sessionID)
 		require.NoError(t, err)
+
+		// Verify ordering: user message should precede any tool metadata
+		require.GreaterOrEqual(t, len(records1), initialLen+2, "Tool exchange should add at least user and assistant records")
+		exchange1 := records1[initialLen:]
+		require.GreaterOrEqual(t, len(exchange1), 2)
+		require.Equal(t, chat.UserRole, exchange1[0].Role, "Tool exchange should start with user record")
+		require.Equal(t, userMsg1, exchange1[0].Content)
 
 		userRecordCount1 := 0
 		for _, r := range records1 {
@@ -1055,6 +1085,12 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		// Get all records
 		records2, err := store.GetAllRecords(sessionID)
 		require.NoError(t, err)
+
+		// Newly persisted records for second exchange must start with the user input
+		newRecords := records2[len(records1):]
+		require.GreaterOrEqual(t, len(newRecords), 2, "Second tool exchange should add user and response records")
+		require.Equal(t, chat.UserRole, newRecords[0].Role, "Second exchange should start with user record")
+		require.Equal(t, userMsg2, newRecords[0].Content)
 
 		// Count user messages
 		userRecord1Count := 0

@@ -891,6 +891,9 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		anthropic.NewTextBlock(initialMsg.GetText()),
 	))
 
+	// Persist the user message before processing tool rounds so ordering matches chronology
+	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
+
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
 
@@ -1276,8 +1279,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			log.Printf("[Claude] Returning final response from tool handler, content length: %d\n", len(finalMsg.GetText()))
 		}
 
-		// Update history - update both messages at once
-		c.state.AppendMessages([]chat.Message{initialMsg, finalMsg}, nil)
+		// Update history with final assistant response (user message already persisted)
+		c.state.AppendMessages([]chat.Message{finalMsg}, nil)
 
 		return finalMsg, nil
 	}

@@ -475,6 +475,9 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	}
 	msgs = append(msgs, converted...)
 
+	// Persist the user message before tool execution to maintain chronological ordering
+	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
+
 	// Process tool calls in a loop until we get a final response
 	functionCalls := initialFunctionCalls
 
@@ -651,8 +654,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// No more function calls, we have the final response
 		finalMsg := chat.AssistantMessage(respContent.String())
 
-		// Update history - update both messages at once
-		c.state.AppendMessages([]chat.Message{initialMsg, finalMsg}, nil)
+		// Update history with final assistant response (user message already persisted)
+		c.state.AppendMessages([]chat.Message{finalMsg}, nil)
 
 		return finalMsg, nil
 	}
