@@ -313,6 +313,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	var respContent strings.Builder
 	var inThinking bool
 	var thinkingContent strings.Builder
+	var thinkingSignature strings.Builder
 	var toolCalls []anthropic.ToolUseBlock
 	var currentToolCall *anthropic.ToolUseBlock
 	var toolCallArgs strings.Builder
@@ -377,6 +378,60 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						}
 					}
 				}
+			} else if event.ContentBlock.Type == "redacted_thinking" {
+				// Redacted thinking block (safety-flagged)
+				if c.debug {
+					log.Printf("[Claude] Redacted thinking block detected, data: %s\n", event.ContentBlock.Data)
+				}
+				if callback != nil {
+					redactedEvent := chat.StreamEvent{
+						Type: chat.StreamEventTypeRedactedThinking,
+						ThinkingStatus: &chat.ThinkingStatus{
+							IsThinking:   true,
+							RedactedData: event.ContentBlock.Data,
+						},
+					}
+					if err := callback(redactedEvent); err != nil {
+						return chat.Message{}, err
+					}
+				}
+			} else if event.ContentBlock.Type == "server_tool_use" {
+				// Server-side tool invocation (e.g., web search)
+				if c.debug {
+					log.Printf("[Claude] Server tool use: ID=%s, Name=%s, Input=%v\n",
+						event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
+				}
+				if callback != nil {
+					serverToolEvent := chat.StreamEvent{
+						Type: chat.StreamEventTypeServerToolUse,
+						ToolCalls: []chat.ToolCall{
+							{
+								ID:        event.ContentBlock.ID,
+								Name:      event.ContentBlock.Name,
+								Arguments: nil, // Server tools may not have arguments
+							},
+						},
+					}
+					if err := callback(serverToolEvent); err != nil {
+						return chat.Message{}, err
+					}
+				}
+			} else if event.ContentBlock.Type == "web_search_tool_result" {
+				// Web search results from server-side search
+				if c.debug {
+					log.Printf("[Claude] Web search result: ToolUseID=%s, Content=%v\n",
+						event.ContentBlock.ToolUseID, event.ContentBlock.Content)
+				}
+				if callback != nil {
+					webSearchEvent := chat.StreamEvent{
+						Type: chat.StreamEventTypeWebSearchResult,
+						// TODO: Parse and forward the actual search results
+						Content: "Web search results received",
+					}
+					if err := callback(webSearchEvent); err != nil {
+						return chat.Message{}, err
+					}
+				}
 			} else if inThinking && event.ContentBlock.Type == "text" {
 				// End of thinking, start of actual response
 				inThinking = false
@@ -387,6 +442,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						ThinkingStatus: &chat.ThinkingStatus{
 							IsThinking: false,
 							Summary:    thinkingContent.String(),
+							Signature:  thinkingSignature.String(),
 						},
 					}
 					if err := callback(thinkingSummaryEvent); err != nil {
@@ -395,10 +451,10 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				}
 			}
 		case "content_block_delta":
-			// Check if Delta has text content
-			if event.Delta.Text != "" {
+			// Handle different delta types
+			switch event.Delta.Type {
+			case "text_delta":
 				content := event.Delta.Text
-
 				if inThinking {
 					// Accumulate thinking content
 					thinkingContent.WriteString(content)
@@ -428,15 +484,77 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						}
 					}
 				}
-			}
-			// Check if this is a tool use input delta
-			if currentToolCall != nil && event.Delta.Type == "input_json_delta" {
-				// Accumulate tool call arguments from streaming delta
-				if partialJSON := event.Delta.PartialJSON; partialJSON != "" {
-					if c.debug {
-						log.Printf("[Claude] Got input_json_delta: %s\n", partialJSON)
+			case "thinking_delta":
+				// Direct thinking delta (not via text when inThinking)
+				thinking := event.Delta.Thinking
+				thinkingContent.WriteString(thinking)
+				if callback != nil {
+					thinkingEvent := chat.StreamEvent{
+						Type:    chat.StreamEventTypeThinking,
+						Content: thinking,
+						ThinkingStatus: &chat.ThinkingStatus{
+							IsThinking: true,
+						},
 					}
-					toolCallArgs.WriteString(partialJSON)
+					if err := callback(thinkingEvent); err != nil {
+						return chat.Message{}, err
+					}
+				}
+			case "signature_delta":
+				// Thinking block signature
+				signature := event.Delta.Signature
+				thinkingSignature.WriteString(signature)
+				if c.debug {
+					log.Printf("[Claude] Got signature_delta: %s\n", signature)
+				}
+			case "citations_delta":
+				// Citation updates
+				if c.debug {
+					log.Printf("[Claude] Got citations_delta: %+v\n", event.Delta.Citation)
+				}
+				// TODO: Handle citation updates
+			case "input_json_delta":
+				// Tool use input delta
+				if currentToolCall != nil {
+					if partialJSON := event.Delta.PartialJSON; partialJSON != "" {
+						if c.debug {
+							log.Printf("[Claude] Got input_json_delta: %s\n", partialJSON)
+						}
+						toolCallArgs.WriteString(partialJSON)
+					}
+				}
+			default:
+				// Also handle the case where Delta.Text is set but Type is empty (backwards compatibility)
+				if event.Delta.Text != "" && event.Delta.Type == "" {
+					content := event.Delta.Text
+					if inThinking {
+						thinkingContent.WriteString(content)
+						if callback != nil {
+							thinkingEvent := chat.StreamEvent{
+								Type:    chat.StreamEventTypeThinking,
+								Content: content,
+								ThinkingStatus: &chat.ThinkingStatus{
+									IsThinking: true,
+								},
+							}
+							if err := callback(thinkingEvent); err != nil {
+								return chat.Message{}, err
+							}
+						}
+					} else {
+						respContent.WriteString(content)
+						if callback != nil {
+							event := chat.StreamEvent{
+								Type:    chat.StreamEventTypeContent,
+								Content: content,
+							}
+							if err := callback(event); err != nil {
+								return chat.Message{}, err
+							}
+						}
+					}
+				} else if c.debug && event.Delta.Type != "" {
+					log.Printf("[Claude] Unhandled delta type: %s, delta: %+v\n", event.Delta.Type, event.Delta)
 				}
 			}
 		case "content_block_stop":
@@ -449,6 +567,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						ThinkingStatus: &chat.ThinkingStatus{
 							IsThinking: false,
 							Summary:    thinkingContent.String(),
+							Signature:  thinkingSignature.String(),
 						},
 					}
 					if err := callback(thinkingSummaryEvent); err != nil {
@@ -514,6 +633,11 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 			// Message stream completed
 			if c.debug {
 				log.Printf("[Claude] Stream completed via message_stop\n")
+			}
+		default:
+			// Log unhandled event types for debugging
+			if c.debug {
+				log.Printf("[Claude] Unhandled stream event type: %s, raw: %+v\n", event.Type, event)
 			}
 		}
 	}
@@ -925,13 +1049,79 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 							}
 						}
 					}
+				} else if event.ContentBlock.Type == "thinking" {
+					// Thinking block in follow-up
+					if callback != nil {
+						thinkingEvent := chat.StreamEvent{
+							Type: chat.StreamEventTypeThinking,
+							ThinkingStatus: &chat.ThinkingStatus{
+								IsThinking: true,
+							},
+						}
+						if err := callback(thinkingEvent); err != nil {
+							return chat.Message{}, err
+						}
+					}
+				} else if event.ContentBlock.Type == "redacted_thinking" {
+					// Redacted thinking block in follow-up
+					if c.debug {
+						log.Printf("[Claude] Follow-up redacted thinking block detected, data: %s\n", event.ContentBlock.Data)
+					}
+					if callback != nil {
+						redactedEvent := chat.StreamEvent{
+							Type: chat.StreamEventTypeRedactedThinking,
+							ThinkingStatus: &chat.ThinkingStatus{
+								IsThinking:   true,
+								RedactedData: event.ContentBlock.Data,
+							},
+						}
+						if err := callback(redactedEvent); err != nil {
+							return chat.Message{}, err
+						}
+					}
+				} else if event.ContentBlock.Type == "server_tool_use" {
+					// Server-side tool invocation in follow-up
+					if c.debug {
+						log.Printf("[Claude] Follow-up server tool use: ID=%s, Name=%s, Input=%v\n",
+							event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
+					}
+					if callback != nil {
+						serverToolEvent := chat.StreamEvent{
+							Type: chat.StreamEventTypeServerToolUse,
+							ToolCalls: []chat.ToolCall{
+								{
+									ID:        event.ContentBlock.ID,
+									Name:      event.ContentBlock.Name,
+									Arguments: nil,
+								},
+							},
+						}
+						if err := callback(serverToolEvent); err != nil {
+							return chat.Message{}, err
+						}
+					}
+				} else if event.ContentBlock.Type == "web_search_tool_result" {
+					// Web search results in follow-up
+					if c.debug {
+						log.Printf("[Claude] Follow-up web search result: ToolUseID=%s, Content=%v\n",
+							event.ContentBlock.ToolUseID, event.ContentBlock.Content)
+					}
+					if callback != nil {
+						webSearchEvent := chat.StreamEvent{
+							Type:    chat.StreamEventTypeWebSearchResult,
+							Content: "Web search results received in follow-up",
+						}
+						if err := callback(webSearchEvent); err != nil {
+							return chat.Message{}, err
+						}
+					}
 				}
 			case "content_block_delta":
-				if event.Delta.Text != "" {
+				// Handle different delta types similar to main streaming
+				switch event.Delta.Type {
+				case "text_delta":
 					content := event.Delta.Text
 					respContent.WriteString(content)
-
-					// Call the callback with the content event
 					if callback != nil {
 						streamEvent := chat.StreamEvent{
 							Type:    chat.StreamEventTypeContent,
@@ -941,11 +1131,53 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 							return chat.Message{}, err
 						}
 					}
-				}
-				// Check if this is a tool use input delta
-				if currentToolCall != nil && event.Delta.Type == "input_json_delta" {
-					if partialJSON := event.Delta.PartialJSON; partialJSON != "" {
-						toolCallArgs.WriteString(partialJSON)
+				case "thinking_delta":
+					// Direct thinking delta in follow-up
+					if callback != nil {
+						thinkingEvent := chat.StreamEvent{
+							Type:    chat.StreamEventTypeThinking,
+							Content: event.Delta.Thinking,
+							ThinkingStatus: &chat.ThinkingStatus{
+								IsThinking: true,
+							},
+						}
+						if err := callback(thinkingEvent); err != nil {
+							return chat.Message{}, err
+						}
+					}
+				case "signature_delta":
+					// Thinking block signature in follow-up
+					if c.debug {
+						log.Printf("[Claude] Follow-up got signature_delta: %s\n", event.Delta.Signature)
+					}
+				case "citations_delta":
+					// Citation updates in follow-up
+					if c.debug {
+						log.Printf("[Claude] Follow-up got citations_delta: %+v\n", event.Delta.Citation)
+					}
+				case "input_json_delta":
+					// Tool use input delta
+					if currentToolCall != nil {
+						if partialJSON := event.Delta.PartialJSON; partialJSON != "" {
+							toolCallArgs.WriteString(partialJSON)
+						}
+					}
+				default:
+					// Handle backwards compatibility
+					if event.Delta.Text != "" && event.Delta.Type == "" {
+						content := event.Delta.Text
+						respContent.WriteString(content)
+						if callback != nil {
+							streamEvent := chat.StreamEvent{
+								Type:    chat.StreamEventTypeContent,
+								Content: content,
+							}
+							if err := callback(streamEvent); err != nil {
+								return chat.Message{}, err
+							}
+						}
+					} else if c.debug && event.Delta.Type != "" {
+						log.Printf("[Claude] Follow-up unhandled delta type: %s, delta: %+v\n", event.Delta.Type, event.Delta)
 					}
 				}
 			case "content_block_stop":
@@ -1007,6 +1239,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 				// Follow-up message stream completed
 				if c.debug {
 					log.Printf("[Claude] Follow-up stream completed via message_stop\n")
+				}
+			default:
+				// Log unhandled event types for debugging
+				if c.debug {
+					log.Printf("[Claude] Follow-up unhandled stream event type: %s, raw: %+v\n", event.Type, event)
 				}
 			}
 		}

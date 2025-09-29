@@ -46,10 +46,18 @@ const (
 	StreamEventTypeThinking StreamEventType = "thinking"
 	// StreamEventTypeThinkingSummary provides a summary of the thinking process.
 	StreamEventTypeThinkingSummary StreamEventType = "thinking_summary"
+	// StreamEventTypeRedactedThinking indicates safety-flagged thinking content.
+	StreamEventTypeRedactedThinking StreamEventType = "redacted_thinking"
 	// StreamEventTypeToolCall indicates a tool is being invoked.
 	StreamEventTypeToolCall StreamEventType = "tool_call"
 	// StreamEventTypeToolResult indicates the result of a tool execution.
 	StreamEventTypeToolResult StreamEventType = "tool_result"
+	// StreamEventTypeServerToolUse indicates a server-side tool invocation.
+	StreamEventTypeServerToolUse StreamEventType = "server_tool_use"
+	// StreamEventTypeWebSearchResult indicates web search results from server-side search.
+	StreamEventTypeWebSearchResult StreamEventType = "web_search_result"
+	// StreamEventTypeCitation indicates citation updates.
+	StreamEventTypeCitation StreamEventType = "citation"
 	// StreamEventTypeDone indicates the stream has completed.
 	StreamEventTypeDone StreamEventType = "done"
 )
@@ -80,6 +88,10 @@ type ThinkingStatus struct {
 	Summary string `json:"summary,omitzero"`
 	// Duration indicates how long the thinking took (in milliseconds).
 	Duration int64 `json:"duration,omitzero"`
+	// Signature contains the encrypted signature for thinking block verification.
+	Signature string `json:"signature,omitzero"`
+	// RedactedData contains encrypted thinking content when flagged by safety.
+	RedactedData string `json:"redacted_data,omitzero"`
 }
 
 // StreamCallback is called for each streaming event.
