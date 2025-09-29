@@ -282,17 +282,15 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 		callback := func(event chat.StreamEvent) error {
 			switch event.Type {
 			case chat.StreamEventTypeThinking:
-				if event.ThinkingStatus != nil && event.ThinkingStatus.IsThinking {
-					if !hasShownThinkingHeader {
-						// Show thinking header with clear visual indicator
-						_, _ = fmt.Fprint(output, "\n💭 Thinking...\n")
-						hasShownThinkingHeader = true
-						isThinking = true
-					}
-					// Stream the thinking content if available
-					if event.Content != "" {
-						_, _ = fmt.Fprint(output, event.Content)
-					}
+				if !hasShownThinkingHeader {
+					// Show thinking header with clear visual indicator
+					_, _ = fmt.Fprint(output, "\n💭 Thinking...\n")
+					hasShownThinkingHeader = true
+					isThinking = true
+				}
+				// Stream the thinking content if available
+				if event.Content != "" {
+					_, _ = fmt.Fprint(output, event.Content)
 				}
 			case chat.StreamEventTypeThinkingSummary:
 				if event.ThinkingStatus != nil {

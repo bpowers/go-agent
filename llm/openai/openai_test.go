@@ -112,23 +112,18 @@ func TestStreamEventHandling(t *testing.T) {
 	// Simulate reasoning events
 	events := []chat.StreamEvent{
 		{
-			Type: chat.StreamEventTypeThinking,
-			ThinkingStatus: &chat.ThinkingStatus{
-				IsThinking: true,
-			},
+			Type:           chat.StreamEventTypeThinking,
+			ThinkingStatus: &chat.ThinkingStatus{},
 		},
 		{
-			Type:    chat.StreamEventTypeThinking,
-			Content: "Let me think about this...",
-			ThinkingStatus: &chat.ThinkingStatus{
-				IsThinking: true,
-			},
+			Type:           chat.StreamEventTypeThinking,
+			Content:        "Let me think about this...",
+			ThinkingStatus: &chat.ThinkingStatus{},
 		},
 		{
 			Type: chat.StreamEventTypeThinkingSummary,
 			ThinkingStatus: &chat.ThinkingStatus{
-				IsThinking: false,
-				Summary:    "Analyzed the request",
+				Summary: "Analyzed the request",
 			},
 		},
 		{

@@ -330,10 +330,8 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 			if supportsThinking(c.modelName) && callback != nil {
 				// Emit initial thinking event for models that support it
 				thinkingEvent := chat.StreamEvent{
-					Type: chat.StreamEventTypeThinking,
-					ThinkingStatus: &chat.ThinkingStatus{
-						IsThinking: true,
-					},
+					Type:           chat.StreamEventTypeThinking,
+					ThinkingStatus: &chat.ThinkingStatus{},
 				}
 				if err := callback(thinkingEvent); err != nil {
 					return chat.Message{}, err
@@ -346,10 +344,8 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				inThinking = true
 				if callback != nil {
 					thinkingEvent := chat.StreamEvent{
-						Type: chat.StreamEventTypeThinking,
-						ThinkingStatus: &chat.ThinkingStatus{
-							IsThinking: true,
-						},
+						Type:           chat.StreamEventTypeThinking,
+						ThinkingStatus: &chat.ThinkingStatus{},
 					}
 					if err := callback(thinkingEvent); err != nil {
 						return chat.Message{}, err
@@ -387,7 +383,6 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					redactedEvent := chat.StreamEvent{
 						Type: chat.StreamEventTypeRedactedThinking,
 						ThinkingStatus: &chat.ThinkingStatus{
-							IsThinking:   true,
 							RedactedData: event.ContentBlock.Data,
 						},
 					}
@@ -440,9 +435,8 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					thinkingSummaryEvent := chat.StreamEvent{
 						Type: chat.StreamEventTypeThinkingSummary,
 						ThinkingStatus: &chat.ThinkingStatus{
-							IsThinking: false,
-							Summary:    thinkingContent.String(),
-							Signature:  thinkingSignature.String(),
+							Summary:   thinkingContent.String(),
+							Signature: thinkingSignature.String(),
 						},
 					}
 					if err := callback(thinkingSummaryEvent); err != nil {
@@ -461,11 +455,9 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					if callback != nil {
 						// Stream thinking updates
 						thinkingEvent := chat.StreamEvent{
-							Type:    chat.StreamEventTypeThinking,
-							Content: content,
-							ThinkingStatus: &chat.ThinkingStatus{
-								IsThinking: true,
-							},
+							Type:           chat.StreamEventTypeThinking,
+							Content:        content,
+							ThinkingStatus: &chat.ThinkingStatus{},
 						}
 						if err := callback(thinkingEvent); err != nil {
 							return chat.Message{}, err
@@ -490,11 +482,9 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				thinkingContent.WriteString(thinking)
 				if callback != nil {
 					thinkingEvent := chat.StreamEvent{
-						Type:    chat.StreamEventTypeThinking,
-						Content: thinking,
-						ThinkingStatus: &chat.ThinkingStatus{
-							IsThinking: true,
-						},
+						Type:           chat.StreamEventTypeThinking,
+						Content:        thinking,
+						ThinkingStatus: &chat.ThinkingStatus{},
 					}
 					if err := callback(thinkingEvent); err != nil {
 						return chat.Message{}, err
@@ -531,11 +521,9 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						thinkingContent.WriteString(content)
 						if callback != nil {
 							thinkingEvent := chat.StreamEvent{
-								Type:    chat.StreamEventTypeThinking,
-								Content: content,
-								ThinkingStatus: &chat.ThinkingStatus{
-									IsThinking: true,
-								},
+								Type:           chat.StreamEventTypeThinking,
+								Content:        content,
+								ThinkingStatus: &chat.ThinkingStatus{},
 							}
 							if err := callback(thinkingEvent); err != nil {
 								return chat.Message{}, err
@@ -565,9 +553,8 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					thinkingSummaryEvent := chat.StreamEvent{
 						Type: chat.StreamEventTypeThinkingSummary,
 						ThinkingStatus: &chat.ThinkingStatus{
-							IsThinking: false,
-							Summary:    thinkingContent.String(),
-							Signature:  thinkingSignature.String(),
+							Summary:   thinkingContent.String(),
+							Signature: thinkingSignature.String(),
 						},
 					}
 					if err := callback(thinkingSummaryEvent); err != nil {
@@ -1053,10 +1040,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					// Thinking block in follow-up
 					if callback != nil {
 						thinkingEvent := chat.StreamEvent{
-							Type: chat.StreamEventTypeThinking,
-							ThinkingStatus: &chat.ThinkingStatus{
-								IsThinking: true,
-							},
+							Type:           chat.StreamEventTypeThinking,
+							ThinkingStatus: &chat.ThinkingStatus{},
 						}
 						if err := callback(thinkingEvent); err != nil {
 							return chat.Message{}, err
@@ -1071,7 +1056,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						redactedEvent := chat.StreamEvent{
 							Type: chat.StreamEventTypeRedactedThinking,
 							ThinkingStatus: &chat.ThinkingStatus{
-								IsThinking:   true,
 								RedactedData: event.ContentBlock.Data,
 							},
 						}
@@ -1135,11 +1119,9 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					// Direct thinking delta in follow-up
 					if callback != nil {
 						thinkingEvent := chat.StreamEvent{
-							Type:    chat.StreamEventTypeThinking,
-							Content: event.Delta.Thinking,
-							ThinkingStatus: &chat.ThinkingStatus{
-								IsThinking: true,
-							},
+							Type:           chat.StreamEventTypeThinking,
+							Content:        event.Delta.Thinking,
+							ThinkingStatus: &chat.ThinkingStatus{},
 						}
 						if err := callback(thinkingEvent); err != nil {
 							return chat.Message{}, err

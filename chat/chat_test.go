@@ -39,31 +39,25 @@ func TestStreamEvent(t *testing.T) {
 		{
 			name: "Thinking event with status",
 			event: StreamEvent{
-				Type: StreamEventTypeThinking,
-				ThinkingStatus: &ThinkingStatus{
-					IsThinking: true,
-				},
+				Type:           StreamEventTypeThinking,
+				ThinkingStatus: &ThinkingStatus{},
 			},
 			validate: func(t *testing.T, e StreamEvent) {
 				assert.Equal(t, StreamEventTypeThinking, e.Type)
 				assert.NotNil(t, e.ThinkingStatus)
-				assert.True(t, e.ThinkingStatus.IsThinking)
 			},
 		},
 		{
 			name: "Thinking event with content",
 			event: StreamEvent{
-				Type:    StreamEventTypeThinking,
-				Content: "Processing request...",
-				ThinkingStatus: &ThinkingStatus{
-					IsThinking: true,
-				},
+				Type:           StreamEventTypeThinking,
+				Content:        "Processing request...",
+				ThinkingStatus: &ThinkingStatus{},
 			},
 			validate: func(t *testing.T, e StreamEvent) {
 				assert.Equal(t, StreamEventTypeThinking, e.Type)
 				assert.Equal(t, "Processing request...", e.Content)
 				assert.NotNil(t, e.ThinkingStatus)
-				assert.True(t, e.ThinkingStatus.IsThinking)
 			},
 		},
 		{
@@ -71,17 +65,13 @@ func TestStreamEvent(t *testing.T) {
 			event: StreamEvent{
 				Type: StreamEventTypeThinkingSummary,
 				ThinkingStatus: &ThinkingStatus{
-					IsThinking: false,
-					Summary:    "Analyzed the user's request for help",
-					Duration:   1500,
+					Summary: "Analyzed the user's request for help",
 				},
 			},
 			validate: func(t *testing.T, e StreamEvent) {
 				assert.Equal(t, StreamEventTypeThinkingSummary, e.Type)
 				assert.NotNil(t, e.ThinkingStatus)
-				assert.False(t, e.ThinkingStatus.IsThinking)
 				assert.Equal(t, "Analyzed the user's request for help", e.ThinkingStatus.Summary)
-				assert.Equal(t, int64(1500), e.ThinkingStatus.Duration)
 			},
 		},
 		{
@@ -116,7 +106,7 @@ func TestStreamCallback(t *testing.T) {
 		}
 
 		events := []StreamEvent{
-			{Type: StreamEventTypeThinking, ThinkingStatus: &ThinkingStatus{IsThinking: true}},
+			{Type: StreamEventTypeThinking, ThinkingStatus: &ThinkingStatus{}},
 			{Type: StreamEventTypeContent, Content: "Hello"},
 			{Type: StreamEventTypeDone},
 		}
@@ -273,10 +263,8 @@ func (m *MockChat) Message(ctx context.Context, msg Message, opts ...Option) (Me
 	if callback != nil {
 		// Simulate thinking
 		err := callback(StreamEvent{
-			Type: StreamEventTypeThinking,
-			ThinkingStatus: &ThinkingStatus{
-				IsThinking: true,
-			},
+			Type:           StreamEventTypeThinking,
+			ThinkingStatus: &ThinkingStatus{},
 		})
 		if err != nil {
 			return Message{}, err
