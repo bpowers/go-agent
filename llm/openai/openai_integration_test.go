@@ -356,3 +356,28 @@ func TestOpenAIIntegration_MaxTokensByModel(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIIntegration_NoDuplicateMessages(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	tests := []struct {
+		name string
+		api  API
+	}{
+		{"ChatCompletions", ChatCompletions},
+		{"Responses", Responses},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, err := NewClient(OpenAIURL, getAPIKey(), WithModel(getTestModel()), WithAPI(tt.api))
+			require.NoError(t, err, "Failed to create OpenAI client")
+			require.NotNil(t, client)
+
+			// Use the test helper for checking duplicate messages
+			llmtesting.TestNoDuplicateMessages(t, client)
+		})
+	}
+}

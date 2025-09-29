@@ -316,3 +316,15 @@ func TestClaudeIntegration_MaxTokensByModel(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeIntegration_NoDuplicateMessages(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err, "Failed to create Claude client")
+	require.NotNil(t, client)
+
+	// Use the test helper for checking duplicate messages
+	llmtesting.TestNoDuplicateMessages(t, client)
+}

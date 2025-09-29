@@ -337,6 +337,11 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Build the message history from live records BEFORE adding the new message
+	// This prevents the message from being duplicated when we call tempChat.Message()
+	systemPrompt, msgs := s.buildChatHistoryLocked()
+	s.lastHistoryLen = len(msgs)
+
 	// Add user message to records (tokens will be updated after response)
 	userMsgID, _ := s.store.AddRecord(s.sessionID, persistence.Record{
 		Role:         chat.Role(msg.Role),
@@ -362,11 +367,7 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 		}
 	}
 
-	// Build the message history from live records
-	systemPrompt, msgs := s.buildChatHistoryLocked()
-	s.lastHistoryLen = len(msgs)
-
-	// Recreate chat with current history
+	// Recreate chat with history (not including the just-added message)
 	tempChat := s.client.NewChat(systemPrompt, msgs...)
 
 	// Re-register tools
@@ -417,17 +418,19 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 	}
 
 	// Persist assistant/tool responses in the order returned by the provider.
+	// Skip the user message since we already added it in prepareForMessage.
 	_, history := tempChat.History()
 	if s.lastHistoryLen > len(history) {
 		s.lastHistoryLen = len(history)
 	}
 	newMessages := history[s.lastHistoryLen:]
-	if len(newMessages) > 0 {
-		first := newMessages[0]
-		if first.Role == s.lastUserMessage.Role && first.GetText() == s.lastUserMessage.GetText() && !first.HasToolCalls() && !first.HasToolResults() {
-			newMessages = newMessages[1:]
-		}
+
+	// Skip the first message if it's the user message we already added
+	if len(newMessages) > 0 && newMessages[0].Role == s.lastUserMessage.Role &&
+		newMessages[0].GetText() == s.lastUserMessage.GetText() {
+		newMessages = newMessages[1:]
 	}
+
 	now := time.Now()
 	for i, m := range newMessages {
 		rec := persistence.Record{

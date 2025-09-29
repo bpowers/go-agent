@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // testToolDef is a simple implementation of chat.ToolDef for testing
@@ -789,4 +791,131 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	}
 
 	t.Log("System reminder test passed for both regular and streaming modes")
+}
+
+// TestNoDuplicateMessages tests that messages are not duplicated in history
+// This is a regression test for a bug where chat clients were adding messages
+// to their state even though the messages were already in the initial history
+func TestNoDuplicateMessages(t *testing.T, client chat.Client) {
+	// Test 1: Simple message flow without tools
+	t.Run("SimpleMessages", func(t *testing.T) {
+		// Create a chat with initial messages
+		initialMessages := []chat.Message{
+			chat.UserMessage("Hello"),
+			chat.AssistantMessage("Hi there! How can I help you today?"),
+		}
+
+		chatSession := client.NewChat("You are a helpful assistant.", initialMessages...)
+
+		// Send a new message
+		userMsg := "What is 2+2?"
+		response, err := chatSession.Message(context.Background(), chat.UserMessage(userMsg))
+		require.NoError(t, err, "Failed to get response")
+		require.NotEmpty(t, response.GetText(), "Expected non-empty response")
+
+		// Get the history
+		_, history := chatSession.History()
+
+		// Count occurrences of each message
+		helloCount := 0
+		hiThereCount := 0
+		mathQuestionCount := 0
+
+		for _, msg := range history {
+			content := msg.GetText()
+			if content == "Hello" {
+				helloCount++
+			}
+			if strings.Contains(content, "Hi there! How can I help you today?") {
+				hiThereCount++
+			}
+			if content == userMsg {
+				mathQuestionCount++
+			}
+		}
+
+		// Each message should appear exactly once
+		assert.Equal(t, 1, helloCount, "Initial user message 'Hello' should appear exactly once")
+		assert.Equal(t, 1, hiThereCount, "Initial assistant message should appear exactly once")
+		assert.Equal(t, 1, mathQuestionCount, "New user message should appear exactly once")
+
+		// Total history should be: 2 initial + 1 new user + 1 assistant response = 4
+		assert.Equal(t, 4, len(history), "History should contain exactly 4 messages")
+	})
+
+	// Test 2: Tool call scenario
+	t.Run("WithToolCalls", func(t *testing.T) {
+		// Create a chat with initial messages
+		initialMessages := []chat.Message{
+			chat.UserMessage("Hi, I need help with calculations"),
+			chat.AssistantMessage("I can help you with calculations. What would you like me to compute?"),
+		}
+
+		chatSession := client.NewChat("You are a helpful calculator assistant.", initialMessages...)
+
+		// Register a simple calculation tool
+		calcTool := &testToolDef{
+			name:        "calculate",
+			description: "Perform basic arithmetic calculations",
+			jsonSchema: `{
+				"name": "calculate",
+				"description": "Perform basic arithmetic calculations",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"expression": {
+							"type": "string",
+							"description": "The mathematical expression to evaluate"
+						}
+					},
+					"required": ["expression"]
+				}
+			}`,
+		}
+
+		toolCalled := false
+		err := chatSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+			toolCalled = true
+			// Simple response for testing
+			return `{"result": 42}`
+		})
+		require.NoError(t, err, "Failed to register tool")
+
+		// Send a message that triggers tool use
+		userMsg := "Please calculate 6 times 7 for me"
+		response, err := chatSession.Message(context.Background(), chat.UserMessage(userMsg))
+		require.NoError(t, err, "Failed to get response with tool")
+		require.NotEmpty(t, response.GetText(), "Expected non-empty response")
+
+		// Verify tool was called
+		assert.True(t, toolCalled, "Tool should have been called")
+
+		// Get the history
+		_, history := chatSession.History()
+
+		// Count occurrences of the new user message
+		calcRequestCount := 0
+		for _, msg := range history {
+			if msg.GetText() == userMsg {
+				calcRequestCount++
+			}
+		}
+
+		// The user message should appear exactly once
+		assert.Equal(t, 1, calcRequestCount, "User message requesting calculation should appear exactly once")
+
+		// History should contain initial messages + new exchange
+		// Note: Tool calls may add additional messages, but the user message should not be duplicated
+		assert.GreaterOrEqual(t, len(history), 4, "History should have at least 4 messages")
+
+		// Check for duplicate consecutive messages (a clear sign of the bug)
+		for i := 1; i < len(history); i++ {
+			if history[i].Role == history[i-1].Role &&
+				history[i].GetText() == history[i-1].GetText() &&
+				history[i].GetText() != "" {
+				t.Errorf("Found duplicate consecutive messages at positions %d and %d: role=%s, text=%s",
+					i-1, i, history[i].Role, history[i].GetText())
+			}
+		}
+	})
 }
