@@ -245,3 +245,13 @@ func TestGeminiIntegration_NoDuplicateMessages(t *testing.T) {
 	// Use the test helper for checking duplicate messages
 	llmtesting.TestNoDuplicateMessages(t, client)
 }
+
+func TestGeminiIntegration_MessagePersistenceAfterRestore(t *testing.T) {
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err, "Failed to create Gemini client")
+	require.NotNil(t, client)
+
+	llmtesting.TestMessagePersistenceAfterRestore(t, client)
+}

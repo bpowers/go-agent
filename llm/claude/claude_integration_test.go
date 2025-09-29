@@ -328,3 +328,14 @@ func TestClaudeIntegration_NoDuplicateMessages(t *testing.T) {
 	// Use the test helper for checking duplicate messages
 	llmtesting.TestNoDuplicateMessages(t, client)
 }
+
+func TestClaudeIntegration_MessagePersistenceAfterRestore(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err, "Failed to create Claude client")
+	require.NotNil(t, client)
+
+	llmtesting.TestMessagePersistenceAfterRestore(t, client)
+}

@@ -248,10 +248,9 @@ type session struct {
 	lastUsage           chat.TokenUsageDetails
 
 	// Tool tracking - use single mutex for simplicity as per CLAUDE.md
-	tools             map[string]registeredTool
-	lastUserMessageID int64
-	lastUserMessage   chat.Message
-	lastHistoryLen    int
+	tools           map[string]registeredTool
+	lastUserMessage chat.Message
+	lastHistoryLen  int
 }
 
 type registeredTool struct {
@@ -331,31 +330,17 @@ func (s *session) Message(ctx context.Context, msg chat.Message, opts ...chat.Op
 	return response, nil
 }
 
-// prepareForMessage adds the user message, checks for compaction, and returns a prepared chat.
+// prepareForMessage checks for compaction and returns a prepared chat with history from the store.
 // This method expects the mutex is NOT held and will handle locking internally.
 func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat.Chat, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Build the message history from live records BEFORE adding the new message
-	// This prevents the message from being duplicated when we call tempChat.Message()
+	// Build the message history from live records
 	systemPrompt, msgs := s.buildChatHistoryLocked()
 	s.lastHistoryLen = len(msgs)
 
-	// Add user message to records (tokens will be updated after response)
-	userMsgID, _ := s.store.AddRecord(s.sessionID, persistence.Record{
-		Role:         chat.Role(msg.Role),
-		Content:      msg.GetText(),
-		ToolCalls:    msg.GetToolCalls(),
-		ToolResults:  msg.GetToolResults(),
-		Live:         true,
-		InputTokens:  0, // Will be updated after response
-		OutputTokens: 0,
-		Timestamp:    time.Now(),
-	})
-
-	// Store message ID for later token update
-	s.lastUserMessageID = userMsgID
+	// Store the user message for comparison in trackResponse
 	s.lastUserMessage = msg
 
 	// Check if we need to compact before sending
@@ -367,7 +352,7 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 		}
 	}
 
-	// Recreate chat with history (not including the just-added message)
+	// Create chat with history from store
 	tempChat := s.client.NewChat(systemPrompt, msgs...)
 
 	// Re-register tools
@@ -406,31 +391,14 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 
 	s.cumulativeTokens += usage.LastMessage.TotalTokens
 
-	// Update the user message with actual input tokens
-	if s.lastUserMessageID > 0 && usage.LastMessage.InputTokens > 0 {
-		// Get the specific record to update
-		record, err := s.store.GetRecord(s.sessionID, s.lastUserMessageID)
-		if err == nil {
-			record.InputTokens = usage.LastMessage.InputTokens
-			record.Status = string(RecordStatusSuccess) // Mark as successful
-			s.store.UpdateRecord(s.sessionID, s.lastUserMessageID, record)
-		}
-	}
-
-	// Persist assistant/tool responses in the order returned by the provider.
-	// Skip the user message since we already added it in prepareForMessage.
+	// Get new messages from chat history (includes user message and response)
 	_, history := tempChat.History()
 	if s.lastHistoryLen > len(history) {
 		s.lastHistoryLen = len(history)
 	}
 	newMessages := history[s.lastHistoryLen:]
 
-	// Skip the first message if it's the user message we already added
-	if len(newMessages) > 0 && newMessages[0].Role == s.lastUserMessage.Role &&
-		newMessages[0].GetText() == s.lastUserMessage.GetText() {
-		newMessages = newMessages[1:]
-	}
-
+	// Persist all new messages with correct token counts
 	now := time.Now()
 	for i, m := range newMessages {
 		rec := persistence.Record{
@@ -442,7 +410,13 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 			Timestamp:   now.Add(time.Millisecond * time.Duration(i)),
 		}
 
-		// Assign output tokens to the final assistant message in the exchange.
+		// Assign input tokens to user messages
+		if m.Role == chat.UserRole {
+			rec.InputTokens = usage.LastMessage.InputTokens
+			rec.Status = string(RecordStatusSuccess)
+		}
+
+		// Assign output tokens to the final assistant message in the exchange
 		if m.Role == chat.AssistantRole && i == len(newMessages)-1 {
 			rec.OutputTokens = usage.LastMessage.OutputTokens
 		}

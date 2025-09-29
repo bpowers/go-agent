@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	agent "github.com/bpowers/go-agent"
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/persistence"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -917,5 +919,208 @@ func TestNoDuplicateMessages(t *testing.T, client chat.Client) {
 					i-1, i, history[i].Role, history[i].GetText())
 			}
 		}
+	})
+}
+
+// TestMessagePersistenceAfterRestore tests that messages are not duplicated
+// when a session is restored from persistence and new messages are sent.
+// This is a regression test for a bug where user messages were being pre-added
+// to the store before calling Message(), causing them to be stored twice.
+func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
+	store := persistence.NewMemoryStore()
+	systemPrompt := "You are a helpful assistant."
+
+	t.Run("SimpleMessages", func(t *testing.T) {
+		// Create a new session with persistence
+		session := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		sessionID := session.SessionID()
+
+		// Send first message
+		userMsg1 := "Hello, how are you?"
+		_, err := session.Message(context.Background(), chat.UserMessage(userMsg1))
+		require.NoError(t, err)
+
+		// Check that we have exactly 2 records (user + assistant)
+		records1, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+
+		userRecordCount1 := 0
+		for _, r := range records1 {
+			if r.Role == "user" && r.Content == userMsg1 {
+				userRecordCount1++
+			}
+		}
+		assert.Equal(t, 1, userRecordCount1, "First user message should appear exactly once in persistence")
+
+		// Restore the session from persistence (simulating browser reload)
+		restoredSession := agent.NewSession(client, systemPrompt,
+			agent.WithStore(store),
+			agent.WithRestoreSession(sessionID))
+
+		// Send second message on restored session
+		userMsg2 := "What is the capital of France?"
+		_, err = restoredSession.Message(context.Background(), chat.UserMessage(userMsg2))
+		require.NoError(t, err)
+
+		// Get all records after second message
+		records2, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+
+		// Count occurrences of each user message in persistence
+		userRecord1Count := 0
+		userRecord2Count := 0
+		for _, r := range records2 {
+			if r.Role == "user" {
+				if r.Content == userMsg1 {
+					userRecord1Count++
+				}
+				if r.Content == userMsg2 {
+					userRecord2Count++
+				}
+			}
+		}
+
+		// Each user message should appear exactly once in persistence
+		assert.Equal(t, 1, userRecord1Count, "First user message should appear exactly once")
+		assert.Equal(t, 1, userRecord2Count, "Second user message should appear exactly once")
+
+		// Should have at least 4 records: user1, assistant1, user2, assistant2
+		// (May have more if tool calls are involved, but should have at least these)
+		assert.GreaterOrEqual(t, len(records2), 4, "Should have at least 4 records after 2 exchanges")
+	})
+
+	t.Run("WithToolCalls", func(t *testing.T) {
+		// Create a new session with persistence and a tool
+		session := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		sessionID := session.SessionID()
+
+		// Register a tool
+		calcTool := &testToolDef{
+			name:        "calculate",
+			description: "Perform basic arithmetic calculations",
+			jsonSchema: `{
+				"name": "calculate",
+				"description": "Perform basic arithmetic calculations",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"expression": {
+							"type": "string",
+							"description": "The mathematical expression to evaluate"
+						}
+					},
+					"required": ["expression"]
+				}
+			}`,
+		}
+
+		err := session.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+			return `{"result": 42}`
+		})
+		require.NoError(t, err)
+
+		// Send message that triggers tool use
+		userMsg1 := "Calculate 6 times 7"
+		_, err = session.Message(context.Background(), chat.UserMessage(userMsg1))
+		require.NoError(t, err)
+
+		// Get initial record count
+		records1, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+
+		userRecordCount1 := 0
+		for _, r := range records1 {
+			if r.Role == "user" && r.Content == userMsg1 {
+				userRecordCount1++
+			}
+		}
+		assert.Equal(t, 1, userRecordCount1, "First user message should appear exactly once")
+
+		// Restore session
+		restoredSession := agent.NewSession(client, systemPrompt,
+			agent.WithStore(store),
+			agent.WithRestoreSession(sessionID))
+
+		// Re-register tool on restored session
+		err = restoredSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+			return `{"result": 84}`
+		})
+		require.NoError(t, err)
+
+		// Send another message
+		userMsg2 := "Now calculate 12 times 7"
+		_, err = restoredSession.Message(context.Background(), chat.UserMessage(userMsg2))
+		require.NoError(t, err)
+
+		// Get all records
+		records2, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+
+		// Count user messages
+		userRecord1Count := 0
+		userRecord2Count := 0
+		for _, r := range records2 {
+			if r.Role == "user" {
+				if r.Content == userMsg1 {
+					userRecord1Count++
+				}
+				if r.Content == userMsg2 {
+					userRecord2Count++
+				}
+			}
+		}
+
+		assert.Equal(t, 1, userRecord1Count, "First user message should appear exactly once")
+		assert.Equal(t, 1, userRecord2Count, "Second user message should appear exactly once")
+	})
+
+	t.Run("EmptyTextMessage", func(t *testing.T) {
+		// Test with a message that has no text (edge case)
+		session := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		sessionID := session.SessionID()
+
+		// Send a normal message first
+		userMsg1 := "Hello"
+		_, err := session.Message(context.Background(), chat.UserMessage(userMsg1))
+		require.NoError(t, err)
+
+		records1, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+
+		userRecordCount1 := 0
+		for _, r := range records1 {
+			if r.Role == "user" && r.Content == userMsg1 {
+				userRecordCount1++
+			}
+		}
+		assert.Equal(t, 1, userRecordCount1, "User message should appear exactly once")
+
+		// Restore and send another message
+		restoredSession := agent.NewSession(client, systemPrompt,
+			agent.WithStore(store),
+			agent.WithRestoreSession(sessionID))
+
+		userMsg2 := "Goodbye"
+		_, err = restoredSession.Message(context.Background(), chat.UserMessage(userMsg2))
+		require.NoError(t, err)
+
+		records2, err := store.GetAllRecords(sessionID)
+		require.NoError(t, err)
+
+		userRecord1Count := 0
+		userRecord2Count := 0
+		for _, r := range records2 {
+			if r.Role == "user" {
+				if r.Content == userMsg1 {
+					userRecord1Count++
+				}
+				if r.Content == userMsg2 {
+					userRecord2Count++
+				}
+			}
+		}
+
+		assert.Equal(t, 1, userRecord1Count, "First user message should appear exactly once")
+		assert.Equal(t, 1, userRecord2Count, "Second user message should appear exactly once")
 	})
 }
