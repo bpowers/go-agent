@@ -111,6 +111,14 @@ func NewClient(apiKey string, opts ...Option) (chat.Client, error) {
 	return c, nil
 }
 
+// getSystemReminderText retrieves and executes system reminder function if present
+func getSystemReminderText(ctx context.Context) string {
+	if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
+		return reminderFunc()
+	}
+	return ""
+}
+
 // NewChat returns a chat instance.
 func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.Chat {
 	// Determine max tokens based on model
@@ -199,6 +207,14 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		return chat.Message{}, fmt.Errorf("converting current message: %w", err)
 	}
 	contents = append(contents, converted...)
+
+	// Prepend system reminder to the last user message if present
+	if reminder := getSystemReminderText(ctx); reminder != "" && len(contents) > 0 {
+		lastMsg := contents[len(contents)-1]
+		if lastMsg.Role == "user" {
+			lastMsg.Parts = append([]*genai.Part{{Text: reminder}}, lastMsg.Parts...)
+		}
+	}
 
 	// Configure generation settings
 	config := &genai.GenerateContentConfig{}
@@ -507,29 +523,21 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// Add function results to messages (only if we have actual results)
 		if len(functionResults) > 0 {
-			resultParts := make([]*genai.Part, len(functionResults))
-			for i, fr := range functionResults {
-				resultParts[i] = &genai.Part{
+			// Build parts with system reminder first, then function results
+			resultParts := []*genai.Part{}
+			if reminder := getSystemReminderText(ctx); reminder != "" {
+				resultParts = append(resultParts, &genai.Part{Text: reminder})
+			}
+			for _, fr := range functionResults {
+				resultParts = append(resultParts, &genai.Part{
 					FunctionResponse: fr,
-				}
+				})
 			}
 
 			msgs = append(msgs, &genai.Content{
-				Role:  "function",
+				Role:  "user",
 				Parts: resultParts,
 			})
-		}
-
-		// Check for system reminder after tool execution
-		if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
-			if reminder := reminderFunc(); reminder != "" {
-				msgs = append(msgs, &genai.Content{
-					Role: "user",
-					Parts: []*genai.Part{
-						{Text: reminder},
-					},
-				})
-			}
 		}
 
 		// Make another API call with tool results

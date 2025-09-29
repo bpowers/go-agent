@@ -204,6 +204,19 @@ func isNoTemperatureModel(model string) bool {
 		strings.HasPrefix(modelLower, "o3")
 }
 
+// withPrependedSystemReminder returns a new message with system reminder prepended as first content block
+func withPrependedSystemReminder(ctx context.Context, msg chat.Message) chat.Message {
+	if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
+		if reminder := reminderFunc(); reminder != "" {
+			newContents := make([]chat.Content, 0, len(msg.Contents)+1)
+			newContents = append(newContents, chat.Content{Text: reminder})
+			newContents = append(newContents, msg.Contents...)
+			return chat.Message{Role: msg.Role, Contents: newContents}
+		}
+	}
+	return msg
+}
+
 type chatClient struct {
 	client
 	state     *common.State
@@ -568,8 +581,9 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	}
 	messages = append(messages, historyMsgs...)
 
-	// Convert current message using the new converter
-	currentMsgs, err := messageToOpenAI(msg)
+	// Convert current message using the new converter, prepending system reminder if present
+	msgWithReminder := withPrependedSystemReminder(ctx, msg)
+	currentMsgs, err := messageToOpenAI(msgWithReminder)
 	if err != nil {
 		return chat.Message{}, fmt.Errorf("converting current message: %w", err)
 	}
@@ -1045,19 +1059,14 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// Add tool results to messages (only if non-empty to avoid potential API issues)
 		if len(chatToolResults) > 0 {
-			// Convert tool messages using the new converter
-			toolResultMsgs, err := messageToOpenAI(toolMessages[len(toolMessages)-1])
+			// Prepend system reminder before converting tool messages
+			toolMsg := toolMessages[len(toolMessages)-1]
+			toolMsgWithReminder := withPrependedSystemReminder(ctx, toolMsg)
+			toolResultMsgs, err := messageToOpenAI(toolMsgWithReminder)
 			if err != nil {
 				return chat.Message{}, fmt.Errorf("converting tool result messages: %w", err)
 			}
 			msgs = append(msgs, toolResultMsgs...)
-		}
-
-		// Check for system reminder after tool execution
-		if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
-			if reminder := reminderFunc(); reminder != "" {
-				msgs = append(msgs, openai.SystemMessage(reminder))
-			}
 		}
 
 		// Make another API call with tool results

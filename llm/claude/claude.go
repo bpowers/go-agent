@@ -215,6 +215,14 @@ func getModelMaxTokens(model string) int {
 	panic(fmt.Errorf("unknown model %q", model))
 }
 
+// getSystemReminderText retrieves and executes system reminder function if present
+func getSystemReminderText(ctx context.Context) string {
+	if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
+		return reminderFunc()
+	}
+	return ""
+}
+
 type chatClient struct {
 	client
 	state     *common.State
@@ -886,10 +894,13 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		msgs = append(msgs, param)
 	}
 
-	// Add the initial user message
-	msgs = append(msgs, anthropic.NewUserMessage(
-		anthropic.NewTextBlock(initialMsg.GetText()),
-	))
+	// Add the initial user message with system reminder prepended if present
+	userBlocks := []anthropic.ContentBlockParamUnion{}
+	if reminder := getSystemReminderText(ctx); reminder != "" {
+		userBlocks = append(userBlocks, anthropic.NewTextBlock(reminder))
+	}
+	userBlocks = append(userBlocks, anthropic.NewTextBlock(initialMsg.GetText()))
+	msgs = append(msgs, anthropic.NewUserMessage(userBlocks...))
 
 	// Persist the user message before processing tool rounds so ordering matches chronology
 	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
@@ -950,7 +961,14 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// Only create user message if we have tool results
 		// Empty messages would cause "text content blocks must be non-empty" error
 		if len(toolResults) > 0 {
-			userMsg := anthropic.NewUserMessage(toolResults...)
+			// Build message with tool results first, then system reminder
+			// Claude requires tool_result blocks to immediately follow tool_use blocks
+			resultBlocks := []anthropic.ContentBlockParamUnion{}
+			resultBlocks = append(resultBlocks, toolResults...)
+			if reminder := getSystemReminderText(ctx); reminder != "" {
+				resultBlocks = append(resultBlocks, anthropic.NewTextBlock(reminder))
+			}
+			userMsg := anthropic.NewUserMessage(resultBlocks...)
 			msgs = append(msgs, userMsg)
 		}
 
@@ -968,16 +986,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 				Text: systemPrompt,
 				Type: "text",
 			})
-		}
-
-		// Check for system reminder after tool execution
-		if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
-			if reminder := reminderFunc(); reminder != "" {
-				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-					Text: reminder,
-					Type: "text",
-				})
-			}
 		}
 
 		if len(systemBlocks) > 0 {
