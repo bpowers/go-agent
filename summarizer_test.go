@@ -8,20 +8,21 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/persistence"
 )
 
 func TestSimpleSummarizer(t *testing.T) {
 	summarizer := NewSimpleSummarizer(2, 2)
 
-	records := []Record{
-		{Role: chat.UserRole, Content: "First message"},
-		{Role: chat.AssistantRole, Content: "First response"},
-		{Role: chat.UserRole, Content: "Second message"},
-		{Role: chat.AssistantRole, Content: "Second response"},
-		{Role: chat.UserRole, Content: "Third message"},
-		{Role: chat.AssistantRole, Content: "Third response"},
-		{Role: chat.UserRole, Content: "Fourth message"},
-		{Role: chat.AssistantRole, Content: "Fourth response"},
+	records := []persistence.Record{
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "First message"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "First response"}}},
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "Second message"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "Second response"}}},
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "Third message"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "Third response"}}},
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "Fourth message"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "Fourth response"}}},
 	}
 
 	summary, err := summarizer.Summarize(context.Background(), records)
@@ -38,9 +39,9 @@ func TestSimpleSummarizer(t *testing.T) {
 func TestSimpleSummarizerWithFewRecords(t *testing.T) {
 	summarizer := NewSimpleSummarizer(2, 2)
 
-	records := []Record{
-		{Role: chat.UserRole, Content: "Only message"},
-		{Role: chat.AssistantRole, Content: "Only response"},
+	records := []persistence.Record{
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "Only message"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "Only response"}}},
 	}
 
 	summary, err := summarizer.Summarize(context.Background(), records)
@@ -55,7 +56,7 @@ func TestSimpleSummarizerWithFewRecords(t *testing.T) {
 func TestSimpleSummarizerEmptyRecords(t *testing.T) {
 	summarizer := NewSimpleSummarizer(2, 2)
 
-	summary, err := summarizer.Summarize(context.Background(), []Record{})
+	summary, err := summarizer.Summarize(context.Background(), []persistence.Record{})
 	assert.NoError(t, err)
 	assert.Empty(t, summary)
 }
@@ -110,9 +111,9 @@ func TestLLMSummarizer(t *testing.T) {
 
 	summarizer := NewSummarizer(mockClient)
 
-	records := []Record{
-		{Role: chat.UserRole, Content: "Tell me about Go"},
-		{Role: chat.AssistantRole, Content: "Go is a programming language with great concurrency support through goroutines and channels."},
+	records := []persistence.Record{
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "Tell me about Go"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "Go is a programming language with great concurrency support through goroutines and channels."}}},
 	}
 
 	summary, err := summarizer.Summarize(context.Background(), records)
@@ -129,8 +130,8 @@ func TestLLMSummarizerCustomPrompt(t *testing.T) {
 	customPrompt := "Make it very brief"
 	summarizer.SetPrompt(customPrompt)
 
-	records := []Record{
-		{Role: chat.UserRole, Content: "Long conversation"},
+	records := []persistence.Record{
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "Long conversation"}}},
 	}
 
 	// The mock will return the predefined response
@@ -146,18 +147,18 @@ func TestLLMSummarizerEmptyRecords(t *testing.T) {
 
 	summarizer := NewSummarizer(mockClient)
 
-	summary, err := summarizer.Summarize(context.Background(), []Record{})
+	summary, err := summarizer.Summarize(context.Background(), []persistence.Record{})
 	assert.NoError(t, err)
 	assert.Empty(t, summary)
 }
 
 func TestSummarizerBuildsCorrectPrompt(t *testing.T) {
 	// This test verifies that the summarizer correctly formats the conversation
-	records := []Record{
-		{Role: chat.UserRole, Content: "Hello"},
-		{Role: chat.AssistantRole, Content: "Hi there"},
-		{Role: chat.UserRole, Content: "How are you?"},
-		{Role: chat.AssistantRole, Content: "I'm doing well"},
+	records := []persistence.Record{
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "Hello"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "Hi there"}}},
+		{Role: chat.UserRole, Contents: []chat.Content{{Text: "How are you?"}}},
+		{Role: chat.AssistantRole, Contents: []chat.Content{{Text: "I'm doing well"}}},
 	}
 
 	// We can't easily test the actual prompt sent to the LLM without a more complex mock,

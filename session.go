@@ -35,10 +35,10 @@ type Session interface {
 	SessionID() string
 
 	// LiveRecords returns all records marked as live (in active context window).
-	LiveRecords() []Record
+	LiveRecords() []persistence.Record
 
 	// TotalRecords returns all records (both live and dead).
-	TotalRecords() []Record
+	TotalRecords() []persistence.Record
 
 	// CompactNow manually triggers context compaction.
 	CompactNow() error
@@ -50,29 +50,6 @@ type Session interface {
 
 	// Metrics returns usage statistics for the session.
 	Metrics() SessionMetrics
-}
-
-// RecordStatus represents the status of a record in the conversation.
-type RecordStatus string
-
-const (
-	RecordStatusPending RecordStatus = "pending" // Request sent, awaiting response
-	RecordStatusSuccess RecordStatus = "success" // Successfully processed
-	RecordStatusFailed  RecordStatus = "failed"  // Failed to process
-)
-
-// Record represents a conversation turn in the session history.
-type Record struct {
-	ID           int64             `json:"id,omitzero"`
-	Role         chat.Role         `json:"role"`
-	Content      string            `json:"content"`
-	ToolCalls    []chat.ToolCall   `json:"tool_calls,omitzero"`
-	ToolResults  []chat.ToolResult `json:"tool_results,omitzero"`
-	Live         bool              `json:"live"`          // In active context window
-	Status       RecordStatus      `json:"status"`        // Processing status
-	InputTokens  int               `json:"input_tokens"`  // Actual tokens from LLM
-	OutputTokens int               `json:"output_tokens"` // Actual tokens from LLM
-	Timestamp    time.Time         `json:"timestamp"`
 }
 
 // SessionMetrics provides usage statistics for the session.
@@ -171,7 +148,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		// Find the system prompt from existing records
 		for _, r := range existingRecords {
 			if r.Role == "system" {
-				actualSystemPrompt = r.Content
+				actualSystemPrompt = r.GetText()
 				break
 			}
 		}
@@ -185,9 +162,12 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		// Create initial records from system prompt and initial messages
 		if systemPrompt != "" {
 			options.store.AddRecord(options.sessionID, persistence.Record{
-				Role:         "system",
-				Content:      systemPrompt,
+				Role: "system",
+				Contents: []chat.Content{
+					{Text: systemPrompt},
+				},
 				Live:         true,
+				Status:       persistence.RecordStatusSuccess,
 				InputTokens:  0, // System prompt tokens counted with first message
 				OutputTokens: 0,
 				Timestamp:    time.Now(),
@@ -197,10 +177,9 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		for _, msg := range options.initialMessages {
 			options.store.AddRecord(options.sessionID, persistence.Record{
 				Role:         chat.Role(msg.Role),
-				Content:      msg.GetText(),
-				ToolCalls:    msg.GetToolCalls(),
-				ToolResults:  msg.GetToolResults(),
+				Contents:     append([]chat.Content(nil), msg.Contents...),
 				Live:         true,
+				Status:       persistence.RecordStatusSuccess,
 				InputTokens:  0, // Initial messages' tokens counted with first query
 				OutputTokens: 0,
 				Timestamp:    time.Now(),
@@ -256,54 +235,6 @@ type session struct {
 type registeredTool struct {
 	def chat.ToolDef
 	fn  func(context.Context, string) string
-}
-
-func cloneToolCalls(calls []chat.ToolCall) []chat.ToolCall {
-	if len(calls) == 0 {
-		return nil
-	}
-	cloned := make([]chat.ToolCall, len(calls))
-	for i, tc := range calls {
-		cloned[i] = chat.ToolCall{
-			ID:   tc.ID,
-			Name: tc.Name,
-		}
-		if tc.Arguments != nil {
-			cloned[i].Arguments = append([]byte(nil), tc.Arguments...)
-		}
-	}
-	return cloned
-}
-
-func cloneToolResults(results []chat.ToolResult) []chat.ToolResult {
-	if len(results) == 0 {
-		return nil
-	}
-	cloned := make([]chat.ToolResult, len(results))
-	for i, tr := range results {
-		cloned[i] = chat.ToolResult{
-			ToolCallID: tr.ToolCallID,
-			Name:       tr.Name,
-			Content:    tr.Content,
-			Error:      tr.Error,
-		}
-	}
-	return cloned
-}
-
-func recordFromPersistence(r persistence.Record) Record {
-	return Record{
-		ID:           r.ID,
-		Role:         chat.Role(r.Role),
-		Content:      r.Content,
-		ToolCalls:    cloneToolCalls(r.ToolCalls),
-		ToolResults:  cloneToolResults(r.ToolResults),
-		Live:         r.Live,
-		Status:       RecordStatus(r.Status),
-		InputTokens:  r.InputTokens,
-		OutputTokens: r.OutputTokens,
-		Timestamp:    r.Timestamp,
-	}
 }
 
 // SessionID implements Session
@@ -402,18 +333,16 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 	now := time.Now()
 	for i, m := range newMessages {
 		rec := persistence.Record{
-			Role:        m.Role,
-			Content:     m.GetText(),
-			ToolCalls:   cloneToolCalls(m.GetToolCalls()),
-			ToolResults: cloneToolResults(m.GetToolResults()),
-			Live:        true,
-			Timestamp:   now.Add(time.Millisecond * time.Duration(i)),
+			Role:      m.Role,
+			Contents:  append([]chat.Content(nil), m.Contents...),
+			Live:      true,
+			Status:    persistence.RecordStatusSuccess,
+			Timestamp: now.Add(time.Millisecond * time.Duration(i)),
 		}
 
 		// Assign input tokens to user messages
 		if m.Role == chat.UserRole {
 			rec.InputTokens = usage.LastMessage.InputTokens
-			rec.Status = string(RecordStatusSuccess)
 		}
 
 		// Assign output tokens to the final assistant message in the exchange
@@ -506,29 +435,21 @@ func (s *session) ListTools() []string {
 }
 
 // LiveRecords returns all records marked as live (in active context window).
-func (s *session) LiveRecords() []Record {
+func (s *session) LiveRecords() []persistence.Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	records, _ := s.store.GetLiveRecords(s.sessionID)
-	var result []Record
-	for _, r := range records {
-		result = append(result, recordFromPersistence(r))
-	}
-	return result
+	return records
 }
 
 // TotalRecords returns all records (both live and dead).
-func (s *session) TotalRecords() []Record {
+func (s *session) TotalRecords() []persistence.Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	records, _ := s.store.GetAllRecords(s.sessionID)
-	var result []Record
-	for _, r := range records {
-		result = append(result, recordFromPersistence(r))
-	}
-	return result
+	return records
 }
 
 // CompactNow manually triggers context compaction.
@@ -554,14 +475,8 @@ func (s *session) compactNowLocked(ctx context.Context) error {
 	// Keep last 2 messages, summarize the rest
 	recordsToSummarize := liveRecords[:len(liveRecords)-2]
 
-	// Convert persistence.Record to agent.Record for summarizer
-	var agentRecords []Record
-	for _, r := range recordsToSummarize {
-		agentRecords = append(agentRecords, recordFromPersistence(r))
-	}
-
 	// Use the configured summarizer with context from the request
-	summary, err := s.summarizer.Summarize(ctx, agentRecords)
+	summary, err := s.summarizer.Summarize(ctx, recordsToSummarize)
 	if err != nil {
 		return fmt.Errorf("summarization failed: %w", err)
 	}
@@ -574,12 +489,15 @@ func (s *session) compactNowLocked(ctx context.Context) error {
 	}
 
 	// Add summary as assistant message with tag (safer than system message)
+	summaryText := fmt.Sprintf("[Previous conversation summary]\n%s", summary)
 	s.store.AddRecord(s.sessionID, persistence.Record{
-		Role:         "assistant",
-		Content:      fmt.Sprintf("[Previous conversation summary]\n%s", summary),
+		Role: "assistant",
+		Contents: []chat.Content{
+			{Text: summaryText},
+		},
 		Live:         true,
-		Status:       string(RecordStatusSuccess), // Summaries are successful
-		InputTokens:  0,                           // Summary tokens will be counted with next message
+		Status:       persistence.RecordStatusSuccess,
+		InputTokens:  0, // Summary tokens will be counted with next message
 		OutputTokens: 0,
 		Timestamp:    time.Now(),
 	})
@@ -674,21 +592,15 @@ func (s *session) buildChatHistoryLocked() (string, []chat.Message) {
 	for _, r := range records {
 		if r.Role == "system" {
 			if systemPrompt == "" {
-				systemPrompt = r.Content
+				systemPrompt = r.GetText()
 			} else {
 				// Append additional system messages
-				systemPrompt += "\n\n" + r.Content
+				systemPrompt += "\n\n" + r.GetText()
 			}
 		} else {
-			msg := chat.Message{Role: chat.Role(r.Role)}
-			if r.Content != "" {
-				msg.AddText(r.Content)
-			}
-			for _, tc := range cloneToolCalls(r.ToolCalls) {
-				msg.AddToolCall(tc)
-			}
-			for _, tr := range cloneToolResults(r.ToolResults) {
-				msg.AddToolResult(tr)
+			msg := chat.Message{
+				Role:     chat.Role(r.Role),
+				Contents: append([]chat.Content(nil), r.Contents...),
 			}
 			msgs = append(msgs, msg)
 		}

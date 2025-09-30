@@ -9,18 +9,114 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
+// RecordStatus represents the status of a record in the conversation.
+type RecordStatus string
+
+const (
+	RecordStatusPending RecordStatus = "pending"
+	RecordStatusSuccess RecordStatus = "success"
+	RecordStatusFailed  RecordStatus = "failed"
+)
+
 // Record represents a conversation turn that can be persisted.
 type Record struct {
-	ID           int64             `json:"id"`
-	Role         chat.Role         `json:"role"`
-	Content      string            `json:"content"`
-	ToolCalls    []chat.ToolCall   `json:"tool_calls,omitzero"`
-	ToolResults  []chat.ToolResult `json:"tool_results,omitzero"`
-	Live         bool              `json:"live"`
-	Status       string            `json:"status"`        // pending, success, failed
-	InputTokens  int               `json:"input_tokens"`  // Actual tokens from LLM
-	OutputTokens int               `json:"output_tokens"` // Actual tokens from LLM
-	Timestamp    time.Time         `json:"timestamp"`
+	ID           int64          `json:"id"`
+	Role         chat.Role      `json:"role"`
+	Contents     []chat.Content `json:"contents,omitzero"`
+	Live         bool           `json:"live"`
+	Status       RecordStatus   `json:"status"`
+	InputTokens  int            `json:"input_tokens"`
+	OutputTokens int            `json:"output_tokens"`
+	Timestamp    time.Time      `json:"timestamp"`
+}
+
+// GetText concatenates all text content blocks into a single string.
+func (r Record) GetText() string {
+	var result string
+	for _, c := range r.Contents {
+		if c.Text != "" {
+			result += c.Text
+		}
+	}
+	return result
+}
+
+// GetToolCalls extracts all tool calls from the record's contents.
+func (r Record) GetToolCalls() []chat.ToolCall {
+	var calls []chat.ToolCall
+	for _, c := range r.Contents {
+		if c.ToolCall != nil {
+			calls = append(calls, *c.ToolCall)
+		}
+	}
+	return calls
+}
+
+// GetToolResults extracts all tool results from the record's contents.
+func (r Record) GetToolResults() []chat.ToolResult {
+	var results []chat.ToolResult
+	for _, c := range r.Contents {
+		if c.ToolResult != nil {
+			results = append(results, *c.ToolResult)
+		}
+	}
+	return results
+}
+
+// GetThinking extracts all thinking blocks from the record's contents.
+func (r Record) GetThinking() []chat.ThinkingContent {
+	var thinking []chat.ThinkingContent
+	for _, c := range r.Contents {
+		if c.Thinking != nil {
+			thinking = append(thinking, *c.Thinking)
+		}
+	}
+	return thinking
+}
+
+// HasText returns true if the record contains any text content.
+func (r Record) HasText() bool {
+	for _, c := range r.Contents {
+		if c.Text != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasToolCalls returns true if the record contains any tool calls.
+func (r Record) HasToolCalls() bool {
+	for _, c := range r.Contents {
+		if c.ToolCall != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// HasToolResults returns true if the record contains any tool results.
+func (r Record) HasToolResults() bool {
+	for _, c := range r.Contents {
+		if c.ToolResult != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// HasThinking returns true if the record contains any thinking content.
+func (r Record) HasThinking() bool {
+	for _, c := range r.Contents {
+		if c.Thinking != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// IsEmpty returns true if the record has no content.
+func (r Record) IsEmpty() bool {
+	return len(r.Contents) == 0
 }
 
 // Store defines the interface for persisting session records.
@@ -83,38 +179,34 @@ type sessionData struct {
 	metrics SessionMetrics
 }
 
-func cloneToolCall(tc chat.ToolCall) chat.ToolCall {
-	copyCall := chat.ToolCall{
-		ID:   tc.ID,
-		Name: tc.Name,
+func cloneContent(c chat.Content) chat.Content {
+	clone := chat.Content{
+		Text: c.Text,
 	}
-	if tc.Arguments != nil {
-		copyCall.Arguments = append([]byte(nil), tc.Arguments...)
+	if c.ToolCall != nil {
+		tc := *c.ToolCall
+		if tc.Arguments != nil {
+			tc.Arguments = append([]byte(nil), tc.Arguments...)
+		}
+		clone.ToolCall = &tc
 	}
-	return copyCall
-}
-
-func cloneToolResult(tr chat.ToolResult) chat.ToolResult {
-	return chat.ToolResult{
-		ToolCallID: tr.ToolCallID,
-		Name:       tr.Name,
-		Content:    tr.Content,
-		Error:      tr.Error,
+	if c.ToolResult != nil {
+		tr := *c.ToolResult
+		clone.ToolResult = &tr
 	}
+	if c.Thinking != nil {
+		thinking := *c.Thinking
+		clone.Thinking = &thinking
+	}
+	return clone
 }
 
 func cloneRecord(r Record) Record {
 	clone := r
-	if len(r.ToolCalls) > 0 {
-		clone.ToolCalls = make([]chat.ToolCall, len(r.ToolCalls))
-		for i, tc := range r.ToolCalls {
-			clone.ToolCalls[i] = cloneToolCall(tc)
-		}
-	}
-	if len(r.ToolResults) > 0 {
-		clone.ToolResults = make([]chat.ToolResult, len(r.ToolResults))
-		for i, tr := range r.ToolResults {
-			clone.ToolResults[i] = cloneToolResult(tr)
+	if len(r.Contents) > 0 {
+		clone.Contents = make([]chat.Content, len(r.Contents))
+		for i, c := range r.Contents {
+			clone.Contents[i] = cloneContent(c)
 		}
 	}
 	return clone
@@ -140,7 +232,7 @@ func (m *MemoryStore) AddRecord(sessionID string, record Record) (int64, error) 
 
 	// Default to success if status not specified
 	if record.Status == "" {
-		record.Status = "success"
+		record.Status = RecordStatusSuccess
 	}
 
 	sess := m.getOrCreateSessionLocked(sessionID)

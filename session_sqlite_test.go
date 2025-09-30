@@ -59,8 +59,8 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	// Should have the same records
 	records2 := session2.LiveRecords()
 	assert.Len(t, records2, 3)
-	assert.Equal(t, "Persistent assistant", records2[0].Content)
-	assert.Equal(t, "Hello persistent world", records2[1].Content)
+	assert.Equal(t, "Persistent assistant", records2[0].GetText())
+	assert.Equal(t, "Hello persistent world", records2[1].GetText())
 }
 
 func TestSessionPersistenceAcrossRestarts(t *testing.T) {
@@ -224,12 +224,12 @@ func TestSessionResumption(t *testing.T) {
 		assert.Len(t, records, 5) // Should have all the previous records
 
 		// Verify the system prompt was preserved from the original session
-		assert.Equal(t, systemPrompt, records[0].Content)
+		assert.Equal(t, systemPrompt, records[0].GetText())
 
 		// Verify the user's name is in the history
 		foundNameMessage := false
 		for _, record := range records {
-			if record.Role == chat.UserRole && strings.Contains(record.Content, userName) {
+			if record.Role == chat.UserRole && strings.Contains(record.GetText(), userName) {
 				foundNameMessage = true
 				break
 			}
@@ -346,7 +346,7 @@ func TestSessionResumptionWithLLM(t *testing.T) {
 		assert.Len(t, records, 5) // Should have all the previous records
 
 		// Verify the system prompt was preserved from the original session
-		assert.Equal(t, systemPrompt, records[0].Content)
+		assert.Equal(t, systemPrompt, records[0].GetText())
 
 		// Now ask the LLM to recall the user's name
 		ctx := context.Background()

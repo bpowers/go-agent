@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -43,9 +42,7 @@ CREATE TABLE IF NOT EXISTS records (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id    TEXT NOT NULL,
     role          TEXT NOT NULL,
-    content       TEXT NOT NULL,
-    tool_calls    TEXT,
-    tool_results  TEXT,
+    contents      TEXT NOT NULL,
     live          BOOLEAN NOT NULL,
     status        TEXT NOT NULL DEFAULT 'success',
     input_tokens  INTEGER NOT NULL DEFAULT 0,
@@ -67,88 +64,43 @@ CREATE TABLE IF NOT EXISTS metrics (
 );
 `
 	_, err := s.db.Exec(schema)
-	if err != nil {
-		return err
-	}
-
-	// Make sure tool_calls column exists even on pre-existing databases.
-	if err := addColumnIfMissing(s.db, "records", "tool_calls", "TEXT"); err != nil {
-		return err
-	}
-	if err := addColumnIfMissing(s.db, "records", "tool_results", "TEXT"); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func addColumnIfMissing(db *sql.DB, table, column, colType string) error {
-	_, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colType))
-	if err == nil {
-		return nil
-	}
-	if strings.Contains(err.Error(), "duplicate column name") {
-		return nil
-	}
 	return err
 }
 
-func encodeToolCalls(calls []chat.ToolCall) (sql.NullString, error) {
-	if len(calls) == 0 {
-		return sql.NullString{}, nil
+func encodeContents(contents []chat.Content) (string, error) {
+	if len(contents) == 0 {
+		return "[]", nil
 	}
-	data, err := json.Marshal(calls)
+	data, err := json.Marshal(contents)
 	if err != nil {
-		return sql.NullString{}, err
+		return "", err
 	}
-	return sql.NullString{String: string(data), Valid: true}, nil
+	return string(data), nil
 }
 
-func encodeToolResults(results []chat.ToolResult) (sql.NullString, error) {
-	if len(results) == 0 {
-		return sql.NullString{}, nil
-	}
-	data, err := json.Marshal(results)
-	if err != nil {
-		return sql.NullString{}, err
-	}
-	return sql.NullString{String: string(data), Valid: true}, nil
-}
-
-func decodeToolCalls(src sql.NullString, dest *[]chat.ToolCall) error {
-	if !src.Valid || src.String == "" {
+func decodeContents(src string, dest *[]chat.Content) error {
+	if src == "" || src == "[]" {
 		*dest = nil
 		return nil
 	}
-	return json.Unmarshal([]byte(src.String), dest)
-}
-
-func decodeToolResults(src sql.NullString, dest *[]chat.ToolResult) error {
-	if !src.Valid || src.String == "" {
-		*dest = nil
-		return nil
-	}
-	return json.Unmarshal([]byte(src.String), dest)
+	return json.Unmarshal([]byte(src), dest)
 }
 
 // AddRecord implements persistence.Store.
 func (s *SQLiteStore) AddRecord(sessionID string, record persistence.Record) (int64, error) {
 	// Default to success if status not specified
 	if record.Status == "" {
-		record.Status = "success"
+		record.Status = persistence.RecordStatusSuccess
 	}
 
-	toolCallsJSON, err := encodeToolCalls(record.ToolCalls)
+	contentsJSON, err := encodeContents(record.Contents)
 	if err != nil {
-		return 0, fmt.Errorf("encode tool calls: %w", err)
+		return 0, fmt.Errorf("encode contents: %w", err)
 	}
-	toolResultsJSON, err := encodeToolResults(record.ToolResults)
-	if err != nil {
-		return 0, fmt.Errorf("encode tool results: %w", err)
-	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO records (session_id, role, content, tool_calls, tool_results, live, status, input_tokens, output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, string(record.Role), record.Content, toolCallsJSON, toolResultsJSON, record.Live, record.Status, record.InputTokens, record.OutputTokens, record.Timestamp,
+		`INSERT INTO records (session_id, role, contents, live, status, input_tokens, output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, string(record.Role), contentsJSON, record.Live, string(record.Status), record.InputTokens, record.OutputTokens, record.Timestamp,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert record: %w", err)
@@ -166,12 +118,12 @@ func (s *SQLiteStore) AddRecord(sessionID string, record persistence.Record) (in
 func (s *SQLiteStore) GetRecord(sessionID string, id int64) (persistence.Record, error) {
 	var r persistence.Record
 	var roleStr string
-	var toolCallsJSON sql.NullString
-	var toolResultsJSON sql.NullString
+	var statusStr string
+	var contentsJSON string
 	err := s.db.QueryRow(
-		`SELECT id, role, content, tool_calls, tool_results, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND id = ?`,
+		`SELECT id, role, contents, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND id = ?`,
 		sessionID, id,
-	).Scan(&r.ID, &roleStr, &r.Content, &toolCallsJSON, &toolResultsJSON, &r.Live, &r.Status, &r.InputTokens, &r.OutputTokens, &r.Timestamp)
+	).Scan(&r.ID, &roleStr, &contentsJSON, &r.Live, &statusStr, &r.InputTokens, &r.OutputTokens, &r.Timestamp)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return persistence.Record{}, fmt.Errorf("record not found: %d", id)
@@ -179,11 +131,9 @@ func (s *SQLiteStore) GetRecord(sessionID string, id int64) (persistence.Record,
 		return persistence.Record{}, fmt.Errorf("query record: %w", err)
 	}
 	r.Role = chat.Role(roleStr)
-	if err := decodeToolCalls(toolCallsJSON, &r.ToolCalls); err != nil {
-		return persistence.Record{}, fmt.Errorf("decode tool calls: %w", err)
-	}
-	if err := decodeToolResults(toolResultsJSON, &r.ToolResults); err != nil {
-		return persistence.Record{}, fmt.Errorf("decode tool results: %w", err)
+	r.Status = persistence.RecordStatus(statusStr)
+	if err := decodeContents(contentsJSON, &r.Contents); err != nil {
+		return persistence.Record{}, fmt.Errorf("decode contents: %w", err)
 	}
 	return r, nil
 }
@@ -191,7 +141,7 @@ func (s *SQLiteStore) GetRecord(sessionID string, id int64) (persistence.Record,
 // GetAllRecords implements persistence.Store.
 func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, tool_calls, tool_results, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? ORDER BY timestamp, id`,
+		`SELECT id, role, contents, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? ORDER BY timestamp, id`,
 		sessionID,
 	)
 	if err != nil {
@@ -203,17 +153,15 @@ func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, err
 	for rows.Next() {
 		var r persistence.Record
 		var roleStr string
-		var toolCallsJSON sql.NullString
-		var toolResultsJSON sql.NullString
-		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &toolCallsJSON, &toolResultsJSON, &r.Live, &r.Status, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
+		var statusStr string
+		var contentsJSON string
+		if err := rows.Scan(&r.ID, &roleStr, &contentsJSON, &r.Live, &statusStr, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)
 		}
 		r.Role = chat.Role(roleStr)
-		if err := decodeToolCalls(toolCallsJSON, &r.ToolCalls); err != nil {
-			return nil, fmt.Errorf("decode tool calls: %w", err)
-		}
-		if err := decodeToolResults(toolResultsJSON, &r.ToolResults); err != nil {
-			return nil, fmt.Errorf("decode tool results: %w", err)
+		r.Status = persistence.RecordStatus(statusStr)
+		if err := decodeContents(contentsJSON, &r.Contents); err != nil {
+			return nil, fmt.Errorf("decode contents: %w", err)
 		}
 		records = append(records, r)
 	}
@@ -228,7 +176,7 @@ func (s *SQLiteStore) GetAllRecords(sessionID string) ([]persistence.Record, err
 // GetLiveRecords implements persistence.Store.
 func (s *SQLiteStore) GetLiveRecords(sessionID string) ([]persistence.Record, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, tool_calls, tool_results, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND live = 1 ORDER BY timestamp, id`,
+		`SELECT id, role, contents, live, status, input_tokens, output_tokens, timestamp FROM records WHERE session_id = ? AND live = 1 ORDER BY timestamp, id`,
 		sessionID,
 	)
 	if err != nil {
@@ -240,17 +188,15 @@ func (s *SQLiteStore) GetLiveRecords(sessionID string) ([]persistence.Record, er
 	for rows.Next() {
 		var r persistence.Record
 		var roleStr string
-		var toolCallsJSON sql.NullString
-		var toolResultsJSON sql.NullString
-		if err := rows.Scan(&r.ID, &roleStr, &r.Content, &toolCallsJSON, &toolResultsJSON, &r.Live, &r.Status, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
+		var statusStr string
+		var contentsJSON string
+		if err := rows.Scan(&r.ID, &roleStr, &contentsJSON, &r.Live, &statusStr, &r.InputTokens, &r.OutputTokens, &r.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)
 		}
 		r.Role = chat.Role(roleStr)
-		if err := decodeToolCalls(toolCallsJSON, &r.ToolCalls); err != nil {
-			return nil, fmt.Errorf("decode tool calls: %w", err)
-		}
-		if err := decodeToolResults(toolResultsJSON, &r.ToolResults); err != nil {
-			return nil, fmt.Errorf("decode tool results: %w", err)
+		r.Status = persistence.RecordStatus(statusStr)
+		if err := decodeContents(contentsJSON, &r.Contents); err != nil {
+			return nil, fmt.Errorf("decode contents: %w", err)
 		}
 		records = append(records, r)
 	}
@@ -264,17 +210,13 @@ func (s *SQLiteStore) GetLiveRecords(sessionID string) ([]persistence.Record, er
 
 // UpdateRecord implements persistence.Store.
 func (s *SQLiteStore) UpdateRecord(sessionID string, id int64, record persistence.Record) error {
-	toolCallsJSON, err := encodeToolCalls(record.ToolCalls)
+	contentsJSON, err := encodeContents(record.Contents)
 	if err != nil {
-		return fmt.Errorf("encode tool calls: %w", err)
-	}
-	toolResultsJSON, err := encodeToolResults(record.ToolResults)
-	if err != nil {
-		return fmt.Errorf("encode tool results: %w", err)
+		return fmt.Errorf("encode contents: %w", err)
 	}
 	_, err = s.db.Exec(
-		`UPDATE records SET role = ?, content = ?, tool_calls = ?, tool_results = ?, live = ?, status = ?, input_tokens = ?, output_tokens = ?, timestamp = ? WHERE session_id = ? AND id = ?`,
-		string(record.Role), record.Content, toolCallsJSON, toolResultsJSON, record.Live, record.Status, record.InputTokens, record.OutputTokens, record.Timestamp, sessionID, id,
+		`UPDATE records SET role = ?, contents = ?, live = ?, status = ?, input_tokens = ?, output_tokens = ?, timestamp = ? WHERE session_id = ? AND id = ?`,
+		string(record.Role), contentsJSON, record.Live, string(record.Status), record.InputTokens, record.OutputTokens, record.Timestamp, sessionID, id,
 	)
 	if err != nil {
 		return fmt.Errorf("update record: %w", err)

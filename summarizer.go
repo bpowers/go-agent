@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/persistence"
 )
 
 // Summarizer defines the interface for conversation summarization strategies.
@@ -14,7 +15,7 @@ import (
 type Summarizer interface {
 	// Summarize compresses a list of records into a concise summary.
 	// The summary should preserve key information, decisions made, and important context.
-	Summarize(ctx context.Context, records []Record) (string, error)
+	Summarize(ctx context.Context, records []persistence.Record) (string, error)
 
 	// SetPrompt allows customization of the summarization prompt for LLM-based summarizers.
 	SetPrompt(prompt string)
@@ -42,7 +43,7 @@ func (s *llmSummarizer) SetPrompt(prompt string) {
 }
 
 // Summarize uses an LLM to create a concise summary of the conversation.
-func (s *llmSummarizer) Summarize(ctx context.Context, records []Record) (string, error) {
+func (s *llmSummarizer) Summarize(ctx context.Context, records []persistence.Record) (string, error) {
 	if len(records) == 0 {
 		return "", nil
 	}
@@ -50,7 +51,7 @@ func (s *llmSummarizer) Summarize(ctx context.Context, records []Record) (string
 	// Build conversation text
 	var conversation strings.Builder
 	for _, r := range records {
-		conversation.WriteString(fmt.Sprintf("%s: %s\n\n", r.Role, r.Content))
+		conversation.WriteString(fmt.Sprintf("%s: %s\n\n", r.Role, r.GetText()))
 	}
 
 	// Create summarization request
@@ -102,7 +103,7 @@ func (s *SimpleSummarizer) SetPrompt(prompt string) {
 }
 
 // Summarize returns a simple extraction of first and last messages.
-func (s *SimpleSummarizer) Summarize(ctx context.Context, records []Record) (string, error) {
+func (s *SimpleSummarizer) Summarize(ctx context.Context, records []persistence.Record) (string, error) {
 	if len(records) == 0 {
 		return "", nil
 	}
@@ -117,7 +118,7 @@ func (s *SimpleSummarizer) Summarize(ctx context.Context, records []Record) (str
 	}
 
 	for i := 0; i < firstCount; i++ {
-		result.WriteString(fmt.Sprintf("%s: %s\n", records[i].Role, records[i].Content))
+		result.WriteString(fmt.Sprintf("%s: %s\n", records[i].Role, records[i].GetText()))
 	}
 
 	// If we have more messages than we're keeping, add ellipsis
@@ -126,7 +127,7 @@ func (s *SimpleSummarizer) Summarize(ctx context.Context, records []Record) (str
 
 		// Keep last N messages
 		for i := len(records) - s.keepLast; i < len(records); i++ {
-			result.WriteString(fmt.Sprintf("%s: %s\n", records[i].Role, records[i].Content))
+			result.WriteString(fmt.Sprintf("%s: %s\n", records[i].Role, records[i].GetText()))
 		}
 	}
 

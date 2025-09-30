@@ -243,7 +243,7 @@ func TestSessionStreaming(t *testing.T) {
 	// Check that it was recorded
 	records := session.LiveRecords()
 	assert.Len(t, records, 3)
-	assert.Equal(t, "Stream test", records[1].Content)
+	assert.Equal(t, "Stream test", records[1].GetText())
 }
 
 func TestSessionHistory(t *testing.T) {
@@ -371,7 +371,7 @@ func TestManualCompaction(t *testing.T) {
 	// Verify there's a summary in the live records with assistant role
 	foundSummary := false
 	for _, r := range liveRecords {
-		if strings.Contains(r.Content, "[Previous conversation summary]") {
+		if strings.Contains(r.GetText(), "[Previous conversation summary]") {
 			foundSummary = true
 			// Verify summary is assistant role, not system
 			assert.Equal(t, chat.AssistantRole, r.Role, "Summary should be assistant role")
@@ -413,7 +413,7 @@ func TestSessionTokenTracking(t *testing.T) {
 	// Find the user message we just sent
 	foundUserMsg := false
 	for _, r := range records {
-		if r.Role == chat.UserRole && r.Content == "Another test" {
+		if r.Role == chat.UserRole && r.GetText() == "Another test" {
 			foundUserMsg = true
 			assert.Greater(t, r.InputTokens, 0, "User message should have input tokens recorded")
 			break
@@ -464,10 +464,10 @@ func TestSessionWithInitialMessages(t *testing.T) {
 	assert.Len(t, records, 5) // System + 4 initial messages
 
 	assert.Equal(t, "system", string(records[0].Role))
-	assert.Equal(t, "First message", records[1].Content)
-	assert.Equal(t, "First response", records[2].Content)
-	assert.Equal(t, "Second message", records[3].Content)
-	assert.Equal(t, "Second response", records[4].Content)
+	assert.Equal(t, "First message", records[1].GetText())
+	assert.Equal(t, "First response", records[2].GetText())
+	assert.Equal(t, "Second message", records[3].GetText())
+	assert.Equal(t, "Second response", records[4].GetText())
 
 	// Verify all are marked as live
 	for _, r := range records {
@@ -529,7 +529,7 @@ type contextCheckingSummarizer struct {
 	t *testing.T
 }
 
-func (s *contextCheckingSummarizer) Summarize(ctx context.Context, records []Record) (string, error) {
+func (s *contextCheckingSummarizer) Summarize(ctx context.Context, records []persistence.Record) (string, error) {
 	// Check if context is cancelled
 	select {
 	case <-ctx.Done():
@@ -587,17 +587,17 @@ func TestRecordStatus(t *testing.T) {
 
 	// Check that records have success status
 	records := session.LiveRecords()
-	assert.Len(t, records, 3)                               // System, user, assistant
-	assert.Equal(t, RecordStatusSuccess, records[0].Status) // System
-	assert.Equal(t, RecordStatusSuccess, records[1].Status) // User
-	assert.Equal(t, RecordStatusSuccess, records[2].Status) // Assistant
+	assert.Len(t, records, 3)                                           // System, user, assistant
+	assert.Equal(t, persistence.RecordStatusSuccess, records[0].Status) // System
+	assert.Equal(t, persistence.RecordStatusSuccess, records[1].Status) // User
+	assert.Equal(t, persistence.RecordStatusSuccess, records[2].Status) // Assistant
 
 	// Test failed message by simulating error
 	// We'd need to mock an error response from the client to fully test this
 	// For now just verify the constants exist
-	assert.Equal(t, RecordStatus("pending"), RecordStatusPending)
-	assert.Equal(t, RecordStatus("success"), RecordStatusSuccess)
-	assert.Equal(t, RecordStatus("failed"), RecordStatusFailed)
+	assert.Equal(t, persistence.RecordStatus("pending"), persistence.RecordStatusPending)
+	assert.Equal(t, persistence.RecordStatus("success"), persistence.RecordStatusSuccess)
+	assert.Equal(t, persistence.RecordStatus("failed"), persistence.RecordStatusFailed)
 }
 
 func TestGetRecordEfficiency(t *testing.T) {
@@ -609,9 +609,12 @@ func TestGetRecordEfficiency(t *testing.T) {
 	var ids []int64
 	for i := 0; i < 100; i++ {
 		id, err := store.AddRecord(sessionID, persistence.Record{
-			Role:    "user",
-			Content: fmt.Sprintf("Message %d", i),
-			Live:    true,
+			Role: "user",
+			Contents: []chat.Content{
+				{Text: fmt.Sprintf("Message %d", i)},
+			},
+			Live:   true,
+			Status: persistence.RecordStatusSuccess,
 		})
 		require.NoError(t, err)
 		ids = append(ids, id)
@@ -624,14 +627,14 @@ func TestGetRecordEfficiency(t *testing.T) {
 		record, err := store.GetRecord(sessionID, ids[idx])
 		require.NoError(t, err)
 		assert.Equal(t, ids[idx], record.ID)
-		assert.Equal(t, fmt.Sprintf("Message %d", idx), record.Content)
+		assert.Equal(t, fmt.Sprintf("Message %d", idx), record.GetText())
 	}
 
 	// Test retrieving the last record (best case for backwards iteration)
 	lastRecord, err := store.GetRecord(sessionID, ids[99])
 	require.NoError(t, err)
 	assert.Equal(t, ids[99], lastRecord.ID)
-	assert.Equal(t, "Message 99", lastRecord.Content)
+	assert.Equal(t, "Message 99", lastRecord.GetText())
 
 	// Test non-existent record
 	_, err = store.GetRecord(sessionID, 99999)
@@ -651,11 +654,13 @@ func TestSessionPersistsToolInteractions(t *testing.T) {
 	require.Len(t, records, 5)
 	assert.Equal(t, chat.UserRole, records[1].Role)
 	assert.Equal(t, chat.AssistantRole, records[2].Role)
-	require.Len(t, records[2].ToolCalls, 1)
-	assert.Equal(t, "tool-call-1", records[2].ToolCalls[0].ID)
+	toolCalls := records[2].GetToolCalls()
+	require.Len(t, toolCalls, 1)
+	assert.Equal(t, "tool-call-1", toolCalls[0].ID)
 	assert.Equal(t, chat.ToolRole, records[3].Role)
-	require.Len(t, records[3].ToolResults, 1)
-	assert.Equal(t, "tool-call-1", records[3].ToolResults[0].ToolCallID)
+	toolResults := records[3].GetToolResults()
+	require.Len(t, toolResults, 1)
+	assert.Equal(t, "tool-call-1", toolResults[0].ToolCallID)
 	assert.Equal(t, chat.AssistantRole, records[4].Role)
 
 	systemPrompt, history := session.History()

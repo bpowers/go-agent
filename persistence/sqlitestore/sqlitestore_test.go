@@ -23,9 +23,12 @@ func TestSQLiteStoreBasics(t *testing.T) {
 
 	// Test adding a record
 	record := persistence.Record{
-		Role:         chat.UserRole,
-		Content:      "Test message",
+		Role: chat.UserRole,
+		Contents: []chat.Content{
+			{Text: "Test message"},
+		},
 		Live:         true,
+		Status:       persistence.RecordStatusSuccess,
 		InputTokens:  7,
 		OutputTokens: 3,
 		Timestamp:    time.Now(),
@@ -39,7 +42,7 @@ func TestSQLiteStoreBasics(t *testing.T) {
 	retrieved, err := store.GetRecord(sessionID, id)
 	require.NoError(t, err)
 	assert.Equal(t, id, retrieved.ID)
-	assert.Equal(t, "Test message", retrieved.Content)
+	assert.Equal(t, "Test message", retrieved.GetText())
 	assert.Equal(t, chat.UserRole, retrieved.Role)
 	assert.True(t, retrieved.Live)
 
@@ -52,7 +55,7 @@ func TestSQLiteStoreBasics(t *testing.T) {
 	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
-	assert.Equal(t, "Test message", records[0].Content)
+	assert.Equal(t, "Test message", records[0].GetText())
 	assert.Equal(t, chat.UserRole, records[0].Role)
 	assert.True(t, records[0].Live)
 
@@ -71,9 +74,12 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 
 	// Add a record
 	record := persistence.Record{
-		Role:         chat.UserRole,
-		Content:      "Original",
+		Role: chat.UserRole,
+		Contents: []chat.Content{
+			{Text: "Original"},
+		},
 		Live:         true,
+		Status:       persistence.RecordStatusSuccess,
 		InputTokens:  3,
 		OutputTokens: 2,
 		Timestamp:    time.Now(),
@@ -83,7 +89,7 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update the record
-	record.Content = "Updated"
+	record.Contents = []chat.Content{{Text: "Updated"}}
 	record.InputTokens = 5
 	record.OutputTokens = 2
 	err = store.UpdateRecord(sessionID, id, record)
@@ -93,7 +99,7 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
-	assert.Equal(t, "Updated", records[0].Content)
+	assert.Equal(t, "Updated", records[0].GetText())
 	assert.Equal(t, 5, records[0].InputTokens)
 	assert.Equal(t, 2, records[0].OutputTokens)
 }
@@ -108,9 +114,12 @@ func TestSQLiteStoreMarkLiveDead(t *testing.T) {
 	// Add multiple records
 	for i := 0; i < 3; i++ {
 		record := persistence.Record{
-			Role:         chat.UserRole,
-			Content:      "Message",
+			Role: chat.UserRole,
+			Contents: []chat.Content{
+				{Text: "Message"},
+			},
 			Live:         true,
+			Status:       persistence.RecordStatusSuccess,
 			InputTokens:  6,
 			OutputTokens: 4,
 			Timestamp:    time.Now(),
@@ -155,9 +164,12 @@ func TestSQLiteStoreDelete(t *testing.T) {
 	// Add records
 	for i := 0; i < 3; i++ {
 		record := persistence.Record{
-			Role:         chat.UserRole,
-			Content:      "Message",
+			Role: chat.UserRole,
+			Contents: []chat.Content{
+				{Text: "Message"},
+			},
 			Live:         true,
+			Status:       persistence.RecordStatusSuccess,
 			InputTokens:  6,
 			OutputTokens: 4,
 			Timestamp:    time.Now(),
@@ -188,9 +200,12 @@ func TestSQLiteStoreClear(t *testing.T) {
 	// Add records
 	for i := 0; i < 5; i++ {
 		record := persistence.Record{
-			Role:         chat.UserRole,
-			Content:      "Message",
+			Role: chat.UserRole,
+			Contents: []chat.Content{
+				{Text: "Message"},
+			},
 			Live:         true,
+			Status:       persistence.RecordStatusSuccess,
 			InputTokens:  6,
 			OutputTokens: 4,
 			Timestamp:    time.Now(),
@@ -249,9 +264,12 @@ func TestSQLiteStorePersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	record := persistence.Record{
-		Role:         chat.AssistantRole,
-		Content:      "Persisted message",
+		Role: chat.AssistantRole,
+		Contents: []chat.Content{
+			{Text: "Persisted message"},
+		},
 		Live:         true,
+		Status:       persistence.RecordStatusSuccess,
 		InputTokens:  9,
 		OutputTokens: 6,
 		Timestamp:    time.Now(),
@@ -280,7 +298,7 @@ func TestSQLiteStorePersistence(t *testing.T) {
 	records, err := store2.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
-	assert.Equal(t, "Persisted message", records[0].Content)
+	assert.Equal(t, "Persisted message", records[0].GetText())
 	assert.Equal(t, id, records[0].ID)
 
 	// Check metrics persisted
@@ -307,9 +325,12 @@ func TestSQLiteStoreOrdering(t *testing.T) {
 
 	for i, duration := range times {
 		record := persistence.Record{
-			Role:         chat.UserRole,
-			Content:      string(rune('A' + i)), // A, B, C
+			Role: chat.UserRole,
+			Contents: []chat.Content{
+				{Text: string(rune('A' + i))}, // A, B, C
+			},
 			Live:         true,
+			Status:       persistence.RecordStatusSuccess,
 			InputTokens:  6,
 			OutputTokens: 4,
 			Timestamp:    baseTime.Add(duration),
@@ -322,9 +343,9 @@ func TestSQLiteStoreOrdering(t *testing.T) {
 	records, err := store.GetAllRecords(sessionID)
 	require.NoError(t, err)
 	assert.Len(t, records, 3)
-	assert.Equal(t, "B", records[0].Content) // 1 second
-	assert.Equal(t, "C", records[1].Content) // 2 seconds
-	assert.Equal(t, "A", records[2].Content) // 3 seconds
+	assert.Equal(t, "B", records[0].GetText()) // 1 second
+	assert.Equal(t, "C", records[1].GetText()) // 2 seconds
+	assert.Equal(t, "A", records[2].GetText()) // 3 seconds
 }
 
 func TestSQLiteStoreFileCreation(t *testing.T) {
@@ -358,9 +379,12 @@ func TestSQLiteStoreMultipleSessions(t *testing.T) {
 	// Add records to session 1
 	for i := 0; i < 3; i++ {
 		record := persistence.Record{
-			Role:         chat.UserRole,
-			Content:      "Session 1 message",
+			Role: chat.UserRole,
+			Contents: []chat.Content{
+				{Text: "Session 1 message"},
+			},
 			Live:         true,
+			Status:       persistence.RecordStatusSuccess,
 			InputTokens:  5,
 			OutputTokens: 3,
 			Timestamp:    time.Now(),
@@ -372,9 +396,12 @@ func TestSQLiteStoreMultipleSessions(t *testing.T) {
 	// Add records to session 2
 	for i := 0; i < 2; i++ {
 		record := persistence.Record{
-			Role:         chat.AssistantRole,
-			Content:      "Session 2 message",
+			Role: chat.AssistantRole,
+			Contents: []chat.Content{
+				{Text: "Session 2 message"},
+			},
 			Live:         true,
+			Status:       persistence.RecordStatusSuccess,
 			InputTokens:  4,
 			OutputTokens: 2,
 			Timestamp:    time.Now(),
@@ -387,12 +414,12 @@ func TestSQLiteStoreMultipleSessions(t *testing.T) {
 	records1, err := store.GetAllRecords(session1)
 	require.NoError(t, err)
 	assert.Len(t, records1, 3)
-	assert.Equal(t, "Session 1 message", records1[0].Content)
+	assert.Equal(t, "Session 1 message", records1[0].GetText())
 
 	records2, err := store.GetAllRecords(session2)
 	require.NoError(t, err)
 	assert.Len(t, records2, 2)
-	assert.Equal(t, "Session 2 message", records2[0].Content)
+	assert.Equal(t, "Session 2 message", records2[0].GetText())
 
 	// Test ListSessions
 	sessions, err := store.ListSessions()

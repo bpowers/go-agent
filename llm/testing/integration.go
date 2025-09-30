@@ -954,12 +954,12 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		exchange1 := records1[initialLen:]
 		require.GreaterOrEqual(t, len(exchange1), 2)
 		require.Equal(t, chat.UserRole, exchange1[0].Role, "First exchange should start with user record")
-		require.Equal(t, userMsg1, exchange1[0].Content)
+		require.Equal(t, userMsg1, exchange1[0].GetText())
 		require.Equal(t, chat.AssistantRole, exchange1[1].Role, "Second record should be assistant response")
 
 		userRecordCount1 := 0
 		for _, r := range records1 {
-			if r.Role == "user" && r.Content == userMsg1 {
+			if r.Role == "user" && r.GetText() == userMsg1 {
 				userRecordCount1++
 			}
 		}
@@ -983,17 +983,17 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		newRecords := records2[len(records1):]
 		require.GreaterOrEqual(t, len(newRecords), 2, "Second exchange should add at least two records")
 		require.Equal(t, chat.UserRole, newRecords[0].Role, "Second exchange should start with user record")
-		require.Equal(t, userMsg2, newRecords[0].Content)
+		require.Equal(t, userMsg2, newRecords[0].GetText())
 
 		// Count occurrences of each user message in persistence
 		userRecord1Count := 0
 		userRecord2Count := 0
 		for _, r := range records2 {
 			if r.Role == "user" {
-				if r.Content == userMsg1 {
+				if r.GetText() == userMsg1 {
 					userRecord1Count++
 				}
-				if r.Content == userMsg2 {
+				if r.GetText() == userMsg2 {
 					userRecord2Count++
 				}
 			}
@@ -1056,11 +1056,11 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		exchange1 := records1[initialLen:]
 		require.GreaterOrEqual(t, len(exchange1), 2)
 		require.Equal(t, chat.UserRole, exchange1[0].Role, "Tool exchange should start with user record")
-		require.Equal(t, userMsg1, exchange1[0].Content)
+		require.Equal(t, userMsg1, exchange1[0].GetText())
 
 		userRecordCount1 := 0
 		for _, r := range records1 {
-			if r.Role == "user" && r.Content == userMsg1 {
+			if r.Role == "user" && r.GetText() == userMsg1 {
 				userRecordCount1++
 			}
 		}
@@ -1090,17 +1090,17 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		newRecords := records2[len(records1):]
 		require.GreaterOrEqual(t, len(newRecords), 2, "Second tool exchange should add user and response records")
 		require.Equal(t, chat.UserRole, newRecords[0].Role, "Second exchange should start with user record")
-		require.Equal(t, userMsg2, newRecords[0].Content)
+		require.Equal(t, userMsg2, newRecords[0].GetText())
 
 		// Count user messages
 		userRecord1Count := 0
 		userRecord2Count := 0
 		for _, r := range records2 {
 			if r.Role == "user" {
-				if r.Content == userMsg1 {
+				if r.GetText() == userMsg1 {
 					userRecord1Count++
 				}
-				if r.Content == userMsg2 {
+				if r.GetText() == userMsg2 {
 					userRecord2Count++
 				}
 			}
@@ -1125,7 +1125,7 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 
 		userRecordCount1 := 0
 		for _, r := range records1 {
-			if r.Role == "user" && r.Content == userMsg1 {
+			if r.Role == "user" && r.GetText() == userMsg1 {
 				userRecordCount1++
 			}
 		}
@@ -1147,10 +1147,10 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		userRecord2Count := 0
 		for _, r := range records2 {
 			if r.Role == "user" {
-				if r.Content == userMsg1 {
+				if r.GetText() == userMsg1 {
 					userRecord1Count++
 				}
-				if r.Content == userMsg2 {
+				if r.GetText() == userMsg2 {
 					userRecord2Count++
 				}
 			}
