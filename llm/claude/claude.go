@@ -657,7 +657,11 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		log.Printf("[Claude] Initial response has no tool calls, returning content: %q\n", respContent.String())
 	}
 
-	respMsg := chat.AssistantMessage(respContent.String())
+	// Build response message, avoiding empty text content blocks
+	respMsg := chat.Message{Role: chat.AssistantRole}
+	if respContent.Len() > 0 {
+		respMsg.AddText(respContent.String())
+	}
 
 	// Add thinking content if present
 	if thinkingContent.Len() > 0 {
@@ -940,7 +944,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		assistantMsg := anthropic.NewAssistantMessage(assistantContentBlocks...)
 		msgs = append(msgs, assistantMsg)
 
-		chatAssistantMsg := chat.AssistantMessage(initialContent)
+		// Build assistant message, avoiding empty text content blocks
+		chatAssistantMsg := chat.Message{Role: chat.AssistantRole}
+		if initialContent != "" {
+			chatAssistantMsg.AddText(initialContent)
+		}
 		if initialThinkingText != "" {
 			chatAssistantMsg.AddThinking(initialThinkingText, initialThinkingSignature)
 		}
@@ -1275,8 +1283,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		}
 
 		// No more tool calls, we have the final response
-		// The content includes both initial text (if any) and follow-up response
-		finalMsg := chat.AssistantMessage(respContent.String())
+		// Build final message, avoiding empty text content blocks
+		finalMsg := chat.Message{Role: chat.AssistantRole}
+		if respContent.Len() > 0 {
+			finalMsg.AddText(respContent.String())
+		}
 
 		// Add thinking content if present from follow-up rounds
 		if followUpThinkingContent.Len() > 0 {
