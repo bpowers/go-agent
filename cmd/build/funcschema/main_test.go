@@ -558,7 +558,7 @@ func UnexportedEmbedFunc(ctx context.Context, req UnexportedEmbedRequest) Unexpo
 			}
 
 			// Generate input schema
-			s, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+			s, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("generateInputSchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -808,7 +808,7 @@ func ArrayOfArrays(req Request) ArrayResult { return ArrayResult{} }`,
 			}
 
 			// Generate output schema
-			s, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
+			s, err := generateOutputSchema(targetFunc.Type.Results, []*ast.File{node}, docPkg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("generateOutputSchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -877,12 +877,12 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
 	}
 
 	// Generate schemas
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate input schema: %v", err)
 	}
 
-	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, []*ast.File{node}, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate output schema: %v", err)
 	}
@@ -1068,7 +1068,7 @@ func (t T) Method(req Request) string { return "" }`,
 			}
 
 			// Try to validate - should fail
-			err = validateFunction(targetFunc, tt.funcName, node)
+			err = validateFunction(targetFunc, tt.funcName, []*ast.File{node})
 			if err == nil {
 				t.Error("expected validation error, got nil")
 			} else if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
@@ -1078,7 +1078,7 @@ func (t T) Method(req Request) string { return "" }`,
 	}
 }
 
-func validateFunction(targetFunc *ast.FuncDecl, funcName string, node *ast.File) error {
+func validateFunction(targetFunc *ast.FuncDecl, funcName string, files []*ast.File) error {
 	// This mirrors the validation logic in run()
 	if targetFunc.Recv != nil {
 		return fmt.Errorf("function %s is a method, not a standalone function", funcName)
@@ -1107,7 +1107,7 @@ func validateFunction(targetFunc *ast.FuncDecl, funcName string, node *ast.File)
 		switch t := paramType.(type) {
 		case *ast.Ident:
 			// Named type - need to verify it's a struct
-			if !isStructType(t.Name, node) {
+			if !isStructType(t.Name, files) {
 				return fmt.Errorf("function %s second parameter must be a struct type, got %s", funcName, t.Name)
 			}
 		case *ast.StructType:
@@ -1124,7 +1124,7 @@ func validateFunction(targetFunc *ast.FuncDecl, funcName string, node *ast.File)
 
 	// Validate that return type is a struct with an Error field
 	resultType := targetFunc.Type.Results.List[0].Type
-	if !hasErrorField(resultType, node) {
+	if !hasErrorField(resultType, files) {
 		return fmt.Errorf("function %s return type must be a struct with an Error field", funcName)
 	}
 
@@ -1169,7 +1169,7 @@ func ListFiles(ctx context.Context) ListFilesResult {
 	}
 
 	// Validate function
-	err = validateFunction(targetFunc, "ListFiles", node)
+	err = validateFunction(targetFunc, "ListFiles", []*ast.File{node})
 	if err != nil {
 		t.Fatalf("validation failed: %v", err)
 	}
@@ -1181,12 +1181,12 @@ func ListFiles(ctx context.Context) ListFilesResult {
 	}
 
 	// Generate schemas
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate input schema: %v", err)
 	}
 
-	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, []*ast.File{node}, docPkg)
 	if err != nil {
 		t.Fatalf("failed to generate output schema: %v", err)
 	}
@@ -1331,7 +1331,7 @@ func SubmitCausalMap(ctx context.Context, m Map) MapResult {
 	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
 	require.NoError(t, err)
 
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
 	require.NoError(t, err)
 
 	// Level 1: Map properties
@@ -1369,7 +1369,7 @@ func SubmitCausalMap(ctx context.Context, m Map) MapResult {
 	assert.Equal(t, schema.String, relProps["polarity_reasoning"].Type)
 
 	// Test output schema
-	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, []*ast.File{node}, docPkg)
 	require.NoError(t, err)
 
 	assert.Equal(t, schema.Object, outputSchema.Type)
@@ -1420,7 +1420,7 @@ func SetStatus(ctx context.Context, req StatusRequest) StatusResult {
 	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
 	require.NoError(t, err)
 
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
 	require.NoError(t, err)
 
 	assert.Equal(t, schema.Object, inputSchema.Type)
@@ -1481,7 +1481,7 @@ func SubmitCausalMap(ctx context.Context, m Map) MapResult {
 	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
 	require.NoError(t, err)
 
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
 	require.NoError(t, err)
 
 	require.NotNil(t, inputSchema.Properties["causal_chains"])
@@ -1500,6 +1500,154 @@ func SubmitCausalMap(ctx context.Context, m Map) MapResult {
 	polaritySchema := relProps["polarity"]
 	assert.Equal(t, schema.String, polaritySchema.Type)
 	assert.Equal(t, []string{"+", "-"}, polaritySchema.Enum)
+}
+
+func TestCrossFileTypeReferences(t *testing.T) {
+	t.Parallel()
+
+	// Simulate parsing multiple files with cross-file type references
+	file1Code := `package test
+import "context"
+
+type RelationshipEntry struct {
+	Variable          string ` + "`json:\"variable\"`" + `
+	Polarity          string ` + "`json:\"polarity\"`" + `
+	PolarityReasoning string ` + "`json:\"polarity_reasoning\"`" + `
+}`
+
+	file2Code := `package test
+
+type Chain struct {
+	InitialVariable string              ` + "`json:\"initial_variable\"`" + `
+	Relationships   []RelationshipEntry ` + "`json:\"relationships\"`" + `
+	Reasoning       string              ` + "`json:\"reasoning\"`" + `
+}`
+
+	file3Code := `package test
+import "context"
+
+type Map struct {
+	Title        string  ` + "`json:\"title\"`" + `
+	Explanation  string  ` + "`json:\"explanation\"`" + `
+	CausalChains []Chain ` + "`json:\"causal_chains\"`" + `
+}
+
+type MapResult struct {
+	Description string  ` + "`json:\"description\"`" + `
+	Error       *string ` + "`json:\"error\"`" + `
+}
+
+func SubmitCausalMap(ctx context.Context, m Map) MapResult {
+	return MapResult{Description: "test"}
+}`
+
+	fset := token.NewFileSet()
+
+	file1, err := parser.ParseFile(fset, "types1.go", file1Code, parser.ParseComments)
+	require.NoError(t, err)
+
+	file2, err := parser.ParseFile(fset, "types2.go", file2Code, parser.ParseComments)
+	require.NoError(t, err)
+
+	file3, err := parser.ParseFile(fset, "tools.go", file3Code, parser.ParseComments)
+	require.NoError(t, err)
+
+	files := []*ast.File{file1, file2, file3}
+
+	docPkg, err := doc.NewFromFiles(fset, files, "", doc.AllDecls)
+	require.NoError(t, err)
+
+	var targetFunc *ast.FuncDecl
+	ast.Inspect(file3, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "SubmitCausalMap" {
+			targetFunc = fn
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, targetFunc)
+
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, files, docPkg)
+	require.NoError(t, err)
+
+	// Level 1: Map properties
+	assert.Equal(t, schema.Object, inputSchema.Type)
+	assert.Len(t, inputSchema.Properties, 3)
+	assert.NotNil(t, inputSchema.Properties["title"])
+	assert.NotNil(t, inputSchema.Properties["explanation"])
+	require.NotNil(t, inputSchema.Properties["causal_chains"])
+
+	// Level 2: causal_chains -> []Chain
+	chainsSchema := inputSchema.Properties["causal_chains"]
+	assert.Equal(t, schema.Array, chainsSchema.Type)
+	require.NotNil(t, chainsSchema.Items)
+	assert.Equal(t, schema.Object, chainsSchema.Items.Type)
+
+	chainProps := chainsSchema.Items.Properties
+	assert.Len(t, chainProps, 3)
+	assert.NotNil(t, chainProps["initial_variable"])
+	assert.NotNil(t, chainProps["reasoning"])
+	require.NotNil(t, chainProps["relationships"])
+
+	// Level 3: relationships -> []RelationshipEntry (defined in file1)
+	relsSchema := chainProps["relationships"]
+	assert.Equal(t, schema.Array, relsSchema.Type)
+	require.NotNil(t, relsSchema.Items)
+	assert.Equal(t, schema.Object, relsSchema.Items.Type)
+
+	relProps := relsSchema.Items.Properties
+	assert.Len(t, relProps, 3)
+	require.NotNil(t, relProps["variable"])
+	assert.Equal(t, schema.String, relProps["variable"].Type)
+	require.NotNil(t, relProps["polarity"])
+	assert.Equal(t, schema.String, relProps["polarity"].Type)
+	require.NotNil(t, relProps["polarity_reasoning"])
+	assert.Equal(t, schema.String, relProps["polarity_reasoning"].Type)
+}
+
+func TestTypeNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	// Code that references an undefined type
+	code := `package test
+import "context"
+
+type TestRequest struct {
+	Data UndefinedType ` + "`json:\"data\"`" + `
+}
+
+type TestResult struct {
+	Message string  ` + "`json:\"message\"`" + `
+	Error   *string ` + "`json:\"error\"`" + `
+}
+
+func TestFunc(ctx context.Context, req TestRequest) TestResult {
+	return TestResult{Message: "ok"}
+}`
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "test.go", code, parser.ParseComments)
+	require.NoError(t, err)
+
+	files := []*ast.File{node}
+
+	docPkg, err := doc.NewFromFiles(fset, files, "", doc.AllDecls)
+	require.NoError(t, err)
+
+	var targetFunc *ast.FuncDecl
+	ast.Inspect(node, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "TestFunc" {
+			targetFunc = fn
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, targetFunc)
+
+	_, err = generateInputSchema(targetFunc.Type.Params, files, docPkg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UndefinedType")
+	assert.Contains(t, err.Error(), "not found in package")
 }
 
 func TestGeneratedPackageName(t *testing.T) {

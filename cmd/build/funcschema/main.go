@@ -48,17 +48,42 @@ func main() {
 }
 
 func run() error {
-	// Parse the input file
+	// Parse all .go files in the package directory
 	fset := token.NewFileSet()
+
+	// Parse the input file first
 	node, err := parser.ParseFile(fset, *inputFile, nil, parser.ParseComments)
 	if err != nil {
 		return fmt.Errorf("parsing file: %w", err)
 	}
 
+	// Find all .go files in the same directory
+	dir := filepath.Dir(*inputFile)
+	pattern := filepath.Join(dir, "*.go")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("finding package files: %w", err)
+	}
+
+	// Parse all files in the package
+	var files []*ast.File
+	for _, path := range matches {
+		// Skip test files
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+
+		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			return fmt.Errorf("parsing file %s: %w", path, err)
+		}
+		files = append(files, f)
+	}
+
 	// Create doc.Package for extracting documentation using NewFromFiles
 	// This avoids the deprecated ast.Package
 	// Use doc.PreserveAST to prevent NewFromFiles from modifying the AST nodes
-	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls|doc.PreserveAST)
+	docPkg, err := doc.NewFromFiles(fset, files, "", doc.AllDecls|doc.PreserveAST)
 	if err != nil {
 		return fmt.Errorf("creating doc package: %w", err)
 	}
@@ -105,7 +130,7 @@ func run() error {
 		switch t := paramType.(type) {
 		case *ast.Ident:
 			// Named type - need to verify it's a struct
-			if !isStructType(t.Name, node) {
+			if !isStructType(t.Name, files) {
 				return fmt.Errorf("function %s second parameter must be a struct type, got %s", *funcName, t.Name)
 			}
 		case *ast.StructType:
@@ -122,18 +147,18 @@ func run() error {
 
 	// Validate that return type is a struct with an Error field
 	resultType := targetFunc.Type.Results.List[0].Type
-	if !hasErrorField(resultType, node) {
+	if !hasErrorField(resultType, files) {
 		return fmt.Errorf("function %s return type must be a struct with an Error field", *funcName)
 	}
 
 	// Generate input schema from parameters
-	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, files, docPkg)
 	if err != nil {
 		return fmt.Errorf("generating input schema: %w", err)
 	}
 
 	// Generate output schema from return type
-	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, files, docPkg)
 	if err != nil {
 		return fmt.Errorf("generating output schema: %w", err)
 	}
@@ -173,7 +198,7 @@ func run() error {
 	return nil
 }
 
-func generateInputSchema(params *ast.FieldList, file *ast.File, docPkg *doc.Package) (*schema.JSON, error) {
+func generateInputSchema(params *ast.FieldList, files []*ast.File, docPkg *doc.Package) (*schema.JSON, error) {
 	// We now expect one or two parameters: context.Context and optionally a struct
 	if params == nil || len(params.List) < 1 || len(params.List) > 2 {
 		return nil, fmt.Errorf("expected one or two parameters: context.Context and optionally a struct")
@@ -197,7 +222,7 @@ func generateInputSchema(params *ast.FieldList, file *ast.File, docPkg *doc.Pack
 
 	// Generate schema for the struct parameter
 	// This will return the struct's schema directly
-	paramSchema, _, err := generateTypeSchema(param.Type, file, docPkg)
+	paramSchema, _, err := generateTypeSchema(param.Type, files, docPkg)
 	if err != nil {
 		return nil, fmt.Errorf("generating schema for parameter: %w", err)
 	}
@@ -207,17 +232,17 @@ func generateInputSchema(params *ast.FieldList, file *ast.File, docPkg *doc.Pack
 	return paramSchema, nil
 }
 
-func generateOutputSchema(results *ast.FieldList, file *ast.File, docPkg *doc.Package) (*schema.JSON, error) {
+func generateOutputSchema(results *ast.FieldList, files []*ast.File, docPkg *doc.Package) (*schema.JSON, error) {
 	if results == nil || len(results.List) != 1 {
 		return nil, fmt.Errorf("function must return exactly one value")
 	}
 
 	result := results.List[0]
-	s, _, err := generateTypeSchema(result.Type, file, docPkg)
+	s, _, err := generateTypeSchema(result.Type, files, docPkg)
 	return s, err
 }
 
-func generateTypeSchema(expr ast.Expr, file *ast.File, docPkg *doc.Package) (*schema.JSON, bool, error) {
+func generateTypeSchema(expr ast.Expr, files []*ast.File, docPkg *doc.Package) (*schema.JSON, bool, error) {
 	switch t := expr.(type) {
 	case *ast.SelectorExpr:
 		// Handle qualified types like time.Time, url.URL, etc.
@@ -235,18 +260,19 @@ func generateTypeSchema(expr ast.Expr, file *ast.File, docPkg *doc.Package) (*sc
 		if err != nil {
 			return nil, false, err
 		}
-		// If it's not a basic type, it might be a struct type defined in the file
+		// If it's not a basic type, it might be a struct type defined in the package
 		if s.Type == schema.Object && t.Name != "interface{}" {
 			// Try to find the type definition
-			structSchema := findAndGenerateStructSchema(t.Name, file, docPkg)
-			if structSchema != nil {
-				return structSchema, false, nil
+			structSchema, err := findAndGenerateStructSchema(t.Name, files, docPkg)
+			if err != nil {
+				return nil, false, fmt.Errorf("looking up type %s: %w", t.Name, err)
 			}
+			return structSchema, false, nil
 		}
 		return s, false, nil
 	case *ast.StarExpr:
 		// Pointer type - it's optional (can be the type or null)
-		s, _, err := generateTypeSchema(t.X, file, docPkg)
+		s, _, err := generateTypeSchema(t.X, files, docPkg)
 		if err != nil {
 			return nil, true, err
 		}
@@ -274,7 +300,7 @@ func generateTypeSchema(expr ast.Expr, file *ast.File, docPkg *doc.Package) (*sc
 		}
 	case *ast.ArrayType:
 		// Array type
-		itemSchema, _, err := generateTypeSchema(t.Elt, file, docPkg)
+		itemSchema, _, err := generateTypeSchema(t.Elt, files, docPkg)
 		if err != nil {
 			return nil, false, err
 		}
@@ -291,7 +317,7 @@ func generateTypeSchema(expr ast.Expr, file *ast.File, docPkg *doc.Package) (*sc
 		}, false, nil
 	case *ast.StructType:
 		// Inline struct
-		return generateStructTypeSchema(t, file, docPkg, "")
+		return generateStructTypeSchema(t, files, docPkg, "")
 	case *ast.InterfaceType:
 		// Interface type - treat as any
 		return &schema.JSON{}, false, nil
@@ -355,30 +381,35 @@ func generateBasicTypeSchema(typeName string) (*schema.JSON, error) {
 	}
 }
 
-func findAndGenerateStructSchema(typeName string, file *ast.File, docPkg *doc.Package) *schema.JSON {
+func findAndGenerateStructSchema(typeName string, files []*ast.File, docPkg *doc.Package) (*schema.JSON, error) {
 	var targetType *ast.TypeSpec
-	ast.Inspect(file, func(n ast.Node) bool {
-		if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
-			targetType = ts
-			return false
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+				targetType = ts
+				return false
+			}
+			return true
+		})
+		if targetType != nil {
+			break
 		}
-		return true
-	})
+	}
 
 	if targetType == nil {
-		return nil
+		return nil, fmt.Errorf("type %s not found in package", typeName)
 	}
 
 	structType, ok := targetType.Type.(*ast.StructType)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("type %s is not a struct", typeName)
 	}
 
-	s, _, _ := generateStructTypeSchema(structType, file, docPkg, typeName)
-	return s
+	s, _, err := generateStructTypeSchema(structType, files, docPkg, typeName)
+	return s, err
 }
 
-func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg *doc.Package, typeName string) (*schema.JSON, bool, error) {
+func generateStructTypeSchema(structType *ast.StructType, files []*ast.File, docPkg *doc.Package, typeName string) (*schema.JSON, bool, error) {
 	s := &schema.JSON{
 		Type:                 schema.Object,
 		Properties:           make(map[string]*schema.JSON),
@@ -414,7 +445,7 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg
 			}
 
 			// Generate schema for field type
-			fieldSchema, _, err := generateTypeSchema(field.Type, file, docPkg)
+			fieldSchema, _, err := generateTypeSchema(field.Type, files, docPkg)
 			if err != nil {
 				return nil, false, err
 			}
@@ -496,21 +527,22 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg
 			}
 
 			// Find and process the embedded struct
-			embeddedStruct := findAndGetStructType(embeddedTypeName, file)
-			if embeddedStruct != nil {
-				// Recursively get the schema for the embedded struct
-				embeddedSchema, _, err := generateStructTypeSchema(embeddedStruct, file, docPkg, embeddedTypeName)
-				if err != nil {
-					return nil, false, err
-				}
+			embeddedStruct, err := findAndGetStructType(embeddedTypeName, files)
+			if err != nil {
+				return nil, false, fmt.Errorf("looking up embedded type %s: %w", embeddedTypeName, err)
+			}
+			// Recursively get the schema for the embedded struct
+			embeddedSchema, _, err := generateStructTypeSchema(embeddedStruct, files, docPkg, embeddedTypeName)
+			if err != nil {
+				return nil, false, err
+			}
 
-				// Merge embedded fields into parent, skipping fields that are already defined (shadowed)
-				for propName, propSchema := range embeddedSchema.Properties {
-					if !fieldNames[propName] {
-						s.Properties[propName] = propSchema
-						fieldNames[propName] = true
-						required = append(required, propName)
-					}
+			// Merge embedded fields into parent, skipping fields that are already defined (shadowed)
+			for propName, propSchema := range embeddedSchema.Properties {
+				if !fieldNames[propName] {
+					s.Properties[propName] = propSchema
+					fieldNames[propName] = true
+					required = append(required, propName)
 				}
 			}
 		}
@@ -524,19 +556,24 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg
 	return s, false, nil
 }
 
-// findAndGetStructType finds a struct type definition by name in the file
-func findAndGetStructType(typeName string, file *ast.File) *ast.StructType {
-	var result *ast.StructType
-	ast.Inspect(file, func(n ast.Node) bool {
-		if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
-			if st, ok := ts.Type.(*ast.StructType); ok {
-				result = st
-				return false
+// findAndGetStructType finds a struct type definition by name in the package
+func findAndGetStructType(typeName string, files []*ast.File) (*ast.StructType, error) {
+	for _, file := range files {
+		var result *ast.StructType
+		ast.Inspect(file, func(n ast.Node) bool {
+			if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+				if st, ok := ts.Type.(*ast.StructType); ok {
+					result = st
+					return false
+				}
 			}
+			return true
+		})
+		if result != nil {
+			return result, nil
 		}
-		return true
-	})
-	return result
+	}
+	return nil, fmt.Errorf("struct type %s not found in package", typeName)
 }
 
 func parseJSONTag(tag *ast.BasicLit) (name string, omitempty bool) {
@@ -802,31 +839,41 @@ func isContextParam(param *ast.Field) bool {
 	return false
 }
 
-func isStructType(typeName string, file *ast.File) bool {
-	var found bool
-	ast.Inspect(file, func(n ast.Node) bool {
-		if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
-			_, isStruct := ts.Type.(*ast.StructType)
-			found = isStruct
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func hasErrorField(expr ast.Expr, file *ast.File) bool {
-	switch t := expr.(type) {
-	case *ast.Ident:
-		// Named type - need to find its definition
-		var typeSpec *ast.TypeSpec
+func isStructType(typeName string, files []*ast.File) bool {
+	for _, file := range files {
+		var found bool
 		ast.Inspect(file, func(n ast.Node) bool {
-			if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == t.Name {
-				typeSpec = ts
+			if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+				_, isStruct := ts.Type.(*ast.StructType)
+				found = isStruct
 				return false
 			}
 			return true
 		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func hasErrorField(expr ast.Expr, files []*ast.File) bool {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		// Named type - need to find its definition
+		var typeSpec *ast.TypeSpec
+		for _, file := range files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == t.Name {
+					typeSpec = ts
+					return false
+				}
+				return true
+			})
+			if typeSpec != nil {
+				break
+			}
+		}
 		if typeSpec == nil {
 			return false
 		}
