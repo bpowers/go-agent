@@ -419,6 +419,14 @@ func generateStructTypeSchema(structType *ast.StructType, file *ast.File, docPkg
 				return nil, false, err
 			}
 
+			// Check for enum tag
+			if field.Tag != nil {
+				enumValues := parseEnumTag(field.Tag)
+				if len(enumValues) > 0 && fieldSchema.Type == schema.String {
+					fieldSchema.Enum = enumValues
+				}
+			}
+
 			// Extract field documentation from doc.Package if available
 			if typeName != "" && docPkg != nil {
 				for _, dt := range docPkg.Types {
@@ -567,6 +575,42 @@ func parseJSONTag(tag *ast.BasicLit) (name string, omitempty bool) {
 	}
 
 	return name, omitempty
+}
+
+func parseEnumTag(tag *ast.BasicLit) []string {
+	if tag == nil {
+		return nil
+	}
+
+	// Remove quotes and backticks
+	tagValue := tag.Value
+	if len(tagValue) >= 2 {
+		tagValue = tagValue[1 : len(tagValue)-1]
+	}
+
+	// Find enum tag
+	const enumPrefix = "enum:\""
+	idx := strings.Index(tagValue, enumPrefix)
+	if idx == -1 {
+		return nil
+	}
+
+	enumTag := tagValue[idx+len(enumPrefix):]
+	endIdx := strings.Index(enumTag, "\"")
+	if endIdx != -1 {
+		enumTag = enumTag[:endIdx]
+	}
+
+	if enumTag == "" {
+		return nil
+	}
+
+	values := strings.Split(enumTag, ",")
+	for i := range values {
+		values[i] = strings.TrimSpace(values[i])
+	}
+
+	return values
 }
 
 func generateToolDefFile(tool *MCPTool, funcName, paramTypeName, returnTypeName, inputFile, packageName string) error {

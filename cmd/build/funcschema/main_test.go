@@ -12,6 +12,8 @@ import (
 
 	"github.com/bpowers/go-agent/schema"
 	"github.com/iancoleman/strcase"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateInputSchema(t *testing.T) {
@@ -1276,6 +1278,228 @@ func TestCamelToSnake(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestThreeLevelNestedStructs(t *testing.T) {
+	t.Parallel()
+
+	code := `package test
+import "context"
+
+type RelationshipEntry struct {
+	Variable          string ` + "`json:\"variable\"`" + `
+	Polarity          string ` + "`json:\"polarity\"`" + `
+	PolarityReasoning string ` + "`json:\"polarity_reasoning\"`" + `
+}
+
+type Chain struct {
+	InitialVariable string              ` + "`json:\"initial_variable\"`" + `
+	Relationships   []RelationshipEntry ` + "`json:\"relationships\"`" + `
+	Reasoning       string              ` + "`json:\"reasoning\"`" + `
+}
+
+type Map struct {
+	Title        string  ` + "`json:\"title\"`" + `
+	Explanation  string  ` + "`json:\"explanation\"`" + `
+	CausalChains []Chain ` + "`json:\"causal_chains\"`" + `
+}
+
+type MapResult struct {
+	Description string     ` + "`json:\"description\"`" + `
+	Loops       [][]string ` + "`json:\"loops\"`" + `
+	Error       *string    ` + "`json:\"error\"`" + `
+}
+
+func SubmitCausalMap(ctx context.Context, m Map) MapResult {
+	return MapResult{Description: "test"}
+}`
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "test.go", code, parser.ParseComments)
+	require.NoError(t, err)
+
+	var targetFunc *ast.FuncDecl
+	ast.Inspect(node, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "SubmitCausalMap" {
+			targetFunc = fn
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, targetFunc)
+
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+	require.NoError(t, err)
+
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	require.NoError(t, err)
+
+	// Level 1: Map properties
+	assert.Equal(t, schema.Object, inputSchema.Type)
+	assert.Len(t, inputSchema.Properties, 3)
+	assert.NotNil(t, inputSchema.Properties["title"])
+	assert.NotNil(t, inputSchema.Properties["explanation"])
+	require.NotNil(t, inputSchema.Properties["causal_chains"])
+
+	// Level 2: causal_chains -> []Chain with full properties
+	chainsSchema := inputSchema.Properties["causal_chains"]
+	assert.Equal(t, schema.Array, chainsSchema.Type)
+	require.NotNil(t, chainsSchema.Items)
+	assert.Equal(t, schema.Object, chainsSchema.Items.Type)
+
+	chainProps := chainsSchema.Items.Properties
+	assert.Len(t, chainProps, 3)
+	assert.NotNil(t, chainProps["initial_variable"])
+	assert.NotNil(t, chainProps["reasoning"])
+	require.NotNil(t, chainProps["relationships"])
+
+	// Level 3: relationships -> []RelationshipEntry with full properties
+	relsSchema := chainProps["relationships"]
+	assert.Equal(t, schema.Array, relsSchema.Type)
+	require.NotNil(t, relsSchema.Items)
+	assert.Equal(t, schema.Object, relsSchema.Items.Type)
+
+	relProps := relsSchema.Items.Properties
+	assert.Len(t, relProps, 3)
+	require.NotNil(t, relProps["variable"])
+	assert.Equal(t, schema.String, relProps["variable"].Type)
+	require.NotNil(t, relProps["polarity"])
+	assert.Equal(t, schema.String, relProps["polarity"].Type)
+	require.NotNil(t, relProps["polarity_reasoning"])
+	assert.Equal(t, schema.String, relProps["polarity_reasoning"].Type)
+
+	// Test output schema
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, node, docPkg)
+	require.NoError(t, err)
+
+	assert.Equal(t, schema.Object, outputSchema.Type)
+	assert.NotNil(t, outputSchema.Properties["description"])
+	require.NotNil(t, outputSchema.Properties["loops"])
+
+	loopsSchema := outputSchema.Properties["loops"]
+	assert.Equal(t, schema.Array, loopsSchema.Type)
+	require.NotNil(t, loopsSchema.Items)
+	assert.Equal(t, schema.Array, loopsSchema.Items.Type)
+	require.NotNil(t, loopsSchema.Items.Items)
+	assert.Equal(t, schema.String, loopsSchema.Items.Items.Type)
+}
+
+func TestEnumSupport(t *testing.T) {
+	t.Parallel()
+
+	code := `package test
+import "context"
+
+type StatusRequest struct {
+	Level string ` + "`json:\"level\" enum:\"info,warning,error\"`" + `
+}
+
+type StatusResult struct {
+	Message string  ` + "`json:\"message\"`" + `
+	Error   *string ` + "`json:\"error\"`" + `
+}
+
+func SetStatus(ctx context.Context, req StatusRequest) StatusResult {
+	return StatusResult{Message: "ok"}
+}`
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "test.go", code, parser.ParseComments)
+	require.NoError(t, err)
+
+	var targetFunc *ast.FuncDecl
+	ast.Inspect(node, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "SetStatus" {
+			targetFunc = fn
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, targetFunc)
+
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+	require.NoError(t, err)
+
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	require.NoError(t, err)
+
+	assert.Equal(t, schema.Object, inputSchema.Type)
+	require.NotNil(t, inputSchema.Properties["level"])
+
+	levelSchema := inputSchema.Properties["level"]
+	assert.Equal(t, schema.String, levelSchema.Type)
+	assert.Equal(t, []string{"info", "warning", "error"}, levelSchema.Enum)
+}
+
+func TestEnumInNestedStruct(t *testing.T) {
+	t.Parallel()
+
+	code := `package test
+import "context"
+
+type RelationshipEntry struct {
+	Variable          string ` + "`json:\"variable\"`" + `
+	Polarity          string ` + "`json:\"polarity\" enum:\"+,-\"`" + `
+	PolarityReasoning string ` + "`json:\"polarity_reasoning\"`" + `
+}
+
+type Chain struct {
+	InitialVariable string              ` + "`json:\"initial_variable\"`" + `
+	Relationships   []RelationshipEntry ` + "`json:\"relationships\"`" + `
+	Reasoning       string              ` + "`json:\"reasoning\"`" + `
+}
+
+type Map struct {
+	Title        string  ` + "`json:\"title\"`" + `
+	Explanation  string  ` + "`json:\"explanation\"`" + `
+	CausalChains []Chain ` + "`json:\"causal_chains\"`" + `
+}
+
+type MapResult struct {
+	Description string  ` + "`json:\"description\"`" + `
+	Error       *string ` + "`json:\"error\"`" + `
+}
+
+func SubmitCausalMap(ctx context.Context, m Map) MapResult {
+	return MapResult{Description: "test"}
+}`
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "test.go", code, parser.ParseComments)
+	require.NoError(t, err)
+
+	var targetFunc *ast.FuncDecl
+	ast.Inspect(node, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "SubmitCausalMap" {
+			targetFunc = fn
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, targetFunc)
+
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+	require.NoError(t, err)
+
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, node, docPkg)
+	require.NoError(t, err)
+
+	require.NotNil(t, inputSchema.Properties["causal_chains"])
+	chainsSchema := inputSchema.Properties["causal_chains"]
+	require.NotNil(t, chainsSchema.Items)
+
+	chainProps := chainsSchema.Items.Properties
+	require.NotNil(t, chainProps["relationships"])
+
+	relsSchema := chainProps["relationships"]
+	require.NotNil(t, relsSchema.Items)
+
+	relProps := relsSchema.Items.Properties
+	require.NotNil(t, relProps["polarity"])
+
+	polaritySchema := relProps["polarity"]
+	assert.Equal(t, schema.String, polaritySchema.Type)
+	assert.Equal(t, []string{"+", "-"}, polaritySchema.Enum)
 }
 
 func TestGeneratedPackageName(t *testing.T) {
