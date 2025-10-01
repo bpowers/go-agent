@@ -15,6 +15,12 @@ import (
 	"github.com/bpowers/go-agent/llm/internal/common"
 )
 
+// logger is the package-level structured logger with provider context.
+// Log levels used in this package:
+//   - Info: Client creation, API selection, model warnings
+//   - Debug: Stream events, tool calls, token updates, raw API data
+//   - Warn: Missing token usage, unknown models, fallback behavior
+//   - Error: Should never occur (indicates bugs)
 var logger = logging.Logger().With("provider", "claude")
 
 const (

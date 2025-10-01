@@ -1,3 +1,16 @@
+// Package logging provides centralized structured logging for the go-agent library.
+//
+// Log Level Semantics:
+//   - Error: Unrecoverable errors and unexpected states indicating bugs
+//   - Warn: Recoverable issues, missing data, fallbacks (e.g., unknown model, no token usage)
+//   - Info: High-level operations (client creation, API selection, model info)
+//   - Debug: Detailed execution trace (stream events, tool calls, token updates, raw data)
+//
+// The log level can be controlled via:
+//  1. GO_AGENT_DEBUG environment variable (0=Error, 1=Warn, 2=Info, 3=Debug)
+//  2. llm.SetLogLevel() function for programmatic control
+//
+// All logging is global and affects all LLM providers in the process.
 package logging
 
 import (
@@ -25,7 +38,10 @@ func Logger() *slog.Logger {
 	return logger
 }
 
-// SetLogLevel sets the global log level for the entire library.
+// SetLogLevel sets the global log level for the entire go-agent library.
+// This is a process-wide setting that affects all LLM providers (OpenAI, Claude, Gemini).
+//
+// Changes take effect immediately for all future log calls.
 func SetLogLevel(level slog.Level) {
 	logLevel.Set(level)
 }
