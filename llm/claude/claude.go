@@ -4,16 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
+	"log/slog"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/internal/logging"
 	"github.com/bpowers/go-agent/llm/internal/common"
 )
+
+var logger = logging.Logger().With("provider", "claude")
 
 const (
 	AnthropicURL = "https://api.anthropic.com/v1"
@@ -22,9 +24,9 @@ const (
 type client struct {
 	anthropicClient anthropic.Client
 	modelName       string
-	debug           bool
 	baseURL         string            // Store base URL for testing
 	headers         map[string]string // Custom HTTP headers
+	logger          *slog.Logger
 }
 
 var _ chat.Client = &client{}
@@ -37,12 +39,6 @@ func WithModel(modelName string) Option {
 	}
 }
 
-func WithDebug(debug bool) Option {
-	return func(c *client) {
-		c.debug = debug
-	}
-}
-
 func WithHeaders(headers map[string]string) Option {
 	return func(c *client) {
 		c.headers = headers
@@ -52,8 +48,8 @@ func WithHeaders(headers map[string]string) Option {
 // NewClient returns a chat client that can begin chat sessions with Claude's Messages API.
 func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, error) {
 	c := &client{
-		debug:   os.Getenv("GO_AGENT_DEBUG") == "1", // Enable debug if env var is set
-		baseURL: apiBase,                            // Store for testing
+		baseURL: apiBase, // Store for testing
+		logger:  logger,
 	}
 
 	// Use default if empty
@@ -130,7 +126,7 @@ var modelMaxOutputTokens = map[string]int64{
 func getMaxOutputTokens(modelName string) int64 {
 	t, ok := modelMaxOutputTokens[modelName]
 	if !ok {
-		log.Printf("WARNING: model '%s' not found in model library", modelName)
+		logger.Warn("model not found in model library, using default", "model", modelName, "default", 4096)
 		t = 4096
 	}
 	return t
@@ -331,9 +327,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 	for stream.Next() {
 		event := stream.Current()
-		if c.debug {
-			log.Printf("[Claude] Stream event type: %s\n", event.Type)
-		}
+		c.logger.Debug("stream event", "type", event.Type)
 		// Handle different event types
 		switch event.Type {
 		case "message_start":
@@ -369,10 +363,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					Name: event.ContentBlock.Name,
 				}
 				toolCallArgs.Reset()
-				if c.debug {
-					log.Printf("[Claude] Tool use start: ID=%s, Name=%s, Input=%v\n",
-						event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
-				}
+				c.logger.Debug("tool use start", "id", event.ContentBlock.ID, "name", event.ContentBlock.Name, "input", event.ContentBlock.Input)
 
 				// Don't emit tool call event yet - wait for arguments to be accumulated
 				if event.ContentBlock.Input != nil {
@@ -380,16 +371,12 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					inputBytes, err := json.Marshal(event.ContentBlock.Input)
 					if err == nil {
 						currentToolCall.Input = json.RawMessage(inputBytes)
-						if c.debug {
-							log.Printf("[Claude] Set tool input from start event: %s\n", string(inputBytes))
-						}
+						c.logger.Debug("set tool input from start event", "input", string(inputBytes))
 					}
 				}
 			} else if event.ContentBlock.Type == "redacted_thinking" {
 				// Redacted thinking block (safety-flagged)
-				if c.debug {
-					log.Printf("[Claude] Redacted thinking block detected, data: %s\n", event.ContentBlock.Data)
-				}
+				c.logger.Debug("redacted thinking block detected", "data", event.ContentBlock.Data)
 				if callback != nil {
 					redactedEvent := chat.StreamEvent{
 						Type: chat.StreamEventTypeRedactedThinking,
@@ -403,10 +390,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				}
 			} else if event.ContentBlock.Type == "server_tool_use" {
 				// Server-side tool invocation (e.g., web search)
-				if c.debug {
-					log.Printf("[Claude] Server tool use: ID=%s, Name=%s, Input=%v\n",
-						event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
-				}
+				c.logger.Debug("server tool use", "id", event.ContentBlock.ID, "name", event.ContentBlock.Name, "input", event.ContentBlock.Input)
 				if callback != nil {
 					serverToolEvent := chat.StreamEvent{
 						Type: chat.StreamEventTypeServerToolUse,
@@ -424,10 +408,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				}
 			} else if event.ContentBlock.Type == "web_search_tool_result" {
 				// Web search results from server-side search
-				if c.debug {
-					log.Printf("[Claude] Web search result: ToolUseID=%s, Content=%v\n",
-						event.ContentBlock.ToolUseID, event.ContentBlock.Content)
-				}
+				c.logger.Debug("web search result", "tool_use_id", event.ContentBlock.ToolUseID, "content", event.ContentBlock.Content)
 				if callback != nil {
 					webSearchEvent := chat.StreamEvent{
 						Type: chat.StreamEventTypeWebSearchResult,
@@ -505,22 +486,16 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				// Thinking block signature
 				signature := event.Delta.Signature
 				thinkingSignature.WriteString(signature)
-				if c.debug {
-					log.Printf("[Claude] Got signature_delta: %s\n", signature)
-				}
+				c.logger.Debug("signature_delta", "signature", signature)
 			case "citations_delta":
 				// Citation updates
-				if c.debug {
-					log.Printf("[Claude] Got citations_delta: %+v\n", event.Delta.Citation)
-				}
+				c.logger.Debug("citations_delta", "citation", event.Delta.Citation)
 				// TODO: Handle citation updates
 			case "input_json_delta":
 				// Tool use input delta
 				if currentToolCall != nil {
 					if partialJSON := event.Delta.PartialJSON; partialJSON != "" {
-						if c.debug {
-							log.Printf("[Claude] Got input_json_delta: %s\n", partialJSON)
-						}
+						c.logger.Debug("input_json_delta", "partial_json", partialJSON)
 						toolCallArgs.WriteString(partialJSON)
 					}
 				}
@@ -552,8 +527,8 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 							}
 						}
 					}
-				} else if c.debug && event.Delta.Type != "" {
-					log.Printf("[Claude] Unhandled delta type: %s, delta: %+v\n", event.Delta.Type, event.Delta)
+				} else if event.Delta.Type != "" {
+					c.logger.Debug("unhandled delta type", "type", event.Delta.Type, "delta", event.Delta)
 				}
 			}
 		case "content_block_stop":
@@ -578,9 +553,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				// Prefer accumulated deltas over start event input
 				if toolCallArgs.Len() > 0 {
 					currentToolCall.Input = json.RawMessage(toolCallArgs.String())
-					if c.debug {
-						log.Printf("[Claude] Set tool input from deltas: %s\n", toolCallArgs.String())
-					}
+					c.logger.Debug("set tool input from deltas", "input", toolCallArgs.String())
 				}
 
 				// Now emit the tool call event with complete arguments
@@ -600,10 +573,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 					}
 				}
 
-				if c.debug {
-					log.Printf("[Claude] Finalizing tool call: ID=%s, Name=%s, Input=%s\n",
-						currentToolCall.ID, currentToolCall.Name, string(currentToolCall.Input))
-				}
+				c.logger.Debug("finalizing tool call", "id", currentToolCall.ID, "name", currentToolCall.Name, "input", string(currentToolCall.Input))
 				toolCalls = append(toolCalls, *currentToolCall)
 				currentToolCall = nil
 				toolCallArgs.Reset()
@@ -620,23 +590,16 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 				// Update usage
 				c.state.UpdateUsage(usage)
 
-				if c.debug {
-					totalUsage, _ := c.state.TokenUsage()
-					log.Printf("[Claude] Usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-						usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-						totalUsage.Cumulative.InputTokens, totalUsage.Cumulative.OutputTokens, totalUsage.Cumulative.TotalTokens)
-				}
+				totalUsage, _ := c.state.TokenUsage()
+				c.logger.Debug("usage from message_delta", "input", usage.InputTokens, "output", usage.OutputTokens, "total", usage.TotalTokens,
+					"cumulative_input", totalUsage.Cumulative.InputTokens, "cumulative_output", totalUsage.Cumulative.OutputTokens, "cumulative_total", totalUsage.Cumulative.TotalTokens)
 			}
 		case "message_stop":
 			// Message stream completed
-			if c.debug {
-				log.Printf("[Claude] Stream completed via message_stop\n")
-			}
+			c.logger.Debug("stream completed via message_stop")
 		default:
-			// Log unhandled event types for debugging
-			if c.debug {
-				log.Printf("[Claude] Unhandled stream event type: %s, raw: %+v\n", event.Type, event)
-			}
+			// Log unhandled event types at debug level
+			c.logger.Debug("unhandled stream event type", "type", event.Type, "event", event)
 		}
 	}
 
@@ -646,16 +609,11 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 	// Handle tool calls with multiple rounds if needed
 	if len(toolCalls) > 0 {
-		if c.debug {
-			log.Printf("[Claude] Initial response has %d tool calls, entering tool call handler\n", len(toolCalls))
-			log.Printf("[Claude] Initial text content before tool calls: %q\n", respContent.String())
-		}
+		c.logger.Debug("initial response has tool calls, entering tool call handler", "count", len(toolCalls), "initial_text", respContent.String())
 		return c.handleToolCallRounds(ctx, reqMsg, respContent.String(), thinkingContent.String(), thinkingSignature.String(), toolCalls, reqOpts, callback)
 	}
 
-	if c.debug {
-		log.Printf("[Claude] Initial response has no tool calls, returning content: %q\n", respContent.String())
-	}
+	c.logger.Debug("initial response has no tool calls, returning content", "content", respContent.String())
 
 	// Build response message, avoiding empty text content blocks
 	respMsg := chat.Message{Role: chat.AssistantRole}
@@ -786,9 +744,7 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 			continue
 		}
 
-		if c.debug {
-			log.Printf("[Claude] Tool %s executed with args %s, result: %s\n", toolCall.Name, argsStr, result)
-		}
+		c.logger.Debug("tool executed", "name", toolCall.Name, "args", argsStr, "result", result)
 
 		resultBlock := anthropic.NewToolResultBlock(toolCall.ID, result, false)
 		toolResults = append(toolResults, resultBlock)
@@ -912,17 +868,12 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
 
-	if c.debug {
-		log.Printf("[Claude] handleToolCallRounds: Starting with %d initial tool calls\n", len(initialToolCalls))
-	}
+	c.logger.Debug("starting tool call rounds", "initial_tool_count", len(initialToolCalls))
 
 	for len(toolCalls) > 0 {
-		// Debug logging
-		if c.debug {
-			log.Printf("[Claude] Tool execution with %d tool calls\n", len(toolCalls))
-			for i, tc := range toolCalls {
-				log.Printf("[Claude] Tool %d: %s with input: %s\n", i+1, tc.Name, string(tc.Input))
-			}
+		c.logger.Debug("tool execution round", "tool_count", len(toolCalls))
+		for i, tc := range toolCalls {
+			c.logger.Debug("tool call", "index", i+1, "name", tc.Name, "input", string(tc.Input))
 		}
 		// Execute tool calls
 		toolResults, chatToolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
@@ -1052,10 +1003,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						Name: event.ContentBlock.Name,
 					}
 					toolCallArgs.Reset()
-					if c.debug {
-						log.Printf("[Claude] Follow-up tool use start: ID=%s, Name=%s, Input=%v\n",
-							event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
-					}
+					c.logger.Debug("follow-up tool use start", "id", event.ContentBlock.ID, "name", event.ContentBlock.Name, "input", event.ContentBlock.Input)
 
 					// Don't emit tool call event yet - wait for arguments to be accumulated
 					if event.ContentBlock.Input != nil {
@@ -1063,9 +1011,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						inputBytes, err := json.Marshal(event.ContentBlock.Input)
 						if err == nil {
 							currentToolCall.Input = json.RawMessage(inputBytes)
-							if c.debug {
-								log.Printf("[Claude] Follow-up set tool input from start event: %s\n", string(inputBytes))
-							}
+							c.logger.Debug("follow-up set tool input from start event", "input", string(inputBytes))
 						}
 					}
 				} else if event.ContentBlock.Type == "thinking" {
@@ -1083,9 +1029,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					}
 				} else if event.ContentBlock.Type == "redacted_thinking" {
 					// Redacted thinking block in follow-up
-					if c.debug {
-						log.Printf("[Claude] Follow-up redacted thinking block detected, data: %s\n", event.ContentBlock.Data)
-					}
+					c.logger.Debug("follow-up redacted thinking block detected", "data", event.ContentBlock.Data)
 					if callback != nil {
 						redactedEvent := chat.StreamEvent{
 							Type: chat.StreamEventTypeRedactedThinking,
@@ -1099,10 +1043,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					}
 				} else if event.ContentBlock.Type == "server_tool_use" {
 					// Server-side tool invocation in follow-up
-					if c.debug {
-						log.Printf("[Claude] Follow-up server tool use: ID=%s, Name=%s, Input=%v\n",
-							event.ContentBlock.ID, event.ContentBlock.Name, event.ContentBlock.Input)
-					}
+					c.logger.Debug("follow-up server tool use", "id", event.ContentBlock.ID, "name", event.ContentBlock.Name, "input", event.ContentBlock.Input)
 					if callback != nil {
 						serverToolEvent := chat.StreamEvent{
 							Type: chat.StreamEventTypeServerToolUse,
@@ -1120,10 +1061,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					}
 				} else if event.ContentBlock.Type == "web_search_tool_result" {
 					// Web search results in follow-up
-					if c.debug {
-						log.Printf("[Claude] Follow-up web search result: ToolUseID=%s, Content=%v\n",
-							event.ContentBlock.ToolUseID, event.ContentBlock.Content)
-					}
+					c.logger.Debug("follow-up web search result", "tool_use_id", event.ContentBlock.ToolUseID, "content", event.ContentBlock.Content)
 					if callback != nil {
 						webSearchEvent := chat.StreamEvent{
 							Type:    chat.StreamEventTypeWebSearchResult,
@@ -1165,14 +1103,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 				case "signature_delta":
 					// Thinking block signature in follow-up
 					followUpThinkingSignature.WriteString(event.Delta.Signature)
-					if c.debug {
-						log.Printf("[Claude] Follow-up got signature_delta: %s\n", event.Delta.Signature)
-					}
+					c.logger.Debug("follow-up got signature_delta", "signature", event.Delta.Signature)
 				case "citations_delta":
 					// Citation updates in follow-up
-					if c.debug {
-						log.Printf("[Claude] Follow-up got citations_delta: %+v\n", event.Delta.Citation)
-					}
+					c.logger.Debug("follow-up got citations_delta", "citation", event.Delta.Citation)
 				case "input_json_delta":
 					// Tool use input delta
 					if currentToolCall != nil {
@@ -1194,8 +1128,8 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 								return chat.Message{}, err
 							}
 						}
-					} else if c.debug && event.Delta.Type != "" {
-						log.Printf("[Claude] Follow-up unhandled delta type: %s, delta: %+v\n", event.Delta.Type, event.Delta)
+					} else if event.Delta.Type != "" {
+						c.logger.Debug("follow-up unhandled delta type", "type", event.Delta.Type, "delta", event.Delta)
 					}
 				}
 			case "content_block_stop":
@@ -1204,9 +1138,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					// Prefer accumulated deltas over start event input
 					if toolCallArgs.Len() > 0 {
 						currentToolCall.Input = json.RawMessage(toolCallArgs.String())
-						if c.debug {
-							log.Printf("[Claude] Follow-up set tool input from deltas: %s\n", toolCallArgs.String())
-						}
+						c.logger.Debug("follow-up set tool input from deltas", "input", toolCallArgs.String())
 					}
 
 					// Now emit the tool call event with complete arguments
@@ -1226,10 +1158,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						}
 					}
 
-					if c.debug {
-						log.Printf("[Claude] Follow-up finalizing tool call: ID=%s, Name=%s, Input=%s\n",
-							currentToolCall.ID, currentToolCall.Name, string(currentToolCall.Input))
-					}
+					c.logger.Debug("follow-up finalizing tool call", "id", currentToolCall.ID, "name", currentToolCall.Name, "input", string(currentToolCall.Input))
 					toolCalls = append(toolCalls, *currentToolCall)
 					currentToolCall = nil
 					toolCallArgs.Reset()
@@ -1246,23 +1175,16 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 					// Update usage
 					c.state.UpdateUsage(usage)
 
-					if c.debug {
-						totalUsage, _ := c.state.TokenUsage()
-						log.Printf("[Claude] Follow-up usage from message_delta - Input: %d, Output: %d, Total: %d (Cumulative - Input: %d, Output: %d, Total: %d)\n",
-							usage.InputTokens, usage.OutputTokens, usage.TotalTokens,
-							totalUsage.Cumulative.InputTokens, totalUsage.Cumulative.OutputTokens, totalUsage.Cumulative.TotalTokens)
-					}
+					totalUsage, _ := c.state.TokenUsage()
+					c.logger.Debug("follow-up usage from message_delta", "input", usage.InputTokens, "output", usage.OutputTokens, "total", usage.TotalTokens,
+						"cumulative_input", totalUsage.Cumulative.InputTokens, "cumulative_output", totalUsage.Cumulative.OutputTokens, "cumulative_total", totalUsage.Cumulative.TotalTokens)
 				}
 			case "message_stop":
 				// Follow-up message stream completed
-				if c.debug {
-					log.Printf("[Claude] Follow-up stream completed via message_stop\n")
-				}
+				c.logger.Debug("follow-up stream completed via message_stop")
 			default:
-				// Log unhandled event types for debugging
-				if c.debug {
-					log.Printf("[Claude] Follow-up unhandled stream event type: %s, raw: %+v\n", event.Type, event)
-				}
+				// Log unhandled event types at debug level
+				c.logger.Debug("follow-up unhandled stream event type", "type", event.Type, "event", event)
 			}
 		}
 
@@ -1272,15 +1194,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// If we got more tool calls, continue the loop
 		if len(toolCalls) > 0 {
-			if c.debug {
-				log.Printf("[Claude] Got %d more tool calls, continuing\n", len(toolCalls))
-			}
+			c.logger.Debug("got more tool calls, continuing", "count", len(toolCalls))
 			continue
 		}
 
-		if c.debug {
-			log.Printf("[Claude] No more tool calls, got final response: %q\n", respContent.String())
-		}
+		c.logger.Debug("no more tool calls, got final response", "response", respContent.String())
 
 		// No more tool calls, we have the final response
 		// Build final message, avoiding empty text content blocks
@@ -1294,9 +1212,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			finalMsg.AddThinking(followUpThinkingContent.String(), followUpThinkingSignature.String())
 		}
 
-		if c.debug {
-			log.Printf("[Claude] Returning final response from tool handler, content length: %d\n", len(finalMsg.GetText()))
-		}
+		c.logger.Debug("returning final response from tool handler", "content_length", len(finalMsg.GetText()))
 
 		// Update history with final assistant response (user message already persisted)
 		c.state.AppendMessages([]chat.Message{finalMsg}, nil)
@@ -1305,8 +1221,6 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	}
 
 	// This should never be reached since the loop continues until no tool calls
-	if c.debug {
-		log.Printf("[Claude] ERROR: Reached unexpected end of tool call processing, initial tool calls: %d\n", len(initialToolCalls))
-	}
+	c.logger.Error("unexpected end of tool call processing", "initial_tool_count", len(initialToolCalls))
 	return chat.Message{}, fmt.Errorf("unexpected end of tool call processing")
 }

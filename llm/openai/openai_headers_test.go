@@ -122,7 +122,6 @@ func TestOpenAI_HeadersWithOtherOptions(t *testing.T) {
 	client, err := NewClient("https://custom.openai.com/v1", "test-key",
 		WithModel("gpt-4"),
 		WithAPI(ChatCompletions),
-		WithDebug(true),
 		WithHeaders(customHeaders))
 	require.NoError(t, err)
 

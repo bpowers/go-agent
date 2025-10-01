@@ -121,7 +121,6 @@ func TestClaude_HeadersWithOtherOptions(t *testing.T) {
 
 	client, err := NewClient("https://custom.anthropic.com/v1", "test-key",
 		WithModel("claude-3-haiku"),
-		WithDebug(true),
 		WithHeaders(customHeaders))
 	require.NoError(t, err)
 

@@ -72,7 +72,7 @@ var createClientFunc = func(config *Config) (chat.Client, error) {
 		Temperature:  config.Temperature,
 		MaxTokens:    config.MaxTokens,
 		SystemPrompt: config.SystemPrompt,
-		Debug:        config.Debug,
+		LogLevel:     -1, // Don't change log level from environment default
 	}
 	return llm.NewClient(llmConfig)
 }

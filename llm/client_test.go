@@ -210,11 +210,11 @@ func TestNewClient(t *testing.T) {
 			errMsg:    "unknown model provider",
 		},
 		{
-			name: "Debug mode enabled",
+			name: "LogLevel set to Debug",
 			config: &Config{
-				Model:  "gpt-4",
-				APIKey: "test-key",
-				Debug:  true,
+				Model:    "gpt-4",
+				APIKey:   "test-key",
+				LogLevel: 3, // Debug level
 			},
 			shouldErr: false,
 		},

@@ -3,6 +3,7 @@ package llm
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -22,7 +23,10 @@ type Config struct {
 	Temperature  float64
 	MaxTokens    int
 	SystemPrompt string
-	Debug        bool
+	// LogLevel sets the library-wide log level (affects all providers).
+	// Values: -1=don't change (default), 0=Error, 1=Warn, 2=Info, 3=Debug
+	// Note: This is a global setting that affects all LLM providers in the process.
+	LogLevel int
 }
 
 // ModelProvider represents the different LLM providers
@@ -38,6 +42,17 @@ const (
 
 // NewClient creates a chat client based on the configuration
 func NewClient(config *Config) (chat.Client, error) {
+	// Set log level if specified (affects library-wide logging)
+	if config.LogLevel >= 0 && config.LogLevel <= 3 {
+		levels := []slog.Level{
+			slog.LevelError, // 0
+			slog.LevelWarn,  // 1
+			slog.LevelInfo,  // 2
+			slog.LevelDebug, // 3
+		}
+		SetLogLevel(levels[config.LogLevel])
+	}
+
 	provider := detectProvider(config.Model, config.Provider)
 	apiKey := config.APIKey
 
@@ -57,10 +72,6 @@ func NewClient(config *Config) (chat.Client, error) {
 		// Use Responses API for gpt-5, o1, and o3 models
 		if isResponsesModel(config.Model) {
 			opts = append(opts, openai.WithAPI(openai.Responses))
-		}
-
-		if config.Debug {
-			opts = append(opts, openai.WithDebug(true))
 		}
 
 		if config.Headers != nil {
@@ -84,9 +95,6 @@ func NewClient(config *Config) (chat.Client, error) {
 
 		opts := []claude.Option{
 			claude.WithModel(config.Model),
-		}
-		if config.Debug {
-			opts = append(opts, claude.WithDebug(true))
 		}
 
 		if config.Headers != nil {
@@ -117,9 +125,6 @@ func NewClient(config *Config) (chat.Client, error) {
 		if config.BaseURL != "" {
 			opts = append(opts, gemini.WithBaseURL(config.BaseURL))
 		}
-		if config.Debug {
-			opts = append(opts, gemini.WithDebug(true))
-		}
 		if config.Headers != nil {
 			opts = append(opts, gemini.WithHeaders(config.Headers))
 		}
@@ -131,9 +136,6 @@ func NewClient(config *Config) (chat.Client, error) {
 		// Ollama doesn't require an API key
 		opts := []openai.Option{
 			openai.WithModel(config.Model),
-		}
-		if config.Debug {
-			opts = append(opts, openai.WithDebug(true))
 		}
 		if config.Headers != nil {
 			opts = append(opts, openai.WithHeaders(config.Headers))

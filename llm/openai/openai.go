@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
+	"log/slog"
 	"strings"
 
 	"github.com/openai/openai-go"
@@ -15,21 +14,22 @@ import (
 	"github.com/openai/openai-go/shared"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/internal/logging"
 	"github.com/bpowers/go-agent/llm/internal/common"
 )
 
-// debugLogUnhandledEvent logs unhandled events when GO_AGENT_DEBUG=1
-func debugLogUnhandledEvent(apiName, eventType string, rawData interface{}) {
-	if os.Getenv("GO_AGENT_DEBUG") == "1" {
-		if rawData != nil {
-			if jsonBytes, err := json.Marshal(rawData); err == nil {
-				log.Printf("[OpenAI %s] Unhandled event type: %s, data: %s\n", apiName, eventType, string(jsonBytes))
-			} else {
-				log.Printf("[OpenAI %s] Unhandled event type: %s, data: %+v\n", apiName, eventType, rawData)
-			}
+var logger = logging.Logger().With("provider", "openai")
+
+// logUnhandledEvent logs unhandled events at debug level
+func logUnhandledEvent(logger *slog.Logger, apiName, eventType string, rawData interface{}) {
+	if rawData != nil {
+		if jsonBytes, err := json.Marshal(rawData); err == nil {
+			logger.Debug("unhandled event type", "api", apiName, "type", eventType, "data", string(jsonBytes))
 		} else {
-			log.Printf("[OpenAI %s] Unhandled event type: %s\n", apiName, eventType)
+			logger.Debug("unhandled event type", "api", apiName, "type", eventType, "data_raw", rawData)
 		}
+	} else {
+		logger.Debug("unhandled event type", "api", apiName, "type", eventType)
 	}
 }
 
@@ -62,10 +62,10 @@ type client struct {
 	openaiClient openai.Client
 	modelName    string
 	api          API
-	debug        bool
 	apiSet       bool              // true if WithAPI was explicitly provided
 	baseURL      string            // Store base URL for testing
 	headers      map[string]string // Custom HTTP headers
+	logger       *slog.Logger
 }
 
 var _ chat.Client = &client{}
@@ -85,12 +85,6 @@ func WithAPI(api API) Option {
 	}
 }
 
-func WithDebug(debug bool) Option {
-	return func(c *client) {
-		c.debug = debug
-	}
-}
-
 func WithHeaders(headers map[string]string) Option {
 	return func(c *client) {
 		c.headers = headers
@@ -103,6 +97,7 @@ func NewClient(apiBase string, apiKey string, opts ...Option) (chat.Client, erro
 	c := &client{
 		api:     ChatCompletions, // default to chat completions
 		baseURL: apiBase,         // Store for testing
+		logger:  logger,
 	}
 
 	for _, opt := range opts {
@@ -191,7 +186,7 @@ func getModelMaxTokens(model string) int {
 	}
 
 	// Conservative default for unknown models instead of panic
-	log.Printf("[OpenAI] Unknown model %q; using conservative default output token limit", model)
+	logger.Warn("unknown model, using conservative default output token limit", "model", model, "default_limit", 4096)
 	return 4096
 }
 
@@ -242,23 +237,6 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	appliedOpts := chat.ApplyOptions(opts...)
 	callback := appliedOpts.StreamingCb
 
-	// For debug mode, wrap or create callback to stream to stderr
-	if c.debug {
-		origCallback := callback
-		callback = func(event chat.StreamEvent) error {
-			switch event.Type {
-			case chat.StreamEventTypeContent:
-				fmt.Fprint(os.Stderr, event.Content)
-			case chat.StreamEventTypeThinking:
-				fmt.Fprint(os.Stderr, "[Thinking...] ")
-			}
-			if origCallback != nil {
-				return origCallback(event)
-			}
-			return nil
-		}
-	}
-
 	// Determine route to appropriate API based on model type and whether tools are registered
 	nTools := c.tools.Count()
 	// Note: The Responses API doesn't support tools yet, so we fall back to ChatCompletions when tools are registered
@@ -275,9 +253,6 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 
 	// Snapshot state without holding lock during streaming
 	systemPrompt, history := c.snapshotState()
-
-	// Check if debug logging is enabled
-	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
 
 	// Build input items for Responses API
 	var inputItems []responses.ResponseInputItemUnionParam
@@ -358,9 +333,7 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		params.MaxOutputTokens = param.NewOpt(int64(reqOpts.MaxTokens))
 	}
 
-	if debugSSE {
-		log.Printf("[OpenAI Responses API] Starting stream for model: %s\n", c.modelName)
-	}
+	c.logger.Debug("starting stream", "api", "responses", "model", c.modelName)
 
 	// Create streaming response
 	stream := c.openaiClient.Responses.NewStreaming(ctx, params)
@@ -381,9 +354,7 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		event := stream.Current()
 		eventCount++
 
-		if debugSSE {
-			log.Printf("[OpenAI Responses API Event %d] Type: %s\n", eventCount, event.Type)
-		}
+		c.logger.Debug("event received", "api", "responses", "event_num", eventCount, "type", event.Type)
 
 		// Handle different event types
 		switch event.Type {
@@ -473,26 +444,17 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 					TotalTokens:  int(event.Response.Usage.TotalTokens),
 				}
 				lastUsage = usage
-				if debugSSE {
-					log.Printf("[OpenAI Responses API] Usage from completed event - Input: %d, Output: %d, Total: %d\n",
-						usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
-				}
+				c.logger.Debug("usage from completed event", "api", "responses", "input", usage.InputTokens, "output", usage.OutputTokens, "total", usage.TotalTokens)
 			}
-			if debugSSE {
-				log.Printf("[OpenAI Responses API] Stream completed\n")
-			}
+			c.logger.Debug("stream completed", "api", "responses")
 
 		case "response.output_text.done":
 			// Text output is complete
-			if debugSSE {
-				log.Printf("[OpenAI Responses API] Output text done\n")
-			}
+			c.logger.Debug("output text done", "api", "responses")
 
 		case "response.created", "response.in_progress":
-			// Status events - just log if debugging
-			if debugSSE {
-				log.Printf("[OpenAI Responses API] Status event: %s\n", event.Type)
-			}
+			// Status events - just log at debug level
+			c.logger.Debug("status event", "api", "responses", "type", event.Type)
 
 		case "response.output_item.added":
 			// Check if this is a function call item
@@ -501,31 +463,23 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 					ID:   event.Item.ID,
 					Name: event.Item.Name,
 				}
-				if debugSSE {
-					log.Printf("[OpenAI Responses API] Tool call started: ID=%s, Name=%s\n", event.Item.ID, event.Item.Name)
-				}
+				c.logger.Debug("tool call started", "api", "responses", "id", event.Item.ID, "name", event.Item.Name)
 			} else {
 				// Non-function item added (reasoning, message, etc.)
-				if debugSSE {
-					log.Printf("[OpenAI Responses API] Output item added: type=%s\n", event.Item.Type)
-				}
+				c.logger.Debug("output item added", "api", "responses", "type", event.Item.Type)
 			}
 
 		case "response.output_item.done", "response.content_part.added", "response.content_part.done":
 			// Informational events about content structure
-			if debugSSE {
-				log.Printf("[OpenAI Responses API] Content structure event: %s\n", event.Type)
-			}
+			c.logger.Debug("content structure event", "api", "responses", "type", event.Type)
 
 		case "error":
 			// Handle error events
-			if debugSSE {
-				log.Printf("[OpenAI Responses API] Error event received\n")
-			}
+			c.logger.Debug("error event received", "api", "responses")
 
 		default:
-			// Log unhandled event types for debugging
-			debugLogUnhandledEvent("Responses API", event.Type, event)
+			// Log unhandled event types at debug level
+			logUnhandledEvent(c.logger, "Responses API", event.Type, event)
 		}
 	}
 
@@ -537,11 +491,9 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 	// The Responses API handles tools differently - it doesn't use the multi-round pattern
 	// For now, we log if tools were detected but not fully implemented
 	if len(toolCalls) > 0 {
-		if debugSSE {
-			log.Printf("[OpenAI Responses API] Warning: Tool calls detected but not yet fully implemented for Responses API: %d tools\n", len(toolCalls))
-			for _, tc := range toolCalls {
-				log.Printf("[OpenAI Responses API]   Tool: %s (ID: %s)\n", tc.Name, tc.ID)
-			}
+		c.logger.Warn("tool calls detected but not yet fully implemented for Responses API", "api", "responses", "tool_count", len(toolCalls))
+		for _, tc := range toolCalls {
+			c.logger.Debug("tool detected", "api", "responses", "name", tc.Name, "id", tc.ID)
 		}
 		// For now, just include any tool call info in the response
 		// TODO: Implement proper tool handling for Responses API
@@ -562,9 +514,6 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 
 	// Snapshot state without holding lock during streaming
 	systemPrompt, history := c.snapshotState()
-
-	// Check if debug logging is enabled via environment variable
-	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
 
 	// Build message list
 	var messages []openai.ChatCompletionMessageParamUnion
@@ -630,9 +579,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	if reqOpts.ReasoningEffort != "" && c.api == Responses {
 		// Reasoning effort is supported through the Responses API
 		// It can be configured in the ResponseNewParams if needed
-		if debugSSE {
-			log.Printf("[OpenAI] Reasoning effort: %s (feature may require additional API parameters)\n", reqOpts.ReasoningEffort)
-		}
+		c.logger.Debug("reasoning effort set", "api", "responses", "effort", reqOpts.ReasoningEffort)
 	}
 
 	// Add stream options to include usage information
@@ -665,33 +612,26 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 				TotalTokens:  int(chunk.Usage.TotalTokens),
 			}
 			lastUsage = usage
-			if debugSSE {
-				log.Printf("[OpenAI SSE] Usage chunk received - Input: %d, Output: %d, Total: %d\n",
-					usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
-			}
+			c.logger.Debug("usage chunk received", "api", "chat_completions", "input", usage.InputTokens, "output", usage.OutputTokens, "total", usage.TotalTokens)
 		}
 
 		// Debug logging for SSE responses
-		if debugSSE {
-			// Log the raw JSON of the chunk
-			rawJSON := chunk.RawJSON()
-			log.Printf("[OpenAI SSE Chunk %d] Model: %s, Raw: %s\n", chunkCount, c.modelName, rawJSON)
+		rawJSON := chunk.RawJSON()
+		c.logger.Debug("chunk received", "api", "chat_completions", "chunk_num", chunkCount, "model", c.modelName, "raw", string(rawJSON))
 
-			// Log structured information about the chunk
-			if len(chunk.Choices) > 0 {
-				choice := chunk.Choices[0]
-				log.Printf("[OpenAI SSE Chunk %d] Choice[0] - Index: %d, FinishReason: %s, Delta.Role: %s, Delta.Content: %q\n",
-					chunkCount, choice.Index, choice.FinishReason, choice.Delta.Role, choice.Delta.Content)
+		// Log structured information about the chunk
+		if len(chunk.Choices) > 0 {
+			choice := chunk.Choices[0]
+			c.logger.Debug("chunk choice", "api", "chat_completions", "chunk_num", chunkCount, "index", choice.Index, "finish_reason", choice.FinishReason, "role", choice.Delta.Role, "content", choice.Delta.Content)
 
-				// Check for extra fields that might contain reasoning content
-				if len(choice.Delta.JSON.ExtraFields) > 0 {
-					extraFieldsJSON, _ := json.Marshal(choice.Delta.JSON.ExtraFields)
-					log.Printf("[OpenAI SSE Chunk %d] Delta ExtraFields: %s\n", chunkCount, string(extraFieldsJSON))
-				}
-				if len(choice.JSON.ExtraFields) > 0 {
-					extraFieldsJSON, _ := json.Marshal(choice.JSON.ExtraFields)
-					log.Printf("[OpenAI SSE Chunk %d] Choice ExtraFields: %s\n", chunkCount, string(extraFieldsJSON))
-				}
+			// Check for extra fields that might contain reasoning content
+			if len(choice.Delta.JSON.ExtraFields) > 0 {
+				extraFieldsJSON, _ := json.Marshal(choice.Delta.JSON.ExtraFields)
+				c.logger.Debug("delta extra fields", "api", "chat_completions", "chunk_num", chunkCount, "fields", string(extraFieldsJSON))
+			}
+			if len(choice.JSON.ExtraFields) > 0 {
+				extraFieldsJSON, _ := json.Marshal(choice.JSON.ExtraFields)
+				c.logger.Debug("choice extra fields", "api", "chat_completions", "chunk_num", chunkCount, "fields", string(extraFieldsJSON))
 			}
 		}
 
@@ -713,9 +653,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 					}
 				}
 
-				if debugSSE {
-					log.Printf("[OpenAI ChatCompletions] Refusal content: %s\n", refusalContent)
-				}
+				c.logger.Debug("refusal content", "api", "chat_completions", "content", refusalContent)
 			}
 
 			// Check for tool calls
@@ -803,34 +741,28 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 
 			// Check if stream is done
 			if choice.FinishReason != "" {
-				if debugSSE {
-					log.Printf("[OpenAI ChatCompletions] Stream finished with reason: %s\n", choice.FinishReason)
-				}
+				c.logger.Debug("stream finished", "api", "chat_completions", "reason", choice.FinishReason)
 			}
 
 			// Log any unhandled extra fields
-			if debugSSE && len(choice.Delta.JSON.ExtraFields) > 0 {
+			if len(choice.Delta.JSON.ExtraFields) > 0 {
 				for fieldName, field := range choice.Delta.JSON.ExtraFields {
 					if field.Valid() {
-						log.Printf("[OpenAI ChatCompletions] Unhandled ExtraField %s: %s\n", fieldName, field.Raw())
+						c.logger.Debug("unhandled extra field", "api", "chat_completions", "field", fieldName, "value", field.Raw())
 					}
 				}
 			}
 		}
 	}
 
-	if debugSSE {
-		log.Printf("[OpenAI SSE] Stream completed. Total chunks: %d\n", chunkCount)
-	}
+	c.logger.Debug("stream completed", "api", "chat_completions", "total_chunks", chunkCount)
 
 	if err := stream.Err(); err != nil {
 		// Check if the error is about unsupported temperature
 		errStr := err.Error()
 		if strings.Contains(errStr, "temperature") && strings.Contains(errStr, "does not support") && temperatureSet {
 			// Retry without temperature
-			if c.debug {
-				fmt.Fprintf(os.Stderr, "\nTemperature not supported for model %s, retrying without temperature\n", c.modelName)
-			}
+			c.logger.Info("retrying without temperature", "model", c.modelName, "reason", "temperature not supported")
 			// Create new params without temperature
 			paramsNoTemp := openai.ChatCompletionNewParams{
 				Messages: messages,
@@ -877,15 +809,10 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 						TotalTokens:  int(chunk.Usage.TotalTokens),
 					}
 					lastUsage = usage
-					if debugSSE {
-						log.Printf("[OpenAI SSE Retry] Usage chunk received - Input: %d, Output: %d, Total: %d\n",
-							usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
-					}
+					c.logger.Debug("retry usage chunk received", "api", "chat_completions", "input", usage.InputTokens, "output", usage.OutputTokens, "total", usage.TotalTokens)
 				}
 
-				if debugSSE {
-					log.Printf("[OpenAI SSE Retry Chunk %d] Model: %s\n", chunkCount, c.modelName)
-				}
+				c.logger.Debug("retry chunk received", "api", "chat_completions", "chunk_num", chunkCount, "model", c.modelName)
 
 				if len(chunk.Choices) > 0 {
 					choice := chunk.Choices[0]
@@ -981,8 +908,8 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	c.updateHistoryAndUsage([]chat.Message{reqMsg, respMsg}, lastUsage)
 
 	// Update last usage
-	if lastUsage.TotalTokens == 0 && debugSSE {
-		log.Printf("[OpenAI] Warning: No token usage information received")
+	if lastUsage.TotalTokens == 0 {
+		c.logger.Warn("no token usage information received", "api", "chat_completions")
 	}
 
 	return respMsg, nil
@@ -990,9 +917,6 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 
 // handleToolCallRounds handles potentially multiple rounds of tool calls
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialToolCalls []openai.ChatCompletionMessageToolCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
-	// Check if debug logging is enabled
-	debugSSE := os.Getenv("GO_AGENT_DEBUG") == "1"
-
 	// Keep track of all messages for the conversation
 	var msgs []openai.ChatCompletionMessageParamUnion
 
@@ -1021,9 +945,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	toolCalls := initialToolCalls
 
 	for len(toolCalls) > 0 {
-		if debugSSE {
-			log.Printf("[OpenAI] Processing %d tool calls", len(toolCalls))
-		}
+		c.logger.Debug("processing tool calls", "count", len(toolCalls))
 
 		// Execute tool calls
 		chatToolResults, err := c.handleToolCalls(ctx, toolCalls, callback)
@@ -1140,9 +1062,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 						}
 					}
 
-					if debugSSE {
-						log.Printf("[OpenAI Follow-up] Refusal content: %s\n", refusalContent)
-					}
+					c.logger.Debug("follow-up refusal content", "content", refusalContent)
 				}
 
 				// Check for tool calls
@@ -1216,18 +1136,16 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 		// If we got more tool calls, continue the loop
 		if len(toolCalls) > 0 {
-			if debugSSE {
-				log.Printf("[OpenAI] Got %d more tool calls", len(toolCalls))
-			}
+			c.logger.Debug("got more tool calls", "count", len(toolCalls))
 			continue
 		}
 
 		// No more tool calls, we have the final response
 		finalMsg := chat.AssistantMessage(respContent.String())
 
-		// Debug log if content is empty
-		if debugSSE && finalMsg.GetText() == "" {
-			log.Printf("[OpenAI] Warning: Final response after tool execution has empty content")
+		// Log if content is empty
+		if finalMsg.GetText() == "" {
+			c.logger.Warn("final response after tool execution has empty content")
 		}
 
 		// Update history with the final response
