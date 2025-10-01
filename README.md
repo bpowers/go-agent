@@ -271,9 +271,14 @@ The multi-round pattern (implemented in all providers):
 ### Environment Variables
 
 - `OPENAI_API_KEY`: API key for OpenAI
-- `ANTHROPIC_API_KEY`: API key for Claude  
+- `ANTHROPIC_API_KEY`: API key for Claude
 - `GEMINI_API_KEY`: API key for Gemini
-- `GO_AGENT_DEBUG`: Set to "1" to enable debug logging for SSE streams
+- `GO_AGENT_DEBUG`: Log level for library-wide structured logging
+  - `0` = Error (only errors)
+  - `1` = Warn (warnings and errors) - **default**
+  - `2` = Info (informational messages, warnings, and errors)
+  - `3` = Debug (verbose debugging including all stream events, tool calls, and token usage)
+  - Can also be set programmatically via `llm.SetLogLevel(slog.Level)`
 
 ### Code Generation Tools
 

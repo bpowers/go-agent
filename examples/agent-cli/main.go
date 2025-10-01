@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,7 @@ func parseFlagsArgs(args []string) *Config {
 	fs.IntVar(&config.MaxTokens, "max-tokens", 0, "Maximum tokens in response (0 for default)")
 	fs.StringVar(&config.SystemPrompt, "system", "You are a helpful assistant.", "System prompt")
 	fs.StringVar(&config.Provider, "provider", "", "Explicit provider to use (override auto-detecting)")
-	fs.BoolVar(&config.Debug, "debug", false, "Enable debug output")
+	fs.BoolVar(&config.Debug, "debug", false, "Enable debug output (sets library log level to Debug and shows verbose tool info)")
 	fs.StringVar(&config.PersistenceFile, "persist", "", "SQLite file for conversation persistence (empty for memory-only)")
 	fs.Float64Var(&config.CompactThreshold, "compact", 0.8, "Threshold for automatic context compaction (0.0-1.0)")
 	fs.BoolVar(&config.SystemReminder, "system-reminder", false, "Enable system reminders that track tool usage and context")
@@ -65,6 +66,11 @@ func parseFlagsArgs(args []string) *Config {
 
 // createClientFunc is a variable to allow mocking in tests
 var createClientFunc = func(config *Config) (chat.Client, error) {
+	// Enable debug logging if requested
+	if config.Debug {
+		llm.SetLogLevel(slog.LevelDebug)
+	}
+
 	llmConfig := &llm.Config{
 		Model:        config.Model,
 		Provider:     config.Provider,
@@ -72,7 +78,7 @@ var createClientFunc = func(config *Config) (chat.Client, error) {
 		Temperature:  config.Temperature,
 		MaxTokens:    config.MaxTokens,
 		SystemPrompt: config.SystemPrompt,
-		LogLevel:     -1, // Don't change log level from environment default
+		LogLevel:     -1, // Don't change log level from environment default (already set above if Debug)
 	}
 	return llm.NewClient(llmConfig)
 }
