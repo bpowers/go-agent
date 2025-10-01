@@ -269,11 +269,14 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	var functionCalls []*genai.FunctionCall
 	chunkCount := 0
 	for chunk, err := range stream {
-		chunkCount++
-		c.logger.Debug("chunk received", "chunk_num", chunkCount, "candidates", len(chunk.Candidates))
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("streaming error: %w", err)
 		}
+		if chunk == nil {
+			continue
+		}
+		chunkCount++
+		c.logger.Debug("chunk received", "chunk_num", chunkCount, "candidates", len(chunk.Candidates))
 
 		// Extract text and function calls from chunk
 		for _, candidate := range chunk.Candidates {
@@ -617,11 +620,14 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		followUpChunkCount := 0
 
 		for chunk, err := range followUpStream {
-			followUpChunkCount++
-			c.logger.Debug("follow-up chunk received", "chunk_num", followUpChunkCount, "candidates", len(chunk.Candidates))
 			if err != nil {
 				return chat.Message{}, fmt.Errorf("follow-up streaming error: %w", err)
 			}
+			if chunk == nil {
+				continue
+			}
+			followUpChunkCount++
+			c.logger.Debug("follow-up chunk received", "chunk_num", followUpChunkCount, "candidates", len(chunk.Candidates))
 
 			for _, candidate := range chunk.Candidates {
 				if candidate.Content != nil {
