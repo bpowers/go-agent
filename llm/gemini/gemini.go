@@ -395,6 +395,74 @@ func (c *chatClient) ListTools() []string {
 	return c.tools.List()
 }
 
+// jsonSchemaToGeminiSchema recursively converts a JSON Schema object to Gemini Schema format.
+// It handles all basic types, arrays with items, objects with properties and required fields,
+// and schema attributes like description and enum.
+func jsonSchemaToGeminiSchema(schemaMap map[string]interface{}) (*genai.Schema, error) {
+	schema := &genai.Schema{}
+
+	if typeStr, ok := schemaMap["type"].(string); ok {
+		switch typeStr {
+		case "string":
+			schema.Type = genai.TypeString
+		case "integer":
+			schema.Type = genai.TypeInteger
+		case "number":
+			schema.Type = genai.TypeNumber
+		case "boolean":
+			schema.Type = genai.TypeBoolean
+		case "array":
+			schema.Type = genai.TypeArray
+			if items, ok := schemaMap["items"].(map[string]interface{}); ok {
+				itemSchema, err := jsonSchemaToGeminiSchema(items)
+				if err != nil {
+					return nil, fmt.Errorf("failed to convert array items schema: %w", err)
+				}
+				schema.Items = itemSchema
+			}
+		case "object":
+			schema.Type = genai.TypeObject
+			if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
+				schema.Properties = make(map[string]*genai.Schema)
+				for propName, propValue := range props {
+					if propMap, ok := propValue.(map[string]interface{}); ok {
+						propSchema, err := jsonSchemaToGeminiSchema(propMap)
+						if err != nil {
+							return nil, fmt.Errorf("failed to convert property %q: %w", propName, err)
+						}
+						schema.Properties[propName] = propSchema
+					}
+				}
+			}
+			if required, ok := schemaMap["required"].([]interface{}); ok {
+				requiredFields := make([]string, 0, len(required))
+				for _, field := range required {
+					if fieldName, ok := field.(string); ok {
+						requiredFields = append(requiredFields, fieldName)
+					}
+				}
+				schema.Required = requiredFields
+			}
+		}
+	}
+
+	if desc, ok := schemaMap["description"].(string); ok {
+		schema.Description = desc
+	}
+
+	if enum, ok := schemaMap["enum"].([]interface{}); ok {
+		enumStrs := make([]string, 0, len(enum))
+		for _, e := range enum {
+			if eStr, ok := e.(string); ok {
+				enumStrs = append(enumStrs, eStr)
+			}
+		}
+		schema.Enum = enumStrs
+	}
+
+	return schema, nil
+}
+
 // mcpToGeminiFunctionDeclaration converts an MCP tool definition to Gemini FunctionDeclaration format
 func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef chat.ToolDef) (*genai.FunctionDeclaration, error) {
 	// Parse the MCP JSON schema to extract the inputSchema
@@ -407,64 +475,18 @@ func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef chat.ToolDef) (*genai
 		return nil, fmt.Errorf("failed to parse MCP definition: %w", err)
 	}
 
-	// Convert inputSchema to Gemini Schema format
+	// Convert inputSchema to Gemini Schema format using recursive converter
 	var parameters *genai.Schema
 	if len(mcp.InputSchema) > 0 {
-		// Parse the JSON schema into a map first
 		var schemaMap map[string]interface{}
 		if err := json.Unmarshal(mcp.InputSchema, &schemaMap); err != nil {
 			return nil, fmt.Errorf("failed to parse input schema: %w", err)
 		}
 
-		// Create a Gemini Schema from the parsed JSON schema
-		parameters = &genai.Schema{
-			Type:       genai.TypeObject, // MCP tools typically use object schemas
-			Properties: make(map[string]*genai.Schema),
-		}
-
-		// Extract properties if they exist
-		if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
-			for propName, propSchema := range props {
-				if propMap, ok := propSchema.(map[string]interface{}); ok {
-					geminiProp := &genai.Schema{}
-
-					// Convert basic type
-					if typeStr, ok := propMap["type"].(string); ok {
-						switch typeStr {
-						case "string":
-							geminiProp.Type = genai.TypeString
-						case "integer":
-							geminiProp.Type = genai.TypeInteger
-						case "number":
-							geminiProp.Type = genai.TypeNumber
-						case "boolean":
-							geminiProp.Type = genai.TypeBoolean
-						case "array":
-							geminiProp.Type = genai.TypeArray
-						case "object":
-							geminiProp.Type = genai.TypeObject
-						}
-					}
-
-					// Add description if available
-					if desc, ok := propMap["description"].(string); ok {
-						geminiProp.Description = desc
-					}
-
-					parameters.Properties[propName] = geminiProp
-				}
-			}
-		}
-
-		// Extract required fields if they exist
-		if required, ok := schemaMap["required"].([]interface{}); ok {
-			requiredFields := make([]string, 0, len(required))
-			for _, field := range required {
-				if fieldName, ok := field.(string); ok {
-					requiredFields = append(requiredFields, fieldName)
-				}
-			}
-			parameters.Required = requiredFields
+		var err error
+		parameters, err = jsonSchemaToGeminiSchema(schemaMap)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert input schema: %w", err)
 		}
 	}
 

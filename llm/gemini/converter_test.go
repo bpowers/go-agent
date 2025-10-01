@@ -879,3 +879,365 @@ func TestMessagesToGemini(t *testing.T) {
 		})
 	}
 }
+
+func TestJsonSchemaToGeminiSchema(t *testing.T) {
+	tests := []struct {
+		name       string
+		jsonSchema map[string]interface{}
+		want       *genai.Schema
+		wantErr    bool
+		errMsg     string
+	}{
+		{
+			name: "simple string property",
+			jsonSchema: map[string]interface{}{
+				"type": "string",
+			},
+			want: &genai.Schema{
+				Type: genai.TypeString,
+			},
+		},
+		{
+			name: "string with description",
+			jsonSchema: map[string]interface{}{
+				"type":        "string",
+				"description": "A user's name",
+			},
+			want: &genai.Schema{
+				Type:        genai.TypeString,
+				Description: "A user's name",
+			},
+		},
+		{
+			name: "integer type",
+			jsonSchema: map[string]interface{}{
+				"type": "integer",
+			},
+			want: &genai.Schema{
+				Type: genai.TypeInteger,
+			},
+		},
+		{
+			name: "number type",
+			jsonSchema: map[string]interface{}{
+				"type": "number",
+			},
+			want: &genai.Schema{
+				Type: genai.TypeNumber,
+			},
+		},
+		{
+			name: "boolean type",
+			jsonSchema: map[string]interface{}{
+				"type": "boolean",
+			},
+			want: &genai.Schema{
+				Type: genai.TypeBoolean,
+			},
+		},
+		{
+			name: "string with enum",
+			jsonSchema: map[string]interface{}{
+				"type": "string",
+				"enum": []interface{}{"red", "green", "blue"},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeString,
+				Enum: []string{"red", "green", "blue"},
+			},
+		},
+		{
+			name: "array with string items",
+			jsonSchema: map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeArray,
+				Items: &genai.Schema{
+					Type: genai.TypeString,
+				},
+			},
+		},
+		{
+			name: "array with object items",
+			jsonSchema: map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type": "string",
+						},
+						"age": map[string]interface{}{
+							"type": "integer",
+						},
+					},
+					"required": []interface{}{"name"},
+				},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeArray,
+				Items: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"name": {
+							Type: genai.TypeString,
+						},
+						"age": {
+							Type: genai.TypeInteger,
+						},
+					},
+					Required: []string{"name"},
+				},
+			},
+		},
+		{
+			name: "object with simple properties",
+			jsonSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"title": map[string]interface{}{
+						"type": "string",
+					},
+					"count": map[string]interface{}{
+						"type": "integer",
+					},
+				},
+				"required": []interface{}{"title"},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"title": {
+						Type: genai.TypeString,
+					},
+					"count": {
+						Type: genai.TypeInteger,
+					},
+				},
+				Required: []string{"title"},
+			},
+		},
+		{
+			name: "nested objects",
+			jsonSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"user": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"address": map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"street": map[string]interface{}{
+										"type": "string",
+									},
+									"city": map[string]interface{}{
+										"type": "string",
+									},
+								},
+								"required": []interface{}{"street"},
+							},
+						},
+					},
+				},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"user": {
+						Type: genai.TypeObject,
+						Properties: map[string]*genai.Schema{
+							"address": {
+								Type: genai.TypeObject,
+								Properties: map[string]*genai.Schema{
+									"street": {
+										Type: genai.TypeString,
+									},
+									"city": {
+										Type: genai.TypeString,
+									},
+								},
+								Required: []string{"street"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "array of arrays",
+			jsonSchema: map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "array",
+					"items": map[string]interface{}{
+						"type": "number",
+					},
+				},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeArray,
+				Items: &genai.Schema{
+					Type: genai.TypeArray,
+					Items: &genai.Schema{
+						Type: genai.TypeNumber,
+					},
+				},
+			},
+		},
+		{
+			name: "complex nested structure matching user's causal_chains",
+			jsonSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"causal_chains": map[string]interface{}{
+						"type": "array",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"initial_variable": map[string]interface{}{
+									"type": "string",
+								},
+								"reasoning": map[string]interface{}{
+									"type": "string",
+								},
+								"relationships": map[string]interface{}{
+									"type": "array",
+									"items": map[string]interface{}{
+										"type": "object",
+										"properties": map[string]interface{}{
+											"variable": map[string]interface{}{
+												"type": "string",
+											},
+											"polarity": map[string]interface{}{
+												"type":        "string",
+												"description": "\"+\", or \"-\"",
+											},
+											"polarity_reasoning": map[string]interface{}{
+												"type": "string",
+											},
+										},
+										"required": []interface{}{"variable", "polarity", "polarity_reasoning"},
+									},
+								},
+							},
+							"required": []interface{}{"initial_variable", "relationships", "reasoning"},
+						},
+					},
+				},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"causal_chains": {
+						Type: genai.TypeArray,
+						Items: &genai.Schema{
+							Type: genai.TypeObject,
+							Properties: map[string]*genai.Schema{
+								"initial_variable": {
+									Type: genai.TypeString,
+								},
+								"reasoning": {
+									Type: genai.TypeString,
+								},
+								"relationships": {
+									Type: genai.TypeArray,
+									Items: &genai.Schema{
+										Type: genai.TypeObject,
+										Properties: map[string]*genai.Schema{
+											"variable": {
+												Type: genai.TypeString,
+											},
+											"polarity": {
+												Type:        genai.TypeString,
+												Description: "\"+\", or \"-\"",
+											},
+											"polarity_reasoning": {
+												Type: genai.TypeString,
+											},
+										},
+										Required: []string{"variable", "polarity", "polarity_reasoning"},
+									},
+								},
+							},
+							Required: []string{"initial_variable", "relationships", "reasoning"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "object with multiple required fields",
+			jsonSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"field1": map[string]interface{}{"type": "string"},
+					"field2": map[string]interface{}{"type": "string"},
+					"field3": map[string]interface{}{"type": "string"},
+				},
+				"required": []interface{}{"field1", "field2", "field3"},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"field1": {Type: genai.TypeString},
+					"field2": {Type: genai.TypeString},
+					"field3": {Type: genai.TypeString},
+				},
+				Required: []string{"field1", "field2", "field3"},
+			},
+		},
+		{
+			name: "array without items field",
+			jsonSchema: map[string]interface{}{
+				"type": "array",
+			},
+			want: &genai.Schema{
+				Type: genai.TypeArray,
+			},
+		},
+		{
+			name: "object without properties",
+			jsonSchema: map[string]interface{}{
+				"type": "object",
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+			},
+		},
+		{
+			name: "property with description and enum",
+			jsonSchema: map[string]interface{}{
+				"type":        "string",
+				"description": "Status of the item",
+				"enum":        []interface{}{"pending", "active", "completed"},
+			},
+			want: &genai.Schema{
+				Type:        genai.TypeString,
+				Description: "Status of the item",
+				Enum:        []string{"pending", "active", "completed"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := jsonSchemaToGeminiSchema(tt.jsonSchema)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
