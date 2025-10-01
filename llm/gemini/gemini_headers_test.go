@@ -122,7 +122,6 @@ func TestGemini_HeadersWithOtherOptions(t *testing.T) {
 	client, err := NewClient("test-key",
 		WithModel("gemini-1.5-flash"),
 		WithBaseURL("https://custom.gemini.com/v1"),
-		WithDebug(true),
 		WithHeaders(customHeaders))
 	require.NoError(t, err)
 

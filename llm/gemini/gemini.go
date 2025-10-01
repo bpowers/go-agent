@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -12,15 +13,18 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/internal/logging"
 	"github.com/bpowers/go-agent/llm/internal/common"
 )
+
+var logger = logging.Logger().With("provider", "gemini")
 
 type client struct {
 	genaiClient *genai.Client
 	modelName   string
 	baseURL     string
-	debug       bool
 	headers     map[string]string // Custom HTTP headers
+	logger      *slog.Logger
 }
 
 var _ chat.Client = &client{}
@@ -45,12 +49,6 @@ func WithBaseURL(baseURL string) Option {
 	}
 }
 
-func WithDebug(debug bool) Option {
-	return func(c *client) {
-		c.debug = debug
-	}
-}
-
 func WithHeaders(headers map[string]string) Option {
 	return func(c *client) {
 		c.headers = headers
@@ -71,7 +69,9 @@ func (c *client) Headers() map[string]string {
 
 // NewClient returns a chat client that can begin chat sessions with Google's Gemini API.
 func NewClient(apiKey string, opts ...Option) (chat.Client, error) {
-	c := &client{}
+	c := &client{
+		logger: logger,
+	}
 
 	for _, opt := range opts {
 		opt(c)

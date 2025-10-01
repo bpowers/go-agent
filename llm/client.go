@@ -2,16 +2,18 @@ package llm
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/internal/logging"
 	"github.com/bpowers/go-agent/llm/claude"
 	"github.com/bpowers/go-agent/llm/gemini"
 	"github.com/bpowers/go-agent/llm/openai"
 )
+
+var logger = logging.Logger().With("component", "llm")
 
 // Config holds the LLM client configuration
 type Config struct {
@@ -82,7 +84,7 @@ func NewClient(config *Config) (chat.Client, error) {
 		if baseURL == "" {
 			baseURL = openai.OpenAIURL
 		}
-		log.Printf("Using OpenAI client with model %q\n", config.Model)
+		logger.Info("using OpenAI client", "model", config.Model)
 		return openai.NewClient(baseURL, apiKey, opts...)
 
 	case ProviderClaude:
@@ -105,7 +107,7 @@ func NewClient(config *Config) (chat.Client, error) {
 		if baseURL == "" {
 			baseURL = claude.AnthropicURL
 		}
-		log.Printf("Using Claude client with model %q\n", config.Model)
+		logger.Info("using Claude client", "model", config.Model)
 		return claude.NewClient(baseURL, apiKey, opts...)
 
 	case ProviderGemini:
@@ -129,7 +131,7 @@ func NewClient(config *Config) (chat.Client, error) {
 			opts = append(opts, gemini.WithHeaders(config.Headers))
 		}
 
-		log.Printf("Using Gemini client with model %q\n", config.Model)
+		logger.Info("using Gemini client", "model", config.Model)
 		return gemini.NewClient(apiKey, opts...)
 
 	case ProviderOllama:
@@ -145,7 +147,7 @@ func NewClient(config *Config) (chat.Client, error) {
 		if baseURL == "" {
 			baseURL = openai.OllamaURL
 		}
-		log.Printf("Using OpenAI client locally w/ ollama with model %q\n", config.Model)
+		logger.Info("using OpenAI client locally w/ ollama", "model", config.Model)
 		return openai.NewClient(baseURL, "", opts...)
 
 	default:

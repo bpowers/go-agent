@@ -5,13 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/bpowers/go-agent/chat"
+	"github.com/bpowers/go-agent/internal/logging"
 	"github.com/bpowers/go-agent/persistence"
 )
+
+var logger = logging.Logger().With("component", "session")
 
 // generateSessionID creates a unique session identifier
 func generateSessionID() string {
@@ -305,19 +307,19 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 	// Get actual token usage from the LLM
 	usage, err := tempChat.TokenUsage()
 	if err != nil {
-		log.Printf("Warning: Failed to get token usage from LLM: %v", err)
+		logger.Warn("failed to get token usage from LLM", "error", err)
 	}
 	s.lastUsage = usage.LastMessage
 
 	// Log if we're missing expected token values
 	if usage.LastMessage.InputTokens == 0 {
-		log.Printf("Warning: LLM returned 0 input tokens for message")
+		logger.Warn("LLM returned 0 input tokens for message")
 	}
 	if usage.LastMessage.OutputTokens == 0 {
-		log.Printf("Warning: LLM returned 0 output tokens for response")
+		logger.Warn("LLM returned 0 output tokens for response")
 	}
 	if usage.LastMessage.TotalTokens == 0 {
-		log.Printf("Warning: LLM returned 0 total tokens for exchange")
+		logger.Warn("LLM returned 0 total tokens for exchange")
 	}
 
 	s.cumulativeTokens += usage.LastMessage.TotalTokens
@@ -351,7 +353,7 @@ func (s *session) trackResponse(tempChat chat.Chat, response chat.Message) {
 		}
 
 		if _, err := s.store.AddRecord(s.sessionID, rec); err != nil {
-			log.Printf("Warning: failed to add record for role %s: %v", rec.Role, err)
+			logger.Warn("failed to add record", "role", rec.Role, "error", err)
 		}
 	}
 	s.lastHistoryLen = len(history)
