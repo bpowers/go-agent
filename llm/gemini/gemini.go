@@ -17,6 +17,12 @@ import (
 	"github.com/bpowers/go-agent/llm/internal/common"
 )
 
+// logger is the package-level structured logger with provider context.
+// Log levels used in this package:
+//   - Info: Client creation, API selection, model warnings
+//   - Debug: Stream events, tool calls, token updates, raw API data
+//   - Warn: Missing token usage, unknown models, fallback behavior
+//   - Error: Should never occur (indicates bugs)
 var logger = logging.Logger().With("provider", "gemini")
 
 type client struct {
@@ -153,6 +159,7 @@ func getModelMaxTokens(model string) int {
 		}
 	}
 
+	logger.Warn("unknown model, using conservative default output token limit", "model", model, "default_limit", 128000)
 	return 128000
 }
 
@@ -255,11 +262,15 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	}
 
 	// Stream content
+	c.logger.Debug("starting stream", "model", c.modelName, "has_tools", len(allTools) > 0)
 	stream := c.genaiClient.Models.GenerateContentStream(ctx, c.modelName, contents, config)
 
 	var respContent strings.Builder
 	var functionCalls []*genai.FunctionCall
+	chunkCount := 0
 	for chunk, err := range stream {
+		chunkCount++
+		c.logger.Debug("chunk received", "chunk_num", chunkCount, "candidates", len(chunk.Candidates))
 		if err != nil {
 			return chat.Message{}, fmt.Errorf("streaming error: %w", err)
 		}
@@ -292,10 +303,13 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 						}
 						functionCalls = append(functionCalls, part.FunctionCall)
 
+						// Log function call detection
+						argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+						c.logger.Debug("function call detected", "id", part.FunctionCall.ID, "name", part.FunctionCall.Name, "args", string(argsJSON))
+
 						// Emit tool call event
 						if callback != nil {
-							// Convert arguments to JSON
-							argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+							// Convert arguments to JSON (already done above)
 							toolCallEvent := chat.StreamEvent{
 								Type: chat.StreamEventTypeToolCall,
 								ToolCalls: []chat.ToolCall{
@@ -324,9 +338,17 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 				// Update usage
 				c.state.UpdateUsage(usage)
+
+				// Log token usage
+				totalUsage, _ := c.state.TokenUsage()
+				c.logger.Debug("usage metadata", "input", usage.InputTokens, "output", usage.OutputTokens, "total", usage.TotalTokens, "cached", usage.CachedTokens,
+					"cumulative_input", totalUsage.Cumulative.InputTokens, "cumulative_output", totalUsage.Cumulative.OutputTokens, "cumulative_total", totalUsage.Cumulative.TotalTokens)
 			}
 		}
 	}
+
+	// Log stream completion
+	c.logger.Debug("stream completed", "has_function_calls", len(functionCalls) > 0, "content_length", respContent.Len())
 
 	// Handle tool calls with multiple rounds if needed
 	if len(functionCalls) > 0 {
@@ -452,6 +474,8 @@ func (c *chatClient) mcpToGeminiFunctionDeclaration(mcpDef chat.ToolDef) (*genai
 
 // handleToolCallRounds handles potentially multiple rounds of tool calls
 func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialFunctionCalls []*genai.FunctionCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
+	c.logger.Debug("starting tool call rounds", "initial_function_count", len(initialFunctionCalls))
+
 	// Keep track of all messages for the conversation
 	var msgs []*genai.Content
 	var systemPrompt string
@@ -498,6 +522,12 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	functionCalls := initialFunctionCalls
 
 	for len(functionCalls) > 0 {
+		c.logger.Debug("processing function calls", "count", len(functionCalls))
+		for i, fc := range functionCalls {
+			argsJSON, _ := json.Marshal(fc.Args)
+			c.logger.Debug("function call", "index", i+1, "id", fc.ID, "name", fc.Name, "args", string(argsJSON))
+		}
+
 		// Execute tool calls
 		functionResults, _, err := c.handleFunctionCalls(ctx, functionCalls, callback)
 		if err != nil {
@@ -584,8 +614,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// Process the follow-up stream
 		var respContent strings.Builder
 		functionCalls = nil // Reset for next round
+		followUpChunkCount := 0
 
 		for chunk, err := range followUpStream {
+			followUpChunkCount++
+			c.logger.Debug("follow-up chunk received", "chunk_num", followUpChunkCount, "candidates", len(chunk.Candidates))
 			if err != nil {
 				return chat.Message{}, fmt.Errorf("follow-up streaming error: %w", err)
 			}
@@ -650,17 +683,30 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 					// Update usage
 					c.state.UpdateUsage(usage)
+
+					// Log token usage
+					totalUsage, _ := c.state.TokenUsage()
+					c.logger.Debug("follow-up usage metadata", "input", usage.InputTokens, "output", usage.OutputTokens, "total", usage.TotalTokens,
+						"cumulative_input", totalUsage.Cumulative.InputTokens, "cumulative_output", totalUsage.Cumulative.OutputTokens, "cumulative_total", totalUsage.Cumulative.TotalTokens)
 				}
 			}
 		}
 
 		// If we got more function calls, continue the loop
 		if len(functionCalls) > 0 {
+			c.logger.Debug("got more function calls, continuing", "count", len(functionCalls))
 			continue
 		}
 
 		// No more function calls, we have the final response
+		c.logger.Debug("no more function calls, returning final response", "content_length", len(respContent.String()))
+
 		finalMsg := chat.AssistantMessage(respContent.String())
+
+		// Warn if final response is empty
+		if respContent.Len() == 0 {
+			c.logger.Warn("final response has no content")
+		}
 
 		// Update history with final assistant response (user message already persisted)
 		c.state.AppendMessages([]chat.Message{finalMsg}, nil)
@@ -669,6 +715,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 	}
 
 	// This should never be reached since the loop continues until no function calls
+	c.logger.Error("unexpected end of function call processing", "initial_function_count", len(initialFunctionCalls))
 	return chat.Message{}, fmt.Errorf("unexpected end of function call processing")
 }
 
@@ -723,8 +770,10 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 
 		if err != nil {
 			toolResult.Error = err.Error()
+			c.logger.Debug("tool execution failed", "name", fc.Name, "args", string(argsJSON), "error", err.Error())
 		} else {
 			toolResult.Content = resultStr
+			c.logger.Debug("tool executed successfully", "name", fc.Name, "args", string(argsJSON), "result", resultStr)
 		}
 
 		if callback != nil {
