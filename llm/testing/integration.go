@@ -1319,3 +1319,109 @@ func TestThinkingPreservedWithToolCalls(t *testing.T, client chat.Client) {
 		t.Log("No thinking content found with tool calls - model may not support thinking or didn't use it for this prompt")
 	}
 }
+
+// TestTextBeforeToolCallsPreserved tests that text content emitted before tool calls
+// is preserved in message history. This is a regression test for a bug where initial
+// text content was lost when the model emitted text, then made tool calls.
+func TestTextBeforeToolCallsPreserved(t *testing.T, client chat.Client) {
+	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
+
+	// Register a simple list files tool
+	listTool := &testToolDef{
+		name:        "list_files",
+		description: "List files in a directory",
+		jsonSchema: `{
+			"name": "list_files",
+			"description": "List files in a directory",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"path": {
+						"type": "string",
+						"description": "Directory path to list"
+					}
+				},
+				"required": ["path"]
+			}
+		}`,
+	}
+
+	toolCalled := false
+	err := chatSession.RegisterTool(listTool, func(ctx context.Context, input string) string {
+		toolCalled = true
+		return `["file1.txt", "file2.txt", "file3.txt"]`
+	})
+	require.NoError(t, err, "Failed to register tool")
+
+	// Track content during streaming to verify the model emits text before tool calls
+	var textBeforeToolCall strings.Builder
+	var sawToolCall bool
+	var textAfterToolCall strings.Builder
+
+	// Send a message that should trigger text, then tool call, then more text
+	// Use a prompt that encourages the model to explain what it will do first
+	response, err := chatSession.Message(
+		context.Background(),
+		chat.UserMessage("I need you to list the files in the /tmp directory. Please tell me what you're going to do, then use the list_files tool to get the actual list."),
+		chat.WithStreamingCb(func(event chat.StreamEvent) error {
+			switch event.Type {
+			case chat.StreamEventTypeContent:
+				if !sawToolCall {
+					textBeforeToolCall.WriteString(event.Content)
+				} else {
+					textAfterToolCall.WriteString(event.Content)
+				}
+			case chat.StreamEventTypeToolCall:
+				sawToolCall = true
+				t.Logf("Saw tool call after %d chars of text", textBeforeToolCall.Len())
+			}
+			return nil
+		}),
+	)
+	require.NoError(t, err, "Failed to get response")
+	require.NotEmpty(t, response.GetText(), "Expected non-empty response")
+	require.True(t, toolCalled, "Tool should have been called")
+
+	// Get the history
+	_, history := chatSession.History()
+	require.GreaterOrEqual(t, len(history), 2, "History should contain user and assistant messages")
+
+	// Find the assistant message(s) with tool calls
+	var assistantMsgsWithTools []chat.Message
+	for _, msg := range history {
+		if msg.Role == chat.AssistantRole && msg.HasToolCalls() {
+			assistantMsgsWithTools = append(assistantMsgsWithTools, msg)
+		}
+	}
+
+	require.NotEmpty(t, assistantMsgsWithTools, "Should have at least one assistant message with tool calls")
+
+	// Check the first assistant message with tool calls
+	firstMsgWithTools := assistantMsgsWithTools[0]
+
+	// Extract all text content from this message
+	var preservedText strings.Builder
+	for _, content := range firstMsgWithTools.Contents {
+		if content.Text != "" {
+			preservedText.WriteString(content.Text)
+		}
+	}
+
+	// The key assertion: if text was emitted before tool calls during streaming,
+	// it should be preserved in the message history
+	if textBeforeToolCall.Len() > 0 {
+		t.Logf("Text before tool call during streaming: %d chars", textBeforeToolCall.Len())
+		t.Logf("Text preserved in history: %d chars", preservedText.Len())
+
+		// The preserved text should contain the text that was emitted before the tool call
+		// Note: Some providers might combine all text, others might separate it
+		// The important thing is that the initial text is not lost
+		if preservedText.Len() == 0 {
+			t.Error("Initial text content emitted before tool calls was lost in message history")
+		} else {
+			t.Logf("Successfully preserved text content before tool calls")
+		}
+	} else {
+		t.Log("Model did not emit text before tool calls in this run")
+	}
+}

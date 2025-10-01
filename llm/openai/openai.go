@@ -905,7 +905,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 
 	// Handle tool calls with multiple rounds if needed
 	if len(toolCalls) > 0 {
-		return c.handleToolCallRounds(ctx, reqMsg, toolCalls, reqOpts, callback)
+		return c.handleToolCallRounds(ctx, reqMsg, respContent.String(), toolCalls, reqOpts, callback)
 	}
 
 	respMsg := chat.AssistantMessage(respContent.String())
@@ -922,7 +922,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 }
 
 // handleToolCallRounds handles potentially multiple rounds of tool calls
-func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialToolCalls []openai.ChatCompletionMessageToolCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
+func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.Message, initialContent string, initialToolCalls []openai.ChatCompletionMessageToolCall, reqOpts chat.Options, callback chat.StreamCallback) (chat.Message, error) {
 	// Keep track of all messages for the conversation
 	var msgs []openai.ChatCompletionMessageParamUnion
 
@@ -949,6 +949,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
+	isFirstIteration := true
 
 	for len(toolCalls) > 0 {
 		c.logger.Debug("processing tool calls", "count", len(toolCalls))
@@ -965,6 +966,10 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			chatToolCalls[i] = openaiToolCallToChat(tc)
 		}
 		assistantMsg := chat.Message{Role: chat.AssistantRole}
+		// Add initial text content to the first assistant message if present
+		if isFirstIteration && initialContent != "" {
+			assistantMsg.AddText(initialContent)
+		}
 		for _, tc := range chatToolCalls {
 			assistantMsg.AddToolCall(tc)
 		}
@@ -1143,6 +1148,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		// If we got more tool calls, continue the loop
 		if len(toolCalls) > 0 {
 			c.logger.Debug("got more tool calls", "count", len(toolCalls))
+			isFirstIteration = false
 			continue
 		}
 
