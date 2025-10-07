@@ -219,6 +219,9 @@ type Content struct {
 
 	// Thinking/reasoning content
 	Thinking *ThinkingContent `json:"thinking,omitzero"`
+
+	// System reminder content (ephemeral context added by tooling, filtered when replaying history)
+	SystemReminder string `json:"system_reminder,omitzero"`
 }
 
 // Message represents a message to or from an LLM.

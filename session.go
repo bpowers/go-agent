@@ -600,9 +600,18 @@ func (s *session) buildChatHistoryLocked() (string, []chat.Message) {
 				systemPrompt += "\n\n" + r.GetText()
 			}
 		} else {
+			// Filter out SystemReminder content blocks when rebuilding history
+			// System reminders are ephemeral - they're persisted for audit but not replayed
+			filteredContents := make([]chat.Content, 0, len(r.Contents))
+			for _, c := range r.Contents {
+				if c.SystemReminder == "" {
+					filteredContents = append(filteredContents, c)
+				}
+			}
+
 			msg := chat.Message{
 				Role:     chat.Role(r.Role),
-				Contents: append([]chat.Content(nil), r.Contents...),
+				Contents: filteredContents,
 			}
 			msgs = append(msgs, msg)
 		}

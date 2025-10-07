@@ -146,3 +146,81 @@ func TestEmptyContentBlockSerialization(t *testing.T) {
 		assert.False(t, isEmpty, "Content block %d should not be empty", i)
 	}
 }
+
+// TestSystemReminderPersistence verifies that system reminders are persisted to DB but filtered when history is rebuilt
+func TestSystemReminderPersistence(t *testing.T) {
+	// Create a temporary database
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	// Create store
+	store, err := sqlitestore.New(dbPath)
+	require.NoError(t, err)
+	defer store.Close()
+
+	sessionID := "test-session-reminder"
+
+	// Create a user message with system reminder (simulating what provider would persist)
+	userMsg := chat.Message{Role: chat.UserRole}
+	userMsg.Contents = []chat.Content{
+		{SystemReminder: "<system-reminder>You modified 3 files</system-reminder>"},
+		{Text: "What did I just do?"},
+	}
+	userRecord := persistence.Record{
+		Role:     chat.UserRole,
+		Contents: userMsg.Contents,
+		Live:     true,
+		Status:   persistence.RecordStatusSuccess,
+	}
+	_, err = store.AddRecord(sessionID, userRecord)
+	require.NoError(t, err)
+
+	// Create assistant response
+	assistantMsg := chat.AssistantMessage("You modified 3 files.")
+	assistantRecord := persistence.Record{
+		Role:     chat.AssistantRole,
+		Contents: assistantMsg.Contents,
+		Live:     true,
+		Status:   persistence.RecordStatusSuccess,
+	}
+	_, err = store.AddRecord(sessionID, assistantRecord)
+	require.NoError(t, err)
+
+	// Load records back from DB
+	records, err := store.GetLiveRecords(sessionID)
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+
+	// Verify system reminder was persisted
+	userLoaded := records[0]
+	assert.Equal(t, chat.UserRole, userLoaded.Role)
+	require.Len(t, userLoaded.Contents, 2, "User message should have 2 content blocks")
+
+	// First content block should be the system reminder
+	assert.Equal(t, "<system-reminder>You modified 3 files</system-reminder>", userLoaded.Contents[0].SystemReminder)
+	assert.Empty(t, userLoaded.Contents[0].Text, "System reminder block should not have text")
+
+	// Second content block should be the user text
+	assert.Equal(t, "What did I just do?", userLoaded.Contents[1].Text)
+	assert.Empty(t, userLoaded.Contents[1].SystemReminder, "Text block should not have system reminder")
+
+	t.Log("✓ System reminder was persisted to DB correctly")
+
+	// Now test that Session filters out SystemReminder content when rebuilding history
+	// Create a mock client and session
+	mockClient := &mockClient{}
+	session := NewSession(mockClient, "test system", WithStore(store), WithRestoreSession(sessionID))
+
+	// Get history - should filter out SystemReminder content
+	_, history := session.History()
+	require.Len(t, history, 2, "Should have 2 messages in history")
+
+	// Verify user message has NO system reminder content
+	userMsg = history[0]
+	assert.Equal(t, chat.UserRole, userMsg.Role)
+	require.Len(t, userMsg.Contents, 1, "User message should have only 1 content block (text, no system reminder)")
+	assert.Equal(t, "What did I just do?", userMsg.Contents[0].Text)
+	assert.Empty(t, userMsg.Contents[0].SystemReminder)
+
+	t.Log("✓ System reminder was filtered out when Session rebuilt history")
+}

@@ -862,14 +862,18 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 
 	// Add the initial user message with system reminder prepended if present
 	userBlocks := []anthropic.ContentBlockParamUnion{}
+	chatInitialMsg := chat.Message{Role: chat.UserRole}
 	if reminder := getSystemReminderText(ctx); reminder != "" {
 		userBlocks = append(userBlocks, anthropic.NewTextBlock(reminder))
+		// Add system reminder to the message we'll persist
+		chatInitialMsg.Contents = append(chatInitialMsg.Contents, chat.Content{SystemReminder: reminder})
 	}
 	userBlocks = append(userBlocks, anthropic.NewTextBlock(initialMsg.GetText()))
+	chatInitialMsg.Contents = append(chatInitialMsg.Contents, chat.Content{Text: initialMsg.GetText()})
 	msgs = append(msgs, anthropic.NewUserMessage(userBlocks...))
 
-	// Persist the user message before processing tool rounds so ordering matches chronology
-	c.state.AppendMessages([]chat.Message{initialMsg}, nil)
+	// Persist the user message WITH system reminder for complete audit trail
+	c.state.AppendMessages([]chat.Message{chatInitialMsg}, nil)
 
 	// Process tool calls in a loop until we get a final response
 	toolCalls := initialToolCalls
@@ -917,6 +921,11 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			toolMsg := chat.Message{Role: chat.ToolRole}
 			for _, tr := range chatToolResults {
 				toolMsg.AddToolResult(tr)
+			}
+			// Add system reminder AFTER tool results (Claude's ordering requirement)
+			// This ensures the complete message is persisted for audit trail
+			if reminder := getSystemReminderText(ctx); reminder != "" {
+				toolMsg.Contents = append(toolMsg.Contents, chat.Content{SystemReminder: reminder})
 			}
 			stateMessages = append(stateMessages, toolMsg)
 		}

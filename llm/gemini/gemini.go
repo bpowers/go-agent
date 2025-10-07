@@ -125,6 +125,19 @@ func getSystemReminderText(ctx context.Context) string {
 	return ""
 }
 
+// withPrependedSystemReminder returns a new message with system reminder prepended as first content block
+func withPrependedSystemReminder(ctx context.Context, msg chat.Message) chat.Message {
+	if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
+		if reminder := reminderFunc(); reminder != "" {
+			newContents := make([]chat.Content, 0, len(msg.Contents)+1)
+			newContents = append(newContents, chat.Content{SystemReminder: reminder})
+			newContents = append(newContents, msg.Contents...)
+			return chat.Message{Role: msg.Role, Contents: newContents}
+		}
+	}
+	return msg
+}
+
 // NewChat returns a chat instance.
 func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.Chat {
 	// Determine max tokens based on model
@@ -174,7 +187,6 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	// Apply options to get callback if provided
 	appliedOpts := chat.ApplyOptions(opts...)
 	callback := appliedOpts.StreamingCb
-	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
 	// Build content for all messages
@@ -208,20 +220,14 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		contents = append(contents, converted...)
 	}
 
-	// Add current message using the new converter
-	converted, err := messageToGemini(msg)
+	// Add current message with system reminder prepended if present
+	// This message (with system reminder) will be persisted for audit trail
+	msgWithReminder := withPrependedSystemReminder(ctx, msg)
+	converted, err := messageToGemini(msgWithReminder)
 	if err != nil {
 		return chat.Message{}, fmt.Errorf("converting current message: %w", err)
 	}
 	contents = append(contents, converted...)
-
-	// Prepend system reminder to the last user message if present
-	if reminder := getSystemReminderText(ctx); reminder != "" && len(contents) > 0 {
-		lastMsg := contents[len(contents)-1]
-		if lastMsg.Role == "user" {
-			lastMsg.Parts = append([]*genai.Part{{Text: reminder}}, lastMsg.Parts...)
-		}
-	}
 
 	// Configure generation settings
 	config := &genai.GenerateContentConfig{}
@@ -355,13 +361,14 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 	// Handle tool calls with multiple rounds if needed
 	if len(functionCalls) > 0 {
-		return c.handleToolCallRounds(ctx, reqMsg, functionCalls, reqOpts, callback)
+		return c.handleToolCallRounds(ctx, msgWithReminder, functionCalls, reqOpts, callback)
 	}
 
 	respMsg := chat.AssistantMessage(respContent.String())
 
 	// Update history
-	c.state.AppendMessages([]chat.Message{reqMsg, respMsg}, nil)
+	// Persist the message WITH system reminder for complete audit trail
+	c.state.AppendMessages([]chat.Message{msgWithReminder, respMsg}, nil)
 
 	return respMsg, nil
 }
@@ -981,11 +988,18 @@ func messageToGemini(msg chat.Message) ([]*genai.Content, error) {
 func extractText(msg chat.Message) string {
 	var text string
 	for _, content := range msg.Contents {
+		// Include both Text and SystemReminder fields
 		if content.Text != "" {
 			if text != "" {
 				text += "\n"
 			}
 			text += content.Text
+		}
+		if content.SystemReminder != "" {
+			if text != "" {
+				text += "\n"
+			}
+			text += content.SystemReminder
 		}
 	}
 	return text

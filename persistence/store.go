@@ -181,7 +181,8 @@ type sessionData struct {
 
 func cloneContent(c chat.Content) chat.Content {
 	clone := chat.Content{
-		Text: c.Text,
+		Text:           c.Text,
+		SystemReminder: c.SystemReminder,
 	}
 	if c.ToolCall != nil {
 		tc := *c.ToolCall

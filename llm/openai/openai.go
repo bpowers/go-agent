@@ -210,7 +210,7 @@ func withPrependedSystemReminder(ctx context.Context, msg chat.Message) chat.Mes
 	if reminderFunc := chat.GetSystemReminder(ctx); reminderFunc != nil {
 		if reminder := reminderFunc(); reminder != "" {
 			newContents := make([]chat.Content, 0, len(msg.Contents)+1)
-			newContents = append(newContents, chat.Content{Text: reminder})
+			newContents = append(newContents, chat.Content{SystemReminder: reminder})
 			newContents = append(newContents, msg.Contents...)
 			return chat.Message{Role: msg.Role, Contents: newContents}
 		}
@@ -254,7 +254,6 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 
 // messageStreamResponses uses the Responses API for reasoning models (gpt-5, o1, o3)
 func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
-	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
 	// Snapshot state without holding lock during streaming
@@ -299,9 +298,12 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		})
 	}
 
-	// Add current message using direct Contents access
+	// Add current message with system reminder prepended if present
+	// This message (with system reminder) will be persisted for audit trail
+	msgWithReminder := withPrependedSystemReminder(ctx, msg)
+
 	var currentRole responses.EasyInputMessageRole
-	switch msg.Role {
+	switch msgWithReminder.Role {
 	case chat.UserRole:
 		currentRole = responses.EasyInputMessageRoleUser
 	case chat.AssistantRole:
@@ -310,7 +312,7 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 		currentRole = responses.EasyInputMessageRoleDeveloper
 	}
 
-	text := extractText(msg)
+	text := extractText(msgWithReminder)
 	if text == "" {
 		return chat.Message{}, fmt.Errorf("current message has no text content")
 	}
@@ -508,14 +510,14 @@ func (c *chatClient) messageStreamResponses(ctx context.Context, msg chat.Messag
 	respMsg := chat.AssistantMessage(respContent.String())
 
 	// Update history and usage under lock
-	c.updateHistoryAndUsage([]chat.Message{reqMsg, respMsg}, lastUsage)
+	// Persist the message WITH system reminder for complete audit trail
+	c.updateHistoryAndUsage([]chat.Message{msgWithReminder, respMsg}, lastUsage)
 
 	return respMsg, nil
 }
 
 // messageStreamChatCompletions uses the standard Chat Completions API
 func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.Message, callback chat.StreamCallback, opts ...chat.Option) (chat.Message, error) {
-	reqMsg := msg
 	reqOpts := chat.ApplyOptions(opts...)
 
 	// Snapshot state without holding lock during streaming
@@ -537,6 +539,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	messages = append(messages, historyMsgs...)
 
 	// Convert current message using the new converter, prepending system reminder if present
+	// This message (with system reminder) will be persisted for audit trail
 	msgWithReminder := withPrependedSystemReminder(ctx, msg)
 	currentMsgs, err := messageToOpenAI(msgWithReminder)
 	if err != nil {
@@ -905,13 +908,14 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 
 	// Handle tool calls with multiple rounds if needed
 	if len(toolCalls) > 0 {
-		return c.handleToolCallRounds(ctx, reqMsg, respContent.String(), toolCalls, reqOpts, callback)
+		return c.handleToolCallRounds(ctx, msgWithReminder, respContent.String(), toolCalls, reqOpts, callback)
 	}
 
 	respMsg := chat.AssistantMessage(respContent.String())
 
 	// Update history and usage under lock
-	c.updateHistoryAndUsage([]chat.Message{reqMsg, respMsg}, lastUsage)
+	// Persist the message WITH system reminder for complete audit trail
+	c.updateHistoryAndUsage([]chat.Message{msgWithReminder, respMsg}, lastUsage)
 
 	// Update last usage
 	if lastUsage.TotalTokens == 0 {
@@ -1375,15 +1379,22 @@ func messageToOpenAI(msg chat.Message) ([]openai.ChatCompletionMessageParamUnion
 	}
 }
 
-// extractText concatenates all text content from a message.
+// extractText concatenates all text content from a message, including system reminders.
 func extractText(msg chat.Message) string {
 	var text string
 	for _, content := range msg.Contents {
+		// Include both Text and SystemReminder fields
 		if content.Text != "" {
 			if text != "" {
 				text += "\n"
 			}
 			text += content.Text
+		}
+		if content.SystemReminder != "" {
+			if text != "" {
+				text += "\n"
+			}
+			text += content.SystemReminder
 		}
 	}
 	return text
