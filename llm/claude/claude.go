@@ -276,7 +276,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	if len(allTools) > 0 {
 		tools := make([]anthropic.ToolUnionParam, 0, len(allTools))
 		for _, tool := range allTools {
-			toolParam, err := c.mcpToClaudeTool(tool.Definition)
+			toolParam, err := c.mcpToClaudeTool(tool)
 			if err != nil {
 				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
 			}
@@ -979,7 +979,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		if len(allTools) > 0 {
 			tools := make([]anthropic.ToolUnionParam, 0, len(allTools))
 			for _, tool := range allTools {
-				toolParam, err := c.mcpToClaudeTool(tool.Definition)
+				toolParam, err := c.mcpToClaudeTool(tool)
 				if err != nil {
 					// Skip this tool on error
 					continue

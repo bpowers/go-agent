@@ -13,14 +13,14 @@ import (
 // This simple struct handles the common tool management pattern.
 type Tools struct {
 	mu    sync.RWMutex
-	tools map[string]RegisteredTool // For fast lookups by name
-	order []string                  // Preserves registration order
+	tools map[string]chat.Tool // For fast lookups by name
+	order []string             // Preserves registration order
 }
 
 // NewTools creates a new tool manager.
 func NewTools() *Tools {
 	return &Tools{
-		tools: make(map[string]RegisteredTool),
+		tools: make(map[string]chat.Tool),
 		order: make([]string, 0),
 	}
 }
@@ -41,9 +41,7 @@ func (t *Tools) Register(tool chat.Tool) error {
 		t.order = append(t.order, toolName)
 	}
 
-	t.tools[toolName] = RegisteredTool{
-		Tool: tool,
-	}
+	t.tools[toolName] = tool
 
 	return nil
 }
@@ -65,7 +63,7 @@ func (t *Tools) Deregister(name string) {
 }
 
 // Get retrieves a tool by name.
-func (t *Tools) Get(name string) (RegisteredTool, bool) {
+func (t *Tools) Get(name string) (chat.Tool, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	tool, exists := t.tools[name]
@@ -73,11 +71,11 @@ func (t *Tools) Get(name string) (RegisteredTool, bool) {
 }
 
 // GetAll returns all registered tools in registration order.
-func (t *Tools) GetAll() []RegisteredTool {
+func (t *Tools) GetAll() []chat.Tool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	result := make([]RegisteredTool, 0, len(t.order))
+	result := make([]chat.Tool, 0, len(t.order))
 	for _, name := range t.order {
 		if tool, exists := t.tools[name]; exists {
 			result = append(result, tool)
@@ -107,5 +105,5 @@ func (t *Tools) Execute(ctx context.Context, name string, input string) (string,
 	if !exists {
 		return "", fmt.Errorf("tool %q not found", name)
 	}
-	return tool.Tool.Call(ctx, input), nil
+	return tool.Call(ctx, input), nil
 }

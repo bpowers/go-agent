@@ -558,7 +558,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 	if len(allTools) > 0 {
 		tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
 		for _, tool := range allTools {
-			toolParam, err := c.mcpToOpenAITool(tool.Definition)
+			toolParam, err := c.mcpToOpenAITool(tool)
 			if err != nil {
 				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
 			}
@@ -785,7 +785,7 @@ func (c *chatClient) messageStreamChatCompletions(ctx context.Context, msg chat.
 			if len(allTools) > 0 {
 				tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
 				for _, tool := range allTools {
-					toolParam, err := c.mcpToOpenAITool(tool.Definition)
+					toolParam, err := c.mcpToOpenAITool(tool)
 					if err != nil {
 						// Skip this tool on error
 						continue
@@ -1022,7 +1022,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		if len(allTools) > 0 {
 			tools := make([]openai.ChatCompletionToolParam, 0, len(allTools))
 			for _, tool := range allTools {
-				toolParam, err := c.mcpToOpenAITool(tool.Definition)
+				toolParam, err := c.mcpToOpenAITool(tool)
 				if err != nil {
 					// Skip this tool on error
 					continue

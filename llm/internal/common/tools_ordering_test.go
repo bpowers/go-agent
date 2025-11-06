@@ -14,13 +14,14 @@ func TestToolsPreservesRegistrationOrder(t *testing.T) {
 	// Register tools in a specific order
 	toolNames := []string{"zebra", "apple", "middle", "banana", "xylophone"}
 	for _, name := range toolNames {
-		def := mockTool{
+		nameCapture := name // Capture for closure
+		tool := mockTool{
 			name:        name,
 			description: "test tool " + name,
 			schema:      `{"type": "object"}`,
-		}
-		handler := func(ctx context.Context, input string) string {
-			return "result for " + name
+			handler: func(ctx context.Context, input string) string {
+				return "result for " + nameCapture
+			},
 		}
 		err := tools.Register(tool)
 		require.NoError(t, err)
@@ -30,7 +31,7 @@ func TestToolsPreservesRegistrationOrder(t *testing.T) {
 	allTools := tools.GetAll()
 	assert.Len(t, allTools, 5)
 	for i, name := range toolNames {
-		assert.Equal(t, name, allTools[i].Tool.Name(), "tool at index %d should be %s", i, name)
+		assert.Equal(t, name, allTools[i].Name(), "tool at index %d should be %s", i, name)
 	}
 
 	// List should return tool names in registration order, not alphabetical
@@ -44,13 +45,14 @@ func TestToolsOrderAfterDeregistration(t *testing.T) {
 	// Register tools
 	toolNames := []string{"first", "second", "third", "fourth", "fifth"}
 	for _, name := range toolNames {
-		def := mockTool{
+		nameCapture := name // Capture for closure
+		tool := mockTool{
 			name:        name,
 			description: "test tool " + name,
 			schema:      `{"type": "object"}`,
-		}
-		handler := func(ctx context.Context, input string) string {
-			return "result for " + name
+			handler: func(ctx context.Context, input string) string {
+				return "result for " + nameCapture
+			},
 		}
 		err := tools.Register(tool)
 		require.NoError(t, err)
@@ -71,29 +73,29 @@ func TestToolsReregistrationUpdatesInPlace(t *testing.T) {
 	// Register initial tools
 	toolNames := []string{"alpha", "beta", "gamma"}
 	for _, name := range toolNames {
-		def := mockTool{
+		nameCapture := name // Capture for closure
+		tool := mockTool{
 			name:        name,
 			description: "test tool " + name,
 			schema:      `{"type": "object"}`,
-		}
-		nameCapture := name // Capture the name for the closure
-		handler := func(ctx context.Context, input string) string {
-			return "result v1 for " + nameCapture
+			handler: func(ctx context.Context, input string) string {
+				return "result v1 for " + nameCapture
+			},
 		}
 		err := tools.Register(tool)
 		require.NoError(t, err)
 	}
 
 	// Re-register "beta" with a new handler
-	newDef := mockTool{
+	newTool := mockTool{
 		name:        "beta",
 		description: "updated test tool beta",
 		schema:      `{"type": "object"}`,
+		handler: func(ctx context.Context, input string) string {
+			return "result v2 for beta"
+		},
 	}
-	newHandler := func(ctx context.Context, input string) string {
-		return "result v2 for beta"
-	}
-	err := tools.Register(newDef, newHandler)
+	err := tools.Register(newTool)
 	require.NoError(t, err)
 
 	// Order should remain the same
