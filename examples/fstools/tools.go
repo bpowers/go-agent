@@ -10,11 +10,6 @@ import (
 	"strings"
 )
 
-// stringPtr is a helper function to get a pointer to a string
-func stringPtr(s string) *string {
-	return &s
-}
-
 // contextKey is a private type for context keys
 type contextKey struct{}
 
@@ -32,13 +27,14 @@ func GetTestFS(ctx context.Context) (fs.FS, error) {
 	return testFS, nil
 }
 
-// ReadDirRequest is the input for ReadDir (empty for no-argument function)
-type ReadDirRequest struct{}
+// ReadDirRequest is the input for ReadDir
+type ReadDirRequest struct {
+	Path string `json:"path,omitzero"` // Directory path to read (defaults to "." for root)
+}
 
 // ReadDirResult is the output of ReadDir
 type ReadDirResult struct {
 	Files []FileInfo `json:"files"`
-	Error *string    `json:"error,omitzero"`
 }
 
 // FileInfo contains information about a file
@@ -50,18 +46,24 @@ type FileInfo struct {
 
 //go:generate go run ../../cmd/build/funcschema/main.go -func ReadDir -input tools.go
 
-// ReadDir reads the root directory of the test filesystem
-func ReadDir(ctx context.Context) ReadDirResult {
+// ReadDir reads a directory from the test filesystem
+func ReadDir(ctx context.Context, req ReadDirRequest) (ReadDirResult, error) {
 	fileSystem, err := GetTestFS(ctx)
 	if err != nil {
-		errStr := err.Error()
-		return ReadDirResult{Error: &errStr}
+		return ReadDirResult{}, err
 	}
 
-	entries, err := fs.ReadDir(fileSystem, ".")
+	// Clean the path to prevent directory traversal
+	dirPath := req.Path
+	if dirPath == "" {
+		dirPath = "."
+	}
+	dirPath = path.Clean(dirPath)
+	dirPath = strings.TrimPrefix(dirPath, "/")
+
+	entries, err := fs.ReadDir(fileSystem, dirPath)
 	if err != nil {
-		errStr := err.Error()
-		return ReadDirResult{Error: &errStr}
+		return ReadDirResult{}, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
 	}
 
 	files := make([]FileInfo, 0, len(entries))
@@ -77,7 +79,7 @@ func ReadDir(ctx context.Context) ReadDirResult {
 		})
 	}
 
-	return ReadDirResult{Files: files}
+	return ReadDirResult{Files: files}, nil
 }
 
 // ReadFileRequest is the input for ReadFile
@@ -87,18 +89,16 @@ type ReadFileRequest struct {
 
 // ReadFileResult is the output of ReadFile
 type ReadFileResult struct {
-	Content string  `json:"content"`
-	Error   *string `json:"error,omitzero"`
+	Content string `json:"content"`
 }
 
 //go:generate go run ../../cmd/build/funcschema/main.go -func ReadFile -input tools.go
 
 // ReadFile reads a file from the test filesystem
-func ReadFile(ctx context.Context, req ReadFileRequest) ReadFileResult {
+func ReadFile(ctx context.Context, req ReadFileRequest) (ReadFileResult, error) {
 	fileSystem, err := GetTestFS(ctx)
 	if err != nil {
-		errStr := err.Error()
-		return ReadFileResult{Error: &errStr}
+		return ReadFileResult{}, err
 	}
 
 	// directory traversal should be prevented with os.Root or the use of an in-memory FS,
@@ -108,18 +108,16 @@ func ReadFile(ctx context.Context, req ReadFileRequest) ReadFileResult {
 
 	file, err := fileSystem.Open(fileName)
 	if err != nil {
-		errStr := fmt.Sprintf("failed to open file %s: %v", fileName, err)
-		return ReadFileResult{Error: &errStr}
+		return ReadFileResult{}, fmt.Errorf("failed to open file %s: %w", fileName, err)
 	}
 	defer file.Close()
 
 	content, err := io.ReadAll(file)
 	if err != nil {
-		errStr := fmt.Sprintf("failed to read file %s: %v", fileName, err)
-		return ReadFileResult{Error: &errStr}
+		return ReadFileResult{}, fmt.Errorf("failed to read file %s: %w", fileName, err)
 	}
 
-	return ReadFileResult{Content: string(content)}
+	return ReadFileResult{Content: string(content)}, nil
 }
 
 // WriteFileRequest is the input for WriteFile
@@ -130,18 +128,16 @@ type WriteFileRequest struct {
 
 // WriteFileResult is the output of WriteFile
 type WriteFileResult struct {
-	Success bool    `json:"success"`
-	Error   *string `json:"error,omitzero"`
+	Success bool `json:"success"`
 }
 
 //go:generate go run ../../cmd/build/funcschema/main.go -func WriteFile -input tools.go
 
 // WriteFile writes a file to the test filesystem
-func WriteFile(ctx context.Context, req WriteFileRequest) WriteFileResult {
+func WriteFile(ctx context.Context, req WriteFileRequest) (WriteFileResult, error) {
 	fileSystem, err := GetTestFS(ctx)
 	if err != nil {
-		errStr := err.Error()
-		return WriteFileResult{Error: &errStr}
+		return WriteFileResult{}, err
 	}
 
 	// Clean the path to prevent directory traversal
@@ -157,8 +153,7 @@ func WriteFile(ctx context.Context, req WriteFileRequest) WriteFileResult {
 		if f, ok := fileSystem.(mkdirAller); ok {
 			err = f.MkdirAll(dir, 0o755)
 			if err != nil {
-				errStr := fmt.Sprintf("failed to create directory %s: %v", dir, err)
-				return WriteFileResult{Error: &errStr}
+				return WriteFileResult{}, fmt.Errorf("failed to create directory %s: %w", dir, err)
 			}
 		}
 	}
@@ -170,12 +165,11 @@ func WriteFile(ctx context.Context, req WriteFileRequest) WriteFileResult {
 	if f, ok := fileSystem.(writer); ok {
 		err = f.WriteFile(fileName, []byte(req.Content), 0o644)
 		if err != nil {
-			errStr := fmt.Sprintf("failed to write file %s: %v", fileName, err)
-			return WriteFileResult{Error: &errStr}
+			return WriteFileResult{}, fmt.Errorf("failed to write file %s: %w", fileName, err)
 		}
 	} else {
-		return WriteFileResult{Error: stringPtr("read-only filesystem")}
+		return WriteFileResult{}, fmt.Errorf("read-only filesystem")
 	}
 
-	return WriteFileResult{Success: true}
+	return WriteFileResult{Success: true}, nil
 }

@@ -41,6 +41,22 @@ type Config struct {
 	SystemReminder   bool
 }
 
+// toolWrapper wraps a chat.Tool and calls a hook function before delegating to the wrapped tool
+type toolWrapper struct {
+	tool   chat.Tool
+	onCall func()
+}
+
+func (w *toolWrapper) Name() string          { return w.tool.Name() }
+func (w *toolWrapper) Description() string   { return w.tool.Description() }
+func (w *toolWrapper) MCPJsonSchema() string { return w.tool.MCPJsonSchema() }
+func (w *toolWrapper) Call(ctx context.Context, input string) string {
+	if w.onCall != nil {
+		w.onCall()
+	}
+	return w.tool.Call(ctx, input)
+}
+
 func parseFlags() *Config {
 	return parseFlagsArgs(os.Args[1:])
 }
@@ -134,44 +150,54 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 		lastToolCalled string
 	)
 
-	// Wrap tool handlers to track usage
-	readDirHandler := fstools.ReadDirTool
-	readFileHandler := fstools.ReadFileTool
-	writeFileHandler := fstools.WriteFileTool
-
+	// Register filesystem tools (directly or with tracking wrappers)
 	if config.SystemReminder {
-		readDirHandler = func(ctx context.Context, input string) string {
-			toolCallCount++
-			dirsListed++
-			lastToolCalled = "read_dir"
-			return fstools.ReadDirTool(ctx, input)
+		// Create tracking wrappers
+		readDirTool := &toolWrapper{
+			tool: fstools.ReadDirTool,
+			onCall: func() {
+				toolCallCount++
+				dirsListed++
+				lastToolCalled = "read_dir"
+			},
+		}
+		readFileTool := &toolWrapper{
+			tool: fstools.ReadFileTool,
+			onCall: func() {
+				toolCallCount++
+				filesRead++
+				lastToolCalled = "read_file"
+			},
+		}
+		writeFileTool := &toolWrapper{
+			tool: fstools.WriteFileTool,
+			onCall: func() {
+				toolCallCount++
+				filesWritten++
+				lastToolCalled = "write_file"
+			},
 		}
 
-		readFileHandler = func(ctx context.Context, input string) string {
-			toolCallCount++
-			filesRead++
-			lastToolCalled = "read_file"
-			return fstools.ReadFileTool(ctx, input)
+		if err := session.RegisterTool(readDirTool); err != nil {
+			return fmt.Errorf("failed to register ReadDirTool: %w", err)
 		}
-
-		writeFileHandler = func(ctx context.Context, input string) string {
-			toolCallCount++
-			filesWritten++
-			lastToolCalled = "write_file"
-			return fstools.WriteFileTool(ctx, input)
+		if err = session.RegisterTool(readFileTool); err != nil {
+			return fmt.Errorf("failed to register ReadFileTool: %w", err)
 		}
-	}
-
-	if err := session.RegisterTool(fstools.ReadDirToolDef, readDirHandler); err != nil {
-		return fmt.Errorf("failed to register ReadDirTool: %w", err)
-	}
-
-	if err = session.RegisterTool(fstools.ReadFileToolDef, readFileHandler); err != nil {
-		return fmt.Errorf("failed to register ReadFileTool: %w", err)
-	}
-
-	if err = session.RegisterTool(fstools.WriteFileToolDef, writeFileHandler); err != nil {
-		return fmt.Errorf("failed to register WriteFileTool: %w", err)
+		if err = session.RegisterTool(writeFileTool); err != nil {
+			return fmt.Errorf("failed to register WriteFileTool: %w", err)
+		}
+	} else {
+		// Register tools directly without tracking
+		if err := session.RegisterTool(fstools.ReadDirTool); err != nil {
+			return fmt.Errorf("failed to register ReadDirTool: %w", err)
+		}
+		if err = session.RegisterTool(fstools.ReadFileTool); err != nil {
+			return fmt.Errorf("failed to register ReadFileTool: %w", err)
+		}
+		if err = session.RegisterTool(fstools.WriteFileTool); err != nil {
+			return fmt.Errorf("failed to register WriteFileTool: %w", err)
+		}
 	}
 
 	// Create a reader for user input

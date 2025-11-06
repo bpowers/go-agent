@@ -9,41 +9,58 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
-// readDirToolDefType implements chat.ToolDef for the ReadDir function
-type readDirToolDefType struct{}
-
-func (readDirToolDefType) MCPJsonSchema() string {
-	return `{"name":"read_dir","description":"Reads the root directory of the test filesystem","inputSchema":{"type":"object","properties":{},"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"files":{"type":"array","items":{"type":"object","properties":{"is_dir":{"type":"boolean"},"name":{"type":"string"},"size":{"type":"integer"}},"required":["name","is_dir","size"],"additionalProperties":false}}},"required":["files","error"],"additionalProperties":false}}`
+// readDirResult is the internal result wrapper that adds error handling
+type readDirResult struct {
+	ReadDirResult
+	Error *string `json:"error,omitzero"`
 }
 
-func (readDirToolDefType) Name() string {
+// readDirTool implements chat.Tool for the ReadDir function
+type readDirTool struct{}
+
+func (readDirTool) MCPJsonSchema() string {
+	return `{"name":"read_dir","description":"Reads a directory from the test filesystem","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Directory path to read (defaults to \".\" for root)"}},"required":["path"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"files":{"type":"array","items":{"type":"object","properties":{"is_dir":{"type":"boolean"},"name":{"type":"string"},"size":{"type":"integer"}},"required":["name","is_dir","size"],"additionalProperties":false}}},"required":["files","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
+}
+
+func (readDirTool) Name() string {
 	return "read_dir"
 }
 
-func (readDirToolDefType) Description() string {
-	return "Reads the root directory of the test filesystem"
+func (readDirTool) Description() string {
+	return "Reads a directory from the test filesystem"
 }
 
-// ReadDirToolDef is the MCP tool definition for the ReadDir function
-var ReadDirToolDef chat.ToolDef = readDirToolDefType{}
+func (readDirTool) Call(ctx context.Context, input string) string {
+	// Parse the input JSON
+	var req ReadDirRequest
+	if err := json.Unmarshal([]byte(input), &req); err != nil {
+		errStr := "failed to parse input: " + err.Error()
+		errResp := readDirResult{Error: &errStr}
+		respBytes, _ := json.Marshal(errResp)
+		return string(respBytes)
+	}
 
-// ReadDirTool is a generic wrapper that accepts JSON input and returns JSON output
-func ReadDirTool(ctx context.Context, input string) string {
-	// No input parameters needed, ignore input JSON
+	// Call the actual function
+	result, err := ReadDir(ctx, req)
 
-	// Call the actual function with context only
-	result := ReadDir(ctx)
-
-	// Marshal the result
-	respBytes, err := json.Marshal(result)
+	// Wrap result with error handling
+	wrapped := readDirResult{ReadDirResult: result}
 	if err != nil {
-		errStr := "failed to marshal response: " + err.Error()
-		errResp := ReadDirResult{
-			Error: &errStr,
-		}
+		errStr := err.Error()
+		wrapped.Error = &errStr
+	}
+
+	// Marshal the response
+	respBytes, marshalErr := json.Marshal(wrapped)
+	if marshalErr != nil {
+		errStr := "failed to marshal response: " + marshalErr.Error()
+		errResp := readDirResult{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
 	return string(respBytes)
 }
+
+// ReadDirTool is the tool definition for the ReadDir function
+var ReadDirTool chat.Tool = readDirTool{}

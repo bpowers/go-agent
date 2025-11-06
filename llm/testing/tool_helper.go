@@ -39,13 +39,13 @@ The methodology has proven especially useful in strategy consulting, where it he
 	chatSession := client.NewChat(systemPrompt)
 
 	// Register the filesystem tools
-	err := chatSession.RegisterTool(fstools.ReadDirToolDef, fstools.ReadDirTool)
+	err := chatSession.RegisterTool(fstools.ReadDirTool)
 	require.NoError(t, err)
 
-	err = chatSession.RegisterTool(fstools.ReadFileToolDef, fstools.ReadFileTool)
+	err = chatSession.RegisterTool(fstools.ReadFileTool)
 	require.NoError(t, err)
 
-	err = chatSession.RegisterTool(fstools.WriteFileToolDef, fstools.WriteFileTool)
+	err = chatSession.RegisterTool(fstools.WriteFileTool)
 	require.NoError(t, err)
 
 	// Verify tools are registered
@@ -112,7 +112,7 @@ func TestWritesFile(t testing.TB, client chat.Client) {
 
 	chatSession := client.NewChat("You are a helpful assistant that can work with files.")
 
-	err := chatSession.RegisterTool(fstools.WriteFileToolDef, fstools.WriteFileTool)
+	err := chatSession.RegisterTool(fstools.WriteFileTool)
 	require.NoError(t, err)
 
 	// Ask the LLM to create a file

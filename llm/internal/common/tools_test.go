@@ -188,6 +188,9 @@ func TestTools_Get(t *testing.T) {
 		name:        "test_tool",
 		description: "A test tool",
 		schema:      `{"type": "object"}`,
+		handler: func(ctx context.Context, input string) string {
+			return "result: " + input
+		},
 	}
 
 	err := tools.Register(tool)
@@ -299,6 +302,9 @@ func TestTools_Execute(t *testing.T) {
 			name:        "echo",
 			description: "Echoes input",
 			schema:      `{}`,
+			handler: func(ctx context.Context, input string) string {
+				return "echo: " + input
+			},
 		}
 
 		err := tools.Register(tool)
@@ -327,6 +333,12 @@ func TestTools_Execute(t *testing.T) {
 			name:        "context_aware",
 			description: "Uses context",
 			schema:      `{}`,
+			handler: func(ctx context.Context, input string) string {
+				if ctx.Err() != nil {
+					return "cancelled"
+				}
+				return "ok: " + input
+			},
 		}
 
 		err := tools.Register(tool)
@@ -469,6 +481,10 @@ func TestTools_Concurrency(t *testing.T) {
 			name:        "counter",
 			description: "Counts executions",
 			schema:      `{}`,
+			handler: func(ctx context.Context, input string) string {
+				atomic.AddInt64(&counter, 1)
+				return "counted"
+			},
 		}
 
 		err := tools.Register(tool)

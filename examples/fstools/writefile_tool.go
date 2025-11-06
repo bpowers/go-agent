@@ -9,50 +9,58 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
-// writeFileToolDefType implements chat.ToolDef for the WriteFile function
-type writeFileToolDefType struct{}
-
-func (writeFileToolDefType) MCPJsonSchema() string {
-	return `{"name":"write_file","description":"Writes a file to the test filesystem","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"fileName":{"type":"string"}},"required":["fileName","content"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"success":{"type":"boolean"}},"required":["success","error"],"additionalProperties":false}}`
+// writeFileResult is the internal result wrapper that adds error handling
+type writeFileResult struct {
+	WriteFileResult
+	Error *string `json:"error,omitzero"`
 }
 
-func (writeFileToolDefType) Name() string {
+// writeFileTool implements chat.Tool for the WriteFile function
+type writeFileTool struct{}
+
+func (writeFileTool) MCPJsonSchema() string {
+	return `{"name":"write_file","description":"Writes a file to the test filesystem","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"fileName":{"type":"string"}},"required":["fileName","content"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"success":{"type":"boolean"}},"required":["success","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
+}
+
+func (writeFileTool) Name() string {
 	return "write_file"
 }
 
-func (writeFileToolDefType) Description() string {
+func (writeFileTool) Description() string {
 	return "Writes a file to the test filesystem"
 }
 
-// WriteFileToolDef is the MCP tool definition for the WriteFile function
-var WriteFileToolDef chat.ToolDef = writeFileToolDefType{}
-
-// WriteFileTool is a generic wrapper that accepts JSON input and returns JSON output
-func WriteFileTool(ctx context.Context, input string) string {
+func (writeFileTool) Call(ctx context.Context, input string) string {
 	// Parse the input JSON
 	var req WriteFileRequest
 	if err := json.Unmarshal([]byte(input), &req); err != nil {
 		errStr := "failed to parse input: " + err.Error()
-		errResp := WriteFileResult{
-			Error: &errStr,
-		}
+		errResp := writeFileResult{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
-	// Call the actual function with context
-	result := WriteFile(ctx, req)
+	// Call the actual function
+	result, err := WriteFile(ctx, req)
 
-	// Marshal the result
-	respBytes, err := json.Marshal(result)
+	// Wrap result with error handling
+	wrapped := writeFileResult{WriteFileResult: result}
 	if err != nil {
-		errStr := "failed to marshal response: " + err.Error()
-		errResp := WriteFileResult{
-			Error: &errStr,
-		}
+		errStr := err.Error()
+		wrapped.Error = &errStr
+	}
+
+	// Marshal the response
+	respBytes, marshalErr := json.Marshal(wrapped)
+	if marshalErr != nil {
+		errStr := "failed to marshal response: " + marshalErr.Error()
+		errResp := writeFileResult{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
 	return string(respBytes)
 }
+
+// WriteFileTool is the tool definition for the WriteFile function
+var WriteFileTool chat.Tool = writeFileTool{}

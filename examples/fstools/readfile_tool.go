@@ -9,50 +9,58 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
-// readFileToolDefType implements chat.ToolDef for the ReadFile function
-type readFileToolDefType struct{}
-
-func (readFileToolDefType) MCPJsonSchema() string {
-	return `{"name":"read_file","description":"Reads a file from the test filesystem","inputSchema":{"type":"object","properties":{"fileName":{"type":"string"}},"required":["fileName"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"content":{"type":"string"},"error":{"type":["string","null"]}},"required":["content","error"],"additionalProperties":false}}`
+// readFileResult is the internal result wrapper that adds error handling
+type readFileResult struct {
+	ReadFileResult
+	Error *string `json:"error,omitzero"`
 }
 
-func (readFileToolDefType) Name() string {
+// readFileTool implements chat.Tool for the ReadFile function
+type readFileTool struct{}
+
+func (readFileTool) MCPJsonSchema() string {
+	return `{"name":"read_file","description":"Reads a file from the test filesystem","inputSchema":{"type":"object","properties":{"fileName":{"type":"string"}},"required":["fileName"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"content":{"type":"string"},"error":{"type":["string","null"]}},"required":["content","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
+}
+
+func (readFileTool) Name() string {
 	return "read_file"
 }
 
-func (readFileToolDefType) Description() string {
+func (readFileTool) Description() string {
 	return "Reads a file from the test filesystem"
 }
 
-// ReadFileToolDef is the MCP tool definition for the ReadFile function
-var ReadFileToolDef chat.ToolDef = readFileToolDefType{}
-
-// ReadFileTool is a generic wrapper that accepts JSON input and returns JSON output
-func ReadFileTool(ctx context.Context, input string) string {
+func (readFileTool) Call(ctx context.Context, input string) string {
 	// Parse the input JSON
 	var req ReadFileRequest
 	if err := json.Unmarshal([]byte(input), &req); err != nil {
 		errStr := "failed to parse input: " + err.Error()
-		errResp := ReadFileResult{
-			Error: &errStr,
-		}
+		errResp := readFileResult{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
-	// Call the actual function with context
-	result := ReadFile(ctx, req)
+	// Call the actual function
+	result, err := ReadFile(ctx, req)
 
-	// Marshal the result
-	respBytes, err := json.Marshal(result)
+	// Wrap result with error handling
+	wrapped := readFileResult{ReadFileResult: result}
 	if err != nil {
-		errStr := "failed to marshal response: " + err.Error()
-		errResp := ReadFileResult{
-			Error: &errStr,
-		}
+		errStr := err.Error()
+		wrapped.Error = &errStr
+	}
+
+	// Marshal the response
+	respBytes, marshalErr := json.Marshal(wrapped)
+	if marshalErr != nil {
+		errStr := "failed to marshal response: " + marshalErr.Error()
+		errResp := readFileResult{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
 	return string(respBytes)
 }
+
+// ReadFileTool is the tool definition for the ReadFile function
+var ReadFileTool chat.Tool = readFileTool{}

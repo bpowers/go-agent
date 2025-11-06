@@ -235,8 +235,7 @@ type session struct {
 }
 
 type registeredTool struct {
-	def chat.ToolDef
-	fn  func(context.Context, string) string
+	tool chat.Tool
 }
 
 // SessionID implements Session
@@ -289,9 +288,9 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 	tempChat := s.client.NewChat(systemPrompt, msgs...)
 
 	// Re-register tools
-	for _, tool := range s.tools {
-		if err := tempChat.RegisterTool(tool.def, tool.fn); err != nil {
-			return nil, fmt.Errorf("failed to re-register tool %s: %w", tool.def.Name(), err)
+	for _, rt := range s.tools {
+		if err := tempChat.RegisterTool(rt.tool); err != nil {
+			return nil, fmt.Errorf("failed to re-register tool %s: %w", rt.tool.Name(), err)
 		}
 	}
 
@@ -398,7 +397,7 @@ func (s *session) MaxTokens() int {
 }
 
 // RegisterTool implements chat.Chat
-func (s *session) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
+func (s *session) RegisterTool(tool chat.Tool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -406,13 +405,12 @@ func (s *session) RegisterTool(def chat.ToolDef, fn func(context.Context, string
 		s.tools = make(map[string]registeredTool)
 	}
 
-	s.tools[def.Name()] = registeredTool{
-		def: def,
-		fn:  fn,
+	s.tools[tool.Name()] = registeredTool{
+		tool: tool,
 	}
 
 	// Also register with underlying chat
-	return s.chat.RegisterTool(def, fn)
+	return s.chat.RegisterTool(tool)
 }
 
 // DeregisterTool implements chat.Chat

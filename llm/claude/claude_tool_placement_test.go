@@ -42,8 +42,8 @@ func TestClaudeToolResultPlacement(t *testing.T) {
 	anthropicClient := anthropic.NewClient(option.WithAPIKey(apiKey))
 
 	// Build tool definition from fstools
-	toolDef := fstools.ReadDirToolDef
-	toolJSON := toolDef.MCPJsonSchema()
+	tool := fstools.ReadDirTool
+	toolJSON := tool.MCPJsonSchema()
 	var toolSchema map[string]interface{}
 	err = json.Unmarshal([]byte(toolJSON), &toolSchema)
 	require.NoError(t, err)
@@ -64,8 +64,8 @@ func TestClaudeToolResultPlacement(t *testing.T) {
 
 	// Create the tool parameter for Claude
 	toolParam := anthropic.ToolParam{
-		Name:        toolDef.Name(),
-		Description: anthropic.String(toolDef.Description()),
+		Name:        tool.Name(),
+		Description: anthropic.String(tool.Description()),
 		InputSchema: inputSchemaParam,
 		Type:        anthropic.ToolTypeCustom,
 	}
@@ -106,7 +106,7 @@ func TestClaudeToolResultPlacement(t *testing.T) {
 	}
 
 	// Execute the tool
-	toolResult := fstools.ReadDirTool(ctx, "{}")
+	toolResult := fstools.ReadDirTool.Call(ctx, "{}")
 	t.Logf("Tool result: %s", toolResult)
 	t.Logf("Tool Use ID: %s", toolUseID)
 

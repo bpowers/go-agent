@@ -654,9 +654,9 @@ func (c *chatClient) MaxTokens() int {
 	return c.maxTokens
 }
 
-// RegisterTool registers a tool with its MCP definition and handler function
-func (c *chatClient) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
-	return c.tools.Register(def, fn)
+// RegisterTool registers a tool that can be called by the LLM
+func (c *chatClient) RegisterTool(tool chat.Tool) error {
+	return c.tools.Register(tool)
 }
 
 // DeregisterTool removes a tool by name
