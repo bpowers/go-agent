@@ -26,8 +26,8 @@ func NewTools() *Tools {
 }
 
 // Register adds a tool to the registry.
-func (t *Tools) Register(def chat.ToolDef, handler func(context.Context, string) string) error {
-	toolName := def.Name()
+func (t *Tools) Register(tool chat.Tool) error {
+	toolName := tool.Name()
 	if toolName == "" {
 		return fmt.Errorf("tool definition missing name")
 	}
@@ -42,8 +42,7 @@ func (t *Tools) Register(def chat.ToolDef, handler func(context.Context, string)
 	}
 
 	t.tools[toolName] = RegisteredTool{
-		Definition: def,
-		Handler:    handler,
+		Tool: tool,
 	}
 
 	return nil
@@ -108,5 +107,5 @@ func (t *Tools) Execute(ctx context.Context, name string, input string) (string,
 	if !exists {
 		return "", fmt.Errorf("tool %q not found", name)
 	}
-	return tool.Handler(ctx, input), nil
+	return tool.Tool.Call(ctx, input), nil
 }
