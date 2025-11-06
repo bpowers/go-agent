@@ -35,17 +35,16 @@ type DatasetGetRequest struct {
 type DatasetGetResult struct {
 	Revision string
 	Data     map[string][][]float64
-	Error    *string
 }
 
-func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
+func DatasetGet(ctx context.Context, args DatasetGetRequest) (DatasetGetResult, error) {
 	return DatasetGetResult{
 		Revision: "1",
 		Data: map[string][][]float64{
 			"a": {{0, 1}, {1, 6.3}},
 			"b": {{0, 1}, {1, 2}},
 		},
-	}
+	}, nil
 }`
 
 	testFile := filepath.Join(tmpDir, "testdata.go")
@@ -95,12 +94,13 @@ replace github.com/bpowers/go-agent => ` + repoRoot + `
 
 	// Check that it contains the expected elements
 	expectedElements := []string{
-		"DatasetGetToolDef",
-		"func DatasetGetTool(ctx context.Context, input string) string",
+		"DatasetGetTool",
+		"func (datasetGetTool) Call(ctx context.Context, input string) string",
 		"var req DatasetGetRequest",
-		"result := DatasetGet(ctx, req)",
+		"result, err := DatasetGet(ctx, req)",
 		"json.Unmarshal",
 		"json.Marshal",
+		"chat.Tool",
 	}
 
 	for _, elem := range expectedElements {
@@ -155,13 +155,20 @@ import (
 func TestWrapper(t *testing.T) {
 	ctx := context.Background()
 	input := ` + "`" + `{"datasetId": "test123", "where": null}` + "`" + `
-	output := DatasetGetTool(ctx, input)
-	
-	var result DatasetGetResult
+	output := DatasetGetTool.Call(ctx, input)
+
+	// The result is wrapped with an Error field by the generator
+	var result struct {
+		DatasetGetResult
+		Error *string ` + "`json:\"error,omitzero\"`" + `
+	}
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", *result.Error)
+	}
 	if result.Revision != "1" {
 		t.Errorf("expected Revision='1', got %s", result.Revision)
 	}
@@ -194,15 +201,14 @@ type GetSystemInfoResult struct {
 	Hostname string
 	OS       string
 	Version  string
-	Error    *string
 }
 
-func GetSystemInfo(ctx context.Context) GetSystemInfoResult {
+func GetSystemInfo(ctx context.Context) (GetSystemInfoResult, error) {
 	return GetSystemInfoResult{
 		Hostname: "test-host",
 		OS:       "linux",
 		Version:  "1.0.0",
-	}
+	}, nil
 }`
 
 	testFile := filepath.Join(tmpDir, "testdata.go")
@@ -260,11 +266,12 @@ replace github.com/bpowers/go-agent => ` + repoRoot + `
 
 	// Check that it contains the expected elements for no-argument function
 	expectedElements := []string{
-		"GetSystemInfoToolDef",
-		"func GetSystemInfoTool(ctx context.Context, input string) string",
+		"GetSystemInfoTool",
+		"func (getSystemInfoTool) Call(ctx context.Context, input string) string",
 		"// No input parameters needed, ignore input JSON",
-		"result := GetSystemInfo(ctx)", // Call with only context
-		"json.Marshal(result)",
+		"result, err := GetSystemInfo(ctx)", // Call with only context
+		"json.Marshal",
+		"chat.Tool",
 	}
 
 	for _, elem := range expectedElements {
@@ -306,13 +313,20 @@ import (
 func TestNoArgWrapper(t *testing.T) {
 	ctx := context.Background()
 	// Input is ignored for no-argument functions
-	output := GetSystemInfoTool(ctx, "{}")
-	
-	var result GetSystemInfoResult
+	output := GetSystemInfoTool.Call(ctx, "{}")
+
+	// The result is wrapped with an Error field by the generator
+	var result struct {
+		GetSystemInfoResult
+		Error *string ` + "`json:\"error,omitzero\"`" + `
+	}
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", *result.Error)
+	}
 	if result.Hostname != "test-host" {
 		t.Errorf("expected Hostname='test-host', got %s", result.Hostname)
 	}

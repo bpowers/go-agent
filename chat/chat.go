@@ -8,16 +8,6 @@ import (
 	"github.com/bpowers/go-agent/schema"
 )
 
-// Tool represents a function that can be called by the LLM.
-type Tool struct {
-	// Name is the unique identifier for this tool.
-	Name string `json:"name"`
-	// Description helps the LLM understand when to use this tool.
-	Description string `json:"description"`
-	// Parameters defines the JSON schema for the tool's input parameters.
-	Parameters json.RawMessage `json:"parameters,omitzero"`
-}
-
 // ToolCall represents a request from the LLM to invoke a tool.
 type ToolCall struct {
 	// ID is a unique identifier for this tool call.
@@ -162,6 +152,14 @@ type ToolDef interface {
 	Description() string
 }
 
+// Tool represents a callable tool that can be registered with an LLM.
+// It extends ToolDef with the ability to execute the tool.
+type Tool interface {
+	ToolDef
+	// Call executes the tool with the given context and JSON input, returning JSON output
+	Call(ctx context.Context, input string) string
+}
+
 // Chat is the stateful interface used to interact with an LLM in a turn-based way (including single-turn use).
 type Chat interface {
 	// Message sends a new message, as well as all previous messages, to an LLM returning the result.
@@ -175,11 +173,9 @@ type Chat interface {
 	// MaxTokens returns the maximum token limit for the model
 	MaxTokens() int
 
-	// RegisterTool registers a tool with its MCP definition and handler function.
-	// Tools enable LLMs to perform actions by calling registered functions during conversation.
-	// The def parameter provides the tool's name, description, and MCP JSON schema.
-	// The handler function receives a context (which may contain request-specific state)
-	// and the tool arguments as a JSON string, and returns a JSON string response.
+	// RegisterTool registers a tool that can be called by the LLM during conversation.
+	// Tools enable LLMs to perform actions by executing registered implementations.
+	// The tool parameter provides the tool's name, description, MCP JSON schema, and execution handler.
 	//
 	// All LLM providers (OpenAI, Claude, Gemini) support multi-round tool calling, where the model
 	// can request multiple tools in sequence, using outputs from earlier tools as inputs to later ones.
@@ -192,7 +188,7 @@ type Chat interface {
 	//
 	// Note: OpenAI's Responses API doesn't support tools yet. When tools are registered,
 	// the OpenAI implementation automatically uses the ChatCompletions API instead.
-	RegisterTool(def ToolDef, fn func(context.Context, string) string) error
+	RegisterTool(tool Tool) error
 	// DeregisterTool removes a tool by name
 	DeregisterTool(name string)
 	// ListTools returns the names of all registered tools
