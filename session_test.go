@@ -93,11 +93,11 @@ func (m *mockChat) MaxTokens() int {
 	return m.maxTokens
 }
 
-func (m *mockChat) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
+func (m *mockChat) RegisterTool(tool chat.Tool) error {
 	if m.tools == nil {
 		m.tools = make(map[string]func(context.Context, string) string)
 	}
-	m.tools[def.Name()] = fn
+	m.tools[tool.Name()] = tool.Call
 	return nil
 }
 
@@ -179,16 +179,18 @@ func (c *toolClient) NewChat(systemPrompt string, initialMsgs ...chat.Message) c
 	return newChat
 }
 
-// mockToolDef implements chat.ToolDef for testing
-type mockToolDef struct {
+// mockTool implements chat.Tool for testing
+type mockTool struct {
 	name        string
 	description string
 	schema      string
+	callFn      func(context.Context, string) string
 }
 
-func (t *mockToolDef) Name() string          { return t.name }
-func (t *mockToolDef) Description() string   { return t.description }
-func (t *mockToolDef) MCPJsonSchema() string { return t.schema }
+func (t *mockTool) Name() string                                  { return t.name }
+func (t *mockTool) Description() string                           { return t.description }
+func (t *mockTool) MCPJsonSchema() string                         { return t.schema }
+func (t *mockTool) Call(ctx context.Context, input string) string { return t.callFn(ctx, input) }
 
 // Tests
 
@@ -276,15 +278,16 @@ func TestSessionTools(t *testing.T) {
 	session := NewSession(client, "You are a helpful assistant")
 
 	// Register a tool
-	toolDef := &mockToolDef{
+	tool := &mockTool{
 		name:        "test_tool",
 		description: "A test tool",
 		schema:      `{"type": "object"}`,
+		callFn: func(ctx context.Context, args string) string {
+			return "Tool result"
+		},
 	}
 
-	err := session.RegisterTool(toolDef, func(ctx context.Context, args string) string {
-		return "Tool result"
-	})
+	err := session.RegisterTool(tool)
 	require.NoError(t, err)
 
 	// Check tool is registered

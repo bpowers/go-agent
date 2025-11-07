@@ -94,7 +94,7 @@ func (m *mockSummarizerChat) MaxTokens() int {
 	return 4096
 }
 
-func (m *mockSummarizerChat) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
+func (m *mockSummarizerChat) RegisterTool(tool chat.Tool) error {
 	return nil
 }
 

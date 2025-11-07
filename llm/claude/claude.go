@@ -276,7 +276,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 	if len(allTools) > 0 {
 		tools := make([]anthropic.ToolUnionParam, 0, len(allTools))
 		for _, tool := range allTools {
-			toolParam, err := c.mcpToClaudeTool(tool.Definition)
+			toolParam, err := c.mcpToClaudeTool(tool)
 			if err != nil {
 				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
 			}
@@ -654,9 +654,9 @@ func (c *chatClient) MaxTokens() int {
 	return c.maxTokens
 }
 
-// RegisterTool registers a tool with its MCP definition and handler function
-func (c *chatClient) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
-	return c.tools.Register(def, fn)
+// RegisterTool registers a tool that can be called by the LLM
+func (c *chatClient) RegisterTool(tool chat.Tool) error {
+	return c.tools.Register(tool)
 }
 
 // DeregisterTool removes a tool by name
@@ -979,7 +979,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		if len(allTools) > 0 {
 			tools := make([]anthropic.ToolUnionParam, 0, len(allTools))
 			for _, tool := range allTools {
-				toolParam, err := c.mcpToClaudeTool(tool.Definition)
+				toolParam, err := c.mcpToClaudeTool(tool)
 				if err != nil {
 					// Skip this tool on error
 					continue

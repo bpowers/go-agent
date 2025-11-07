@@ -34,9 +34,8 @@ type SimpleRequest struct {
 }
 type SimpleResult struct {
 	Value string
-	Error *string
 }
-func SimpleFunc(ctx context.Context, req SimpleRequest) SimpleResult { return SimpleResult{Value: req.Name} }`,
+func SimpleFunc(ctx context.Context, req SimpleRequest) (SimpleResult, error) { return SimpleResult{Value: req.Name}, nil }`,
 			funcName: "SimpleFunc",
 			validate: func(t *testing.T, s *schema.JSON) {
 				if s.Type != schema.Object {
@@ -581,14 +580,13 @@ func TestGenerateOutputSchema(t *testing.T) {
 		validate func(t *testing.T, s *schema.JSON)
 	}{
 		{
-			name: "simple struct return with Error field",
+			name: "simple struct return",
 			code: `package test
 type EmptyRequest struct{}
 type SimpleResult struct {
 	Value string
-	Error *string
 }
-func SimpleFunc(req EmptyRequest) SimpleResult { return SimpleResult{Value: "test"} }`,
+func SimpleFunc(req EmptyRequest) (SimpleResult, error) { return SimpleResult{Value: "test"}, nil }`,
 			funcName: "SimpleFunc",
 			validate: func(t *testing.T, s *schema.JSON) {
 				if s.Type != schema.Object {
@@ -597,15 +595,16 @@ func SimpleFunc(req EmptyRequest) SimpleResult { return SimpleResult{Value: "tes
 				if s.Properties["Value"].Type != schema.String {
 					t.Error("expected Value property")
 				}
-				if s.Properties["Error"] == nil {
-					t.Error("expected Error property")
+				// Error field should be added by generator
+				if s.Properties["error"] == nil {
+					t.Error("expected error property (added by generator)")
 				}
 				// Error should be nullable
-				typeArr, ok := s.Properties["Error"].Type.([]interface{})
+				typeArr, ok := s.Properties["error"].Type.([]interface{})
 				if !ok {
-					t.Errorf("expected type array for nullable Error, got %T", s.Properties["Error"].Type)
+					t.Errorf("expected type array for nullable error, got %T", s.Properties["error"].Type)
 				} else if len(typeArr) != 2 || typeArr[0] != "string" || typeArr[1] != "null" {
-					t.Errorf("expected [\"string\", \"null\"] for Error, got %v", typeArr)
+					t.Errorf("expected [\"string\", \"null\"] for error, got %v", typeArr)
 				}
 				// All fields should be required for OpenAI compatibility
 				if len(s.Required) != 2 {
@@ -620,9 +619,8 @@ type Request struct{}
 type Result struct {
 	Name string
 	Count int
-	Error *string
 }
-func StructReturn(req Request) Result { return Result{} }`,
+func StructReturn(req Request) (Result, error) { return Result{}, nil }`,
 			funcName: "StructReturn",
 			validate: func(t *testing.T, s *schema.JSON) {
 				if s.Type != schema.Object {
@@ -634,8 +632,8 @@ func StructReturn(req Request) Result { return Result{} }`,
 				if s.Properties["Count"].Type != "integer" {
 					t.Error("expected Count property")
 				}
-				if s.Properties["Error"] == nil {
-					t.Error("expected Error property")
+				if s.Properties["error"] == nil {
+					t.Error("expected error property (added by generator)")
 				}
 			},
 		},
@@ -649,9 +647,8 @@ type NestedData struct {
 }
 type NestedResult struct {
 	Data  NestedData
-	Error *string
 }
-func NestedFunc(ctx context.Context) NestedResult { return NestedResult{} }`,
+func NestedFunc(ctx context.Context) (NestedResult, error) { return NestedResult{}, nil }`,
 			funcName: "NestedFunc",
 			validate: func(t *testing.T, s *schema.JSON) {
 				if s.Type != schema.Object {
@@ -686,9 +683,8 @@ type FileInfo struct {
 }
 type ListResult struct {
 	Files []FileInfo
-	Error *string
 }
-func ListFunc(ctx context.Context) ListResult { return ListResult{} }`,
+func ListFunc(ctx context.Context) (ListResult, error) { return ListResult{}, nil }`,
 			funcName: "ListFunc",
 			validate: func(t *testing.T, s *schema.JSON) {
 				if s.Properties["Files"] == nil {
@@ -718,9 +714,8 @@ func ListFunc(ctx context.Context) ListResult { return ListResult{} }`,
 type Request struct{}
 type MapResult struct {
 	Data map[string]int
-	Error *string
 }
-func MapReturn(req Request) MapResult { return MapResult{} }`,
+func MapReturn(req Request) (MapResult, error) { return MapResult{}, nil }`,
 			funcName: "MapReturn",
 			validate: func(t *testing.T, s *schema.JSON) {
 				if s.Type != schema.Object {
@@ -737,8 +732,8 @@ func MapReturn(req Request) MapResult { return MapResult{} }`,
 				if dataField.AdditionalProperties == nil || !*dataField.AdditionalProperties {
 					t.Error("expected additionalProperties to be true for map")
 				}
-				if s.Properties["Error"] == nil {
-					t.Error("expected Error property")
+				if s.Properties["error"] == nil {
+					t.Error("expected error property (added by generator)")
 				}
 			},
 		},
@@ -748,9 +743,8 @@ func MapReturn(req Request) MapResult { return MapResult{} }`,
 type Request struct{}
 type ArrayResult struct {
 	Data [][]float64
-	Error *string
 }
-func ArrayOfArrays(req Request) ArrayResult { return ArrayResult{} }`,
+func ArrayOfArrays(req Request) (ArrayResult, error) { return ArrayResult{}, nil }`,
 			funcName: "ArrayOfArrays",
 			validate: func(t *testing.T, s *schema.JSON) {
 				if s.Type != schema.Object {
@@ -770,8 +764,8 @@ func ArrayOfArrays(req Request) ArrayResult { return ArrayResult{} }`,
 				if dataField.Items.Items == nil || dataField.Items.Items.Type != "number" {
 					t.Error("expected array of array of numbers")
 				}
-				if s.Properties["Error"] == nil {
-					t.Error("expected Error property")
+				if s.Properties["error"] == nil {
+					t.Error("expected error property (added by generator)")
 				}
 			},
 		},
@@ -843,11 +837,10 @@ type DatasetGetRequest struct {
 type DatasetGetResult struct {
 	Revision string
 	Data     map[string][][]float64
-	Error    *string
 }
 
-func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
-	return DatasetGetResult{}
+func DatasetGet(ctx context.Context, args DatasetGetRequest) (DatasetGetResult, error) {
+	return DatasetGetResult{}, nil
 }`
 
 	fset := token.NewFileSet()
@@ -945,15 +938,15 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
 	if outProps["Data"] == nil {
 		t.Error("expected Data in output properties")
 	}
-	if outProps["Error"] == nil {
-		t.Error("expected Error in output properties")
+	if outProps["error"] == nil {
+		t.Error("expected error in output properties (added by generator)")
 	}
 
-	// Check Error is nullable
-	errorSchema := outProps["Error"].(map[string]interface{})
+	// Check error is nullable
+	errorSchema := outProps["error"].(map[string]interface{})
 	errorType := errorSchema["type"]
 	if errorTypeArr, ok := errorType.([]interface{}); !ok || len(errorTypeArr) != 2 {
-		t.Errorf("expected Error type to be [\"string\", \"null\"], got %v", errorType)
+		t.Errorf("expected error type to be [\"string\", \"null\"], got %v", errorType)
 	}
 }
 
@@ -1002,13 +995,13 @@ func PtrParam(ctx context.Context, req *Request) Result { return Result{} }`,
 			wantErr:  "second parameter must be a struct type",
 		},
 		{
-			name: "multiple return values",
+			name: "multiple return values (string, error)",
 			code: `package test
 import "context"
 type Request struct{}
 func MultiReturn(ctx context.Context, req Request) (string, error) { return "", nil }`,
 			funcName: "MultiReturn",
-			wantErr:  "must return exactly one value",
+			wantErr:  "first return value must be a struct type",
 		},
 		{
 			name: "no return value",
@@ -1017,20 +1010,19 @@ import "context"
 type Request struct{}
 func NoReturn(ctx context.Context, req Request) { }`,
 			funcName: "NoReturn",
-			wantErr:  "must return exactly one value",
+			wantErr:  "must return exactly two values",
 		},
 		{
-			name: "return type without Error field",
+			name: "return single value instead of (Type, error)",
 			code: `package test
 import "context"
 type Request struct{}
 type BadResult struct {
 	Value string
-	// Missing Error field
 }
 func BadReturn(ctx context.Context, req Request) BadResult { return BadResult{} }`,
 			funcName: "BadReturn",
-			wantErr:  "must be a struct with an Error field",
+			wantErr:  "must return exactly two values",
 		},
 		{
 			name: "method not function",
@@ -1117,15 +1109,21 @@ func validateFunction(targetFunc *ast.FuncDecl, funcName string, files []*ast.Fi
 		}
 	}
 
-	// Check return values - must return exactly one value
-	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) != 1 {
-		return fmt.Errorf("function %s must return exactly one value", funcName)
+	// Check return values - must return exactly two values: (ResultType, error)
+	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) != 2 {
+		return fmt.Errorf("function %s must return exactly two values (ResultType, error)", funcName)
 	}
 
-	// Validate that return type is a struct with an Error field
-	resultType := targetFunc.Type.Results.List[0].Type
-	if !hasErrorField(resultType, files) {
-		return fmt.Errorf("function %s return type must be a struct with an Error field", funcName)
+	// First return value must be a struct type
+	firstResult := targetFunc.Type.Results.List[0].Type
+	if !isStructTypeOrNamedStruct(firstResult, files) {
+		return fmt.Errorf("function %s first return value must be a struct type", funcName)
+	}
+
+	// Second return value must be error type
+	secondResult := targetFunc.Type.Results.List[1].Type
+	if !isErrorType(secondResult) {
+		return fmt.Errorf("function %s second return value must be error", funcName)
 	}
 
 	return nil
@@ -1139,13 +1137,12 @@ import "context"
 
 type ListFilesResult struct {
 	Files []string
-	Error *string
 }
 
-func ListFiles(ctx context.Context) ListFilesResult {
+func ListFiles(ctx context.Context) (ListFilesResult, error) {
 	return ListFilesResult{
 		Files: []string{"file1.txt", "file2.txt", "dir/file3.go"},
-	}
+	}, nil
 }`
 
 	fset := token.NewFileSet()
@@ -1209,8 +1206,8 @@ func ListFiles(ctx context.Context) ListFilesResult {
 	if outputSchema.Properties["Files"] == nil {
 		t.Error("expected Files property in output")
 	}
-	if outputSchema.Properties["Error"] == nil {
-		t.Error("expected Error property in output")
+	if outputSchema.Properties["error"] == nil {
+		t.Error("expected error property in output (added by generator)")
 	}
 
 	// Create tool definition
@@ -1307,11 +1304,10 @@ type Map struct {
 type MapResult struct {
 	Description string     ` + "`json:\"description\"`" + `
 	Loops       [][]string ` + "`json:\"loops\"`" + `
-	Error       *string    ` + "`json:\"error\"`" + `
 }
 
-func SubmitCausalMap(ctx context.Context, m Map) MapResult {
-	return MapResult{Description: "test"}
+func SubmitCausalMap(ctx context.Context, m Map) (MapResult, error) {
+	return MapResult{Description: "test"}, nil
 }`
 
 	fset := token.NewFileSet()
@@ -1457,11 +1453,10 @@ type Map struct {
 
 type MapResult struct {
 	Description string  ` + "`json:\"description\"`" + `
-	Error       *string ` + "`json:\"error\"`" + `
 }
 
-func SubmitCausalMap(ctx context.Context, m Map) MapResult {
-	return MapResult{Description: "test"}
+func SubmitCausalMap(ctx context.Context, m Map) (MapResult, error) {
+	return MapResult{Description: "test"}, nil
 }`
 
 	fset := token.NewFileSet()
@@ -1534,11 +1529,10 @@ type Map struct {
 
 type MapResult struct {
 	Description string  ` + "`json:\"description\"`" + `
-	Error       *string ` + "`json:\"error\"`" + `
 }
 
-func SubmitCausalMap(ctx context.Context, m Map) MapResult {
-	return MapResult{Description: "test"}
+func SubmitCausalMap(ctx context.Context, m Map) (MapResult, error) {
+	return MapResult{Description: "test"}, nil
 }`
 
 	fset := token.NewFileSet()

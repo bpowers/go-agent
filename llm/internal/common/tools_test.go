@@ -13,27 +13,35 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
-// mockToolDef implements chat.ToolDef for testing
-type mockToolDef struct {
+// mockTool implements chat.ToolDef for testing
+type mockTool struct {
 	name        string
 	description string
 	schema      string
+	handler     func(context.Context, string) string
 }
 
-func (m mockToolDef) Name() string {
+func (m mockTool) Name() string {
 	return m.name
 }
 
-func (m mockToolDef) Description() string {
+func (m mockTool) Description() string {
 	return m.description
 }
 
-func (m mockToolDef) MCPJsonSchema() string {
+func (m mockTool) MCPJsonSchema() string {
 	return m.schema
 }
 
-// ensureToolDef is a helper function to ensure mockToolDef implements chat.ToolDef
-func ensureToolDef(t chat.ToolDef) chat.ToolDef {
+func (m mockTool) Call(ctx context.Context, input string) string {
+	if m.handler != nil {
+		return m.handler(ctx, input)
+	}
+	return "mock result"
+}
+
+// ensureTool is a helper function to ensure mockTool implements chat.Tool
+func ensureTool(t chat.Tool) chat.Tool {
 	return t
 }
 
@@ -53,19 +61,18 @@ func TestTools_Register(t *testing.T) {
 		t.Parallel()
 		tools := NewTools()
 
-		def := mockToolDef{
+		tool := mockTool{
 			name:        "test_tool",
 			description: "A test tool",
 			schema:      `{"type": "object"}`,
+			handler: func(ctx context.Context, input string) string {
+				return "result: " + input
+			},
 		}
-		// Ensure mockToolDef implements chat.ToolDef
-		_ = ensureToolDef(def)
+		// Ensure mockTool implements chat.Tool
+		_ = ensureTool(tool)
 
-		handler := func(ctx context.Context, input string) string {
-			return "result: " + input
-		}
-
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, tools.Count())
@@ -76,17 +83,13 @@ func TestTools_Register(t *testing.T) {
 		t.Parallel()
 		tools := NewTools()
 
-		def := mockToolDef{
+		tool := mockTool{
 			name:        "",
 			description: "A test tool",
 			schema:      `{"type": "object"}`,
 		}
 
-		handler := func(ctx context.Context, input string) string {
-			return "result"
-		}
-
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "missing name")
 	})
@@ -96,17 +99,13 @@ func TestTools_Register(t *testing.T) {
 		tools := NewTools()
 
 		for i := 0; i < 5; i++ {
-			def := mockToolDef{
+			tool := mockTool{
 				name:        fmt.Sprintf("tool_%d", i),
 				description: fmt.Sprintf("Tool %d", i),
 				schema:      `{"type": "object"}`,
 			}
 
-			handler := func(ctx context.Context, input string) string {
-				return "result"
-			}
-
-			err := tools.Register(def, handler)
+			err := tools.Register(tool)
 			require.NoError(t, err)
 		}
 
@@ -121,31 +120,29 @@ func TestTools_Register(t *testing.T) {
 		t.Parallel()
 		tools := NewTools()
 
-		def1 := mockToolDef{
+		tool1 := mockTool{
 			name:        "tool",
 			description: "First version",
 			schema:      `{"v": 1}`,
+			handler: func(ctx context.Context, input string) string {
+				return "v1"
+			},
 		}
 
-		handler1 := func(ctx context.Context, input string) string {
-			return "v1"
-		}
-
-		err := tools.Register(def1, handler1)
+		err := tools.Register(tool1)
 		require.NoError(t, err)
 
 		// Register with same name
-		def2 := mockToolDef{
+		tool2 := mockTool{
 			name:        "tool",
 			description: "Second version",
 			schema:      `{"v": 2}`,
+			handler: func(ctx context.Context, input string) string {
+				return "v2"
+			},
 		}
 
-		handler2 := func(ctx context.Context, input string) string {
-			return "v2"
-		}
-
-		err = tools.Register(def2, handler2)
+		err = tools.Register(tool2)
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, tools.Count())
@@ -153,8 +150,8 @@ func TestTools_Register(t *testing.T) {
 		// Verify it was overridden
 		tool, exists := tools.Get("tool")
 		require.True(t, exists)
-		assert.Equal(t, "Second version", tool.Definition.Description())
-		assert.Equal(t, "v2", tool.Handler(context.Background(), ""))
+		assert.Equal(t, "Second version", tool.Description())
+		assert.Equal(t, "v2", tool.Call(context.Background(), ""))
 	})
 }
 
@@ -163,17 +160,13 @@ func TestTools_Deregister(t *testing.T) {
 
 	tools := NewTools()
 
-	def := mockToolDef{
+	tool := mockTool{
 		name:        "test_tool",
 		description: "A test tool",
 		schema:      `{"type": "object"}`,
 	}
 
-	handler := func(ctx context.Context, input string) string {
-		return "result"
-	}
-
-	err := tools.Register(def, handler)
+	err := tools.Register(tool)
 	require.NoError(t, err)
 	assert.Equal(t, 1, tools.Count())
 
@@ -191,25 +184,24 @@ func TestTools_Get(t *testing.T) {
 
 	tools := NewTools()
 
-	def := mockToolDef{
+	tool := mockTool{
 		name:        "test_tool",
 		description: "A test tool",
 		schema:      `{"type": "object"}`,
+		handler: func(ctx context.Context, input string) string {
+			return "result: " + input
+		},
 	}
 
-	handler := func(ctx context.Context, input string) string {
-		return "result: " + input
-	}
-
-	err := tools.Register(def, handler)
+	err := tools.Register(tool)
 	require.NoError(t, err)
 
 	// Get existing tool
-	tool, exists := tools.Get("test_tool")
+	gotTool, exists := tools.Get("test_tool")
 	assert.True(t, exists)
-	assert.Equal(t, "test_tool", tool.Definition.Name())
-	assert.Equal(t, "A test tool", tool.Definition.Description())
-	assert.Equal(t, "result: test", tool.Handler(context.Background(), "test"))
+	assert.Equal(t, "test_tool", gotTool.Name())
+	assert.Equal(t, "A test tool", gotTool.Description())
+	assert.Equal(t, "result: test", gotTool.Call(context.Background(), "test"))
 
 	// Get non-existent tool
 	_, exists = tools.Get("non_existent")
@@ -223,17 +215,13 @@ func TestTools_GetAll(t *testing.T) {
 
 	// Register multiple tools
 	for i := 0; i < 3; i++ {
-		def := mockToolDef{
+		tool := mockTool{
 			name:        fmt.Sprintf("tool_%d", i),
 			description: fmt.Sprintf("Tool %d", i),
 			schema:      `{"type": "object"}`,
 		}
 
-		handler := func(ctx context.Context, input string) string {
-			return "result"
-		}
-
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		require.NoError(t, err)
 	}
 
@@ -243,15 +231,15 @@ func TestTools_GetAll(t *testing.T) {
 	// Verify all tools are present and in registration order
 	for i := 0; i < 3; i++ {
 		name := fmt.Sprintf("tool_%d", i)
-		assert.Equal(t, name, all[i].Definition.Name())
+		assert.Equal(t, name, all[i].Name())
 	}
 
 	// Modifying returned slice shouldn't affect internal state
 	if len(all) > 0 {
-		all[0] = RegisteredTool{} // Try to modify
+		all[0] = nil // Try to modify
 	}
 	newAll := tools.GetAll()
-	assert.Equal(t, "tool_0", newAll[0].Definition.Name()) // Should still be original
+	assert.Equal(t, "tool_0", newAll[0].Name()) // Should still be original
 	assert.Equal(t, 3, tools.Count())
 }
 
@@ -266,15 +254,12 @@ func TestTools_List(t *testing.T) {
 	// Register tools with unsorted names
 	names := []string{"zebra", "alpha", "beta", "gamma"}
 	for _, name := range names {
-		def := mockToolDef{
+		tool := mockTool{
 			name:        name,
 			description: "desc",
 			schema:      `{}`,
 		}
-		handler := func(ctx context.Context, input string) string {
-			return ""
-		}
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		require.NoError(t, err)
 	}
 
@@ -291,15 +276,12 @@ func TestTools_Count(t *testing.T) {
 
 	// Register tools
 	for i := 0; i < 5; i++ {
-		def := mockToolDef{
+		tool := mockTool{
 			name:        fmt.Sprintf("tool_%d", i),
 			description: "desc",
 			schema:      `{}`,
 		}
-		handler := func(ctx context.Context, input string) string {
-			return ""
-		}
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		require.NoError(t, err)
 		assert.Equal(t, i+1, tools.Count())
 	}
@@ -316,17 +298,16 @@ func TestTools_Execute(t *testing.T) {
 		t.Parallel()
 		tools := NewTools()
 
-		def := mockToolDef{
+		tool := mockTool{
 			name:        "echo",
 			description: "Echoes input",
 			schema:      `{}`,
+			handler: func(ctx context.Context, input string) string {
+				return "echo: " + input
+			},
 		}
 
-		handler := func(ctx context.Context, input string) string {
-			return "echo: " + input
-		}
-
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		require.NoError(t, err)
 
 		result, err := tools.Execute(context.Background(), "echo", "hello")
@@ -348,22 +329,19 @@ func TestTools_Execute(t *testing.T) {
 		t.Parallel()
 		tools := NewTools()
 
-		def := mockToolDef{
+		tool := mockTool{
 			name:        "context_aware",
 			description: "Uses context",
 			schema:      `{}`,
-		}
-
-		handler := func(ctx context.Context, input string) string {
-			select {
-			case <-ctx.Done():
-				return "cancelled"
-			default:
+			handler: func(ctx context.Context, input string) string {
+				if ctx.Err() != nil {
+					return "cancelled"
+				}
 				return "ok: " + input
-			}
+			},
 		}
 
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		require.NoError(t, err)
 
 		// Normal execution
@@ -397,17 +375,13 @@ func TestTools_Concurrency(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 
-				def := mockToolDef{
+				tool := mockTool{
 					name:        fmt.Sprintf("tool_%d", id),
 					description: fmt.Sprintf("Tool %d", id),
 					schema:      `{}`,
 				}
 
-				handler := func(ctx context.Context, input string) string {
-					return fmt.Sprintf("result_%d", id)
-				}
-
-				err := tools.Register(def, handler)
+				err := tools.Register(tool)
 				if err != nil {
 					t.Errorf("Failed to register tool %d: %v", id, err)
 				}
@@ -425,15 +399,12 @@ func TestTools_Concurrency(t *testing.T) {
 
 		// Pre-register some tools
 		for i := 0; i < 10; i++ {
-			def := mockToolDef{
+			tool := mockTool{
 				name:        fmt.Sprintf("tool_%d", i),
 				description: "desc",
 				schema:      `{}`,
 			}
-			handler := func(ctx context.Context, input string) string {
-				return "result"
-			}
-			err := tools.Register(def, handler)
+			err := tools.Register(tool)
 			require.NoError(t, err)
 		}
 
@@ -467,29 +438,23 @@ func TestTools_Concurrency(t *testing.T) {
 				for j := 0; j < iterations; j++ {
 					if j%3 == 0 {
 						// Register new tool
-						def := mockToolDef{
+						tool := mockTool{
 							name:        fmt.Sprintf("dynamic_%d_%d", id, j),
 							description: "dynamic",
 							schema:      `{}`,
 						}
-						handler := func(ctx context.Context, input string) string {
-							return "dynamic"
-						}
-						tools.Register(def, handler)
+						tools.Register(tool)
 					} else if j%3 == 1 {
 						// Deregister tool
 						tools.Deregister(fmt.Sprintf("dynamic_%d_%d", id, j-1))
 					} else {
 						// Re-register existing tool
-						def := mockToolDef{
+						tool := mockTool{
 							name:        fmt.Sprintf("tool_%d", j%10),
 							description: "updated",
 							schema:      `{}`,
 						}
-						handler := func(ctx context.Context, input string) string {
-							return "updated"
-						}
-						tools.Register(def, handler)
+						tools.Register(tool)
 					}
 				}
 			}(i)
@@ -512,18 +477,17 @@ func TestTools_Concurrency(t *testing.T) {
 
 		var counter int64
 
-		def := mockToolDef{
+		tool := mockTool{
 			name:        "counter",
 			description: "Counts executions",
 			schema:      `{}`,
+			handler: func(ctx context.Context, input string) string {
+				atomic.AddInt64(&counter, 1)
+				return "counted"
+			},
 		}
 
-		handler := func(ctx context.Context, input string) string {
-			atomic.AddInt64(&counter, 1)
-			return "counted"
-		}
-
-		err := tools.Register(def, handler)
+		err := tools.Register(tool)
 		require.NoError(t, err)
 
 		const numGoroutines = 100
@@ -566,15 +530,12 @@ func TestTools_Concurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				def := mockToolDef{
+				tool := mockTool{
 					name:        "race_tool",
 					description: "racing",
 					schema:      `{}`,
 				}
-				handler := func(ctx context.Context, input string) string {
-					return "result"
-				}
-				tools.Register(def, handler)
+				tools.Register(tool)
 			}
 		}()
 

@@ -140,15 +140,21 @@ func run() error {
 		}
 	}
 
-	// Check return values - must return exactly one value
-	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) != 1 {
-		return fmt.Errorf("function %s must return exactly one value", *funcName)
+	// Check return values - must return exactly two values: (ResultType, error)
+	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) != 2 {
+		return fmt.Errorf("function %s must return exactly two values (ResultType, error)", *funcName)
 	}
 
-	// Validate that return type is a struct with an Error field
-	resultType := targetFunc.Type.Results.List[0].Type
-	if !hasErrorField(resultType, files) {
-		return fmt.Errorf("function %s return type must be a struct with an Error field", *funcName)
+	// First return value must be a struct type
+	firstResult := targetFunc.Type.Results.List[0].Type
+	if !isStructTypeOrNamedStruct(firstResult, files) {
+		return fmt.Errorf("function %s first return value must be a struct type", *funcName)
+	}
+
+	// Second return value must be error type
+	secondResult := targetFunc.Type.Results.List[1].Type
+	if !isErrorType(secondResult) {
+		return fmt.Errorf("function %s second return value must be error", *funcName)
 	}
 
 	// Generate input schema from parameters
@@ -233,13 +239,48 @@ func generateInputSchema(params *ast.FieldList, files []*ast.File, docPkg *doc.P
 }
 
 func generateOutputSchema(results *ast.FieldList, files []*ast.File, docPkg *doc.Package) (*schema.JSON, error) {
-	if results == nil || len(results.List) != 1 {
-		return nil, fmt.Errorf("function must return exactly one value")
+	if results == nil || len(results.List) != 2 {
+		return nil, fmt.Errorf("function must return exactly two values (ResultType, error)")
 	}
 
+	// Generate schema for the first return value (the actual result type)
 	result := results.List[0]
-	s, _, err := generateTypeSchema(result.Type, files, docPkg)
-	return s, err
+	resultSchema, _, err := generateTypeSchema(result.Type, files, docPkg)
+	if err != nil {
+		return nil, err
+	}
+
+	// The output schema should include both the result fields AND an error field
+	// We'll create a new schema that has all the result's properties plus an error field
+	if resultSchema.Type != schema.Object {
+		return nil, fmt.Errorf("result type must be an object/struct")
+	}
+
+	// Create a new schema that includes the result properties plus error
+	outputSchema := &schema.JSON{
+		Schema:               schema.URL,
+		Type:                 schema.Object,
+		Properties:           make(map[string]*schema.JSON),
+		Required:             make([]string, 0, len(resultSchema.Required)+1),
+		AdditionalProperties: boolPtr(false),
+	}
+
+	// Copy all properties from result schema
+	for name, prop := range resultSchema.Properties {
+		outputSchema.Properties[name] = prop
+	}
+
+	// Add error field (nullable string)
+	outputSchema.Properties["error"] = &schema.JSON{
+		Type: []interface{}{"string", "null"},
+	}
+
+	// Copy required fields from result schema
+	outputSchema.Required = append(outputSchema.Required, resultSchema.Required...)
+	// Error field is also required for OpenAI compatibility
+	outputSchema.Required = append(outputSchema.Required, "error")
+
+	return outputSchema, nil
 }
 
 func generateTypeSchema(expr ast.Expr, files []*ast.File, docPkg *doc.Package) (*schema.JSON, bool, error) {
@@ -661,9 +702,10 @@ func generateToolDefFile(tool *MCPTool, funcName, paramTypeName, returnTypeName,
 	dir := filepath.Dir(inputFile)
 	outputFile := filepath.Join(dir, fmt.Sprintf("%s_tool.go", strings.ToLower(funcName)))
 
-	// Create the private struct type name
+	// Create the private type names
 	lowerFuncName := strings.ToLower(funcName[:1]) + funcName[1:]
-	structTypeName := fmt.Sprintf("%sToolDefType", lowerFuncName)
+	toolTypeName := fmt.Sprintf("%sTool", lowerFuncName)
+	resultWrapperTypeName := fmt.Sprintf("%sResult", lowerFuncName)
 
 	// Use backticks for the JSON string for better readability
 	// Only fall back to strconv.Quote if the JSON contains backticks
@@ -690,7 +732,13 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
-// %s implements chat.ToolDef for the %s function
+// %s is the internal result wrapper that adds error handling
+type %s struct {
+	%s
+	Error *string `+"`json:\"error,omitzero\"`"+`
+}
+
+// %s implements chat.Tool for the %s function
 type %s struct{}
 
 func (%s) MCPJsonSchema() string {
@@ -705,38 +753,42 @@ func (%s) Description() string {
 	return %q
 }
 
-// %sToolDef is the MCP tool definition for the %s function
-var %sToolDef chat.ToolDef = %s{}
-
-
-// %sTool is a generic wrapper that accepts JSON input and returns JSON output
-func %sTool(ctx context.Context, input string) string {
+func (%s) Call(ctx context.Context, input string) string {
 	// No input parameters needed, ignore input JSON
-	
-	// Call the actual function with context only
-	result := %s(ctx)
 
-	// Marshal the result
-	respBytes, err := json.Marshal(result)
+	// Call the actual function
+	result, err := %s(ctx)
+
+	// Wrap result with error handling
+	wrapped := %s{%s: result}
 	if err != nil {
-		errStr := "failed to marshal response: " + err.Error()
-		errResp := %s{
-			Error: &errStr,
-		}
+		errStr := err.Error()
+		wrapped.Error = &errStr
+	}
+
+	// Marshal the response
+	respBytes, marshalErr := json.Marshal(wrapped)
+	if marshalErr != nil {
+		errStr := "failed to marshal response: " + marshalErr.Error()
+		errResp := %s{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
 	return string(respBytes)
 }
+
+// %sTool is the tool definition for the %s function
+var %sTool chat.Tool = %s{}
 `, packageName,
-			structTypeName, funcName, // type comment
-			structTypeName,             // type declaration
-			structTypeName, jsonString, // MCPJsonSchema method
-			structTypeName, tool.Name, // Name method
-			structTypeName, tool.Description, // Description method
-			funcName, funcName, funcName, structTypeName, // var declaration
-			funcName, funcName, funcName, returnTypeName) // Tool function
+			resultWrapperTypeName, resultWrapperTypeName, returnTypeName, // result wrapper type
+			toolTypeName, funcName, toolTypeName, // tool type comment and declaration
+			toolTypeName, jsonString, // MCPJsonSchema method
+			toolTypeName, tool.Name, // Name method
+			toolTypeName, tool.Description, // Description method
+			toolTypeName, funcName, // Call method
+			resultWrapperTypeName, returnTypeName, resultWrapperTypeName, // wrapping result
+			funcName, funcName, funcName, toolTypeName) // exported variable
 	} else {
 		// Function with arguments
 		content = fmt.Sprintf(`// Code generated by funcschema. DO NOT EDIT.
@@ -750,7 +802,13 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
-// %s implements chat.ToolDef for the %s function
+// %s is the internal result wrapper that adds error handling
+type %s struct {
+	%s
+	Error *string `+"`json:\"error,omitzero\"`"+`
+}
+
+// %s implements chat.Tool for the %s function
 type %s struct{}
 
 func (%s) MCPJsonSchema() string {
@@ -765,48 +823,50 @@ func (%s) Description() string {
 	return %q
 }
 
-// %sToolDef is the MCP tool definition for the %s function
-var %sToolDef chat.ToolDef = %s{}
-
-
-// %sTool is a generic wrapper that accepts JSON input and returns JSON output
-func %sTool(ctx context.Context, input string) string {
+func (%s) Call(ctx context.Context, input string) string {
 	// Parse the input JSON
 	var req %s
 	if err := json.Unmarshal([]byte(input), &req); err != nil {
 		errStr := "failed to parse input: " + err.Error()
-		errResp := %s{
-			Error: &errStr,
-		}
+		errResp := %s{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
-	// Call the actual function with context
-	result := %s(ctx, req)
+	// Call the actual function
+	result, err := %s(ctx, req)
 
-	// Marshal the result
-	respBytes, err := json.Marshal(result)
+	// Wrap result with error handling
+	wrapped := %s{%s: result}
 	if err != nil {
-		errStr := "failed to marshal response: " + err.Error()
-		errResp := %s{
-			Error: &errStr,
-		}
+		errStr := err.Error()
+		wrapped.Error = &errStr
+	}
+
+	// Marshal the response
+	respBytes, marshalErr := json.Marshal(wrapped)
+	if marshalErr != nil {
+		errStr := "failed to marshal response: " + marshalErr.Error()
+		errResp := %s{Error: &errStr}
 		respBytes, _ := json.Marshal(errResp)
 		return string(respBytes)
 	}
 
 	return string(respBytes)
 }
+
+// %sTool is the tool definition for the %s function
+var %sTool chat.Tool = %s{}
 `, packageName,
-			structTypeName, funcName, // type comment
-			structTypeName,             // type declaration
-			structTypeName, jsonString, // MCPJsonSchema method
-			structTypeName, tool.Name, // Name method
-			structTypeName, tool.Description, // Description method
-			funcName, funcName, funcName, structTypeName, // var declaration
-			funcName, funcName, paramTypeName, returnTypeName, // Tool function
-			funcName, returnTypeName)
+			resultWrapperTypeName, resultWrapperTypeName, returnTypeName, // result wrapper type
+			toolTypeName, funcName, toolTypeName, // tool type comment and declaration
+			toolTypeName, jsonString, // MCPJsonSchema method
+			toolTypeName, tool.Name, // Name method
+			toolTypeName, tool.Description, // Description method
+			toolTypeName, paramTypeName, // Call method - parameter type
+			resultWrapperTypeName, funcName, // error handling
+			resultWrapperTypeName, returnTypeName, resultWrapperTypeName, // wrapping result
+			funcName, funcName, funcName, toolTypeName) // exported variable
 	}
 
 	// Format the generated code with gofumpt
@@ -857,52 +917,23 @@ func isStructType(typeName string, files []*ast.File) bool {
 	return false
 }
 
-func hasErrorField(expr ast.Expr, files []*ast.File) bool {
+func isStructTypeOrNamedStruct(expr ast.Expr, files []*ast.File) bool {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		// Named type - need to find its definition
-		var typeSpec *ast.TypeSpec
-		for _, file := range files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == t.Name {
-					typeSpec = ts
-					return false
-				}
-				return true
-			})
-			if typeSpec != nil {
-				break
-			}
-		}
-		if typeSpec == nil {
-			return false
-		}
-		structType, ok := typeSpec.Type.(*ast.StructType)
-		if !ok {
-			return false
-		}
-		return hasErrorFieldInStruct(structType)
+		// Named type - check if it's a struct
+		return isStructType(t.Name, files)
 	case *ast.StructType:
 		// Inline struct
-		return hasErrorFieldInStruct(t)
+		return true
 	default:
 		return false
 	}
 }
 
-func hasErrorFieldInStruct(structType *ast.StructType) bool {
-	for _, field := range structType.Fields.List {
-		for _, name := range field.Names {
-			if name.Name == "Error" {
-				// Check if it's a pointer to string or *string
-				switch ft := field.Type.(type) {
-				case *ast.StarExpr:
-					if ident, ok := ft.X.(*ast.Ident); ok && ident.Name == "string" {
-						return true
-					}
-				}
-			}
-		}
+func isErrorType(expr ast.Expr) bool {
+	// Check if the type is "error" (built-in interface)
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name == "error"
 	}
 	return false
 }

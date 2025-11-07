@@ -15,23 +15,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testToolDef is a simple implementation of chat.ToolDef for testing
-type testToolDef struct {
+// testTool is a simple implementation of chat.Tool for testing
+type testTool struct {
 	name        string
 	description string
 	jsonSchema  string
+	callFn      func(context.Context, string) string
 }
 
-func (t *testToolDef) MCPJsonSchema() string {
+func (t *testTool) MCPJsonSchema() string {
 	return t.jsonSchema
 }
 
-func (t *testToolDef) Name() string {
+func (t *testTool) Name() string {
 	return t.name
 }
 
-func (t *testToolDef) Description() string {
+func (t *testTool) Description() string {
 	return t.description
+}
+
+func (t *testTool) Call(ctx context.Context, input string) string {
+	return t.callFn(ctx, input)
 }
 
 // IntegrationConfig holds configuration for integration tests
@@ -247,7 +252,8 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
 
 	// Register a simple echo tool
-	toolDef := &testToolDef{
+	toolCalled := false
+	toolDef := &testTool{
 		name:        "echo",
 		description: "Echo back the provided message",
 		jsonSchema: `{
@@ -264,13 +270,13 @@ func TestToolCallStreamEvents(t testing.TB, client chat.Client) {
 				"required": ["message"]
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolCalled = true
+			return `{"result": "Echo successful"}`
+		},
 	}
 
-	toolCalled := false
-	err := chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {
-		toolCalled = true
-		return `{"result": "Echo successful"}`
-	})
+	err := chatSession.RegisterTool(toolDef)
 	if err != nil {
 		t.Fatalf("Failed to register tool: %v", err)
 	}
@@ -341,7 +347,8 @@ func TestToolCallAndResultStreamEvents(t testing.TB, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
 
 	// Register a simple echo tool that returns a specific result
-	toolDef := &testToolDef{
+	toolCalled := false
+	toolDef := &testTool{
 		name:        "echo",
 		description: "Echo back the provided message",
 		jsonSchema: `{
@@ -358,20 +365,20 @@ func TestToolCallAndResultStreamEvents(t testing.TB, client chat.Client) {
 				"required": ["message"]
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolCalled = true
+			// Parse the input to get the message
+			var args struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(input), &args); err != nil {
+				return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
+			}
+			return fmt.Sprintf("Echo: %s", args.Message)
+		},
 	}
 
-	toolCalled := false
-	err := chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {
-		toolCalled = true
-		// Parse the input to get the message
-		var args struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(input), &args); err != nil {
-			return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
-		}
-		return fmt.Sprintf("Echo: %s", args.Message)
-	})
+	err := chatSession.RegisterTool(toolDef)
 	if err != nil {
 		t.Fatalf("Failed to register tool: %v", err)
 	}
@@ -543,8 +550,10 @@ func TestHeaderConfiguration(t testing.TB, client chat.Client, expectedHeaders m
 func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
 
+	// Track if the tool was called
+	toolCalled := false
 	// Register a tool that simulates returning empty results
-	emptyResultTool := &testToolDef{
+	emptyResultTool := &testTool{
 		name:        "empty_result_tool",
 		description: "A tool that returns an empty result",
 		jsonSchema: `{
@@ -561,15 +570,14 @@ func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 				"required": ["action"]
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolCalled = true
+			// Simulate an empty result scenario
+			return ""
+		},
 	}
 
-	// Track if the tool was called
-	toolCalled := false
-	err := chatSession.RegisterTool(emptyResultTool, func(ctx context.Context, input string) string {
-		toolCalled = true
-		// Simulate an empty result scenario
-		return ""
-	})
+	err := chatSession.RegisterTool(emptyResultTool)
 	if err != nil {
 		t.Fatalf("Failed to register empty result tool: %v", err)
 	}
@@ -600,11 +608,12 @@ func TestEmptyToolResultsHandling(t testing.TB, client chat.Client) {
 	streamingSession := client.NewChat("You are a helpful assistant with access to tools.")
 
 	// Register the same tool in the new session
-	err = streamingSession.RegisterTool(emptyResultTool, func(ctx context.Context, input string) string {
+	emptyResultTool.callFn = func(ctx context.Context, input string) string {
 		toolCalled = true
 		// Simulate an empty result scenario
 		return ""
-	})
+	}
+	err = streamingSession.RegisterTool(emptyResultTool)
 	if err != nil {
 		t.Fatalf("Failed to register empty result tool in streaming session: %v", err)
 	}
@@ -654,7 +663,7 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	var lastToolInput string
 
 	// Register a simple calculation tool
-	calcTool := &testToolDef{
+	calcTool := &testTool{
 		name:        "add_numbers",
 		description: "Add two numbers together",
 		jsonSchema: `{
@@ -669,23 +678,24 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 				"required": ["a", "b"]
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolExecutionCount++
+			lastToolInput = input
+
+			// Parse input and calculate result
+			var params struct {
+				A float64 `json:"a"`
+				B float64 `json:"b"`
+			}
+			if err := json.Unmarshal([]byte(input), &params); err != nil {
+				return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
+			}
+			result := params.A + params.B
+			return fmt.Sprintf(`{"result": %v}`, result)
+		},
 	}
 
-	err := chatSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
-		toolExecutionCount++
-		lastToolInput = input
-
-		// Parse input and calculate result
-		var params struct {
-			A float64 `json:"a"`
-			B float64 `json:"b"`
-		}
-		if err := json.Unmarshal([]byte(input), &params); err != nil {
-			return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
-		}
-		result := params.A + params.B
-		return fmt.Sprintf(`{"result": %v}`, result)
-	})
+	err := chatSession.RegisterTool(calcTool)
 	if err != nil {
 		t.Fatalf("Failed to register calculation tool: %v", err)
 	}
@@ -732,7 +742,7 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 	toolExecutionCount = 0
 	streamToolCalled := false
 
-	err = streamingSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+	calcTool.callFn = func(ctx context.Context, input string) string {
 		toolExecutionCount++
 		streamToolCalled = true
 		lastToolInput = input
@@ -747,7 +757,8 @@ func TestSystemReminderWithToolCalls(t testing.TB, client chat.Client) {
 		}
 		result := params.A + params.B
 		return fmt.Sprintf(`{"result": %v}`, result)
-	})
+	}
+	err = streamingSession.RegisterTool(calcTool)
 	if err != nil {
 		t.Fatalf("Failed to register calculation tool for streaming: %v", err)
 	}
@@ -856,7 +867,8 @@ func TestNoDuplicateMessages(t *testing.T, client chat.Client) {
 		chatSession := client.NewChat("You are a helpful calculator assistant.", initialMessages...)
 
 		// Register a simple calculation tool
-		calcTool := &testToolDef{
+		toolCalled := false
+		calcTool := &testTool{
 			name:        "calculate",
 			description: "Perform basic arithmetic calculations",
 			jsonSchema: `{
@@ -873,14 +885,14 @@ func TestNoDuplicateMessages(t *testing.T, client chat.Client) {
 					"required": ["expression"]
 				}
 			}`,
+			callFn: func(ctx context.Context, input string) string {
+				toolCalled = true
+				// Simple response for testing
+				return `{"result": 42}`
+			},
 		}
 
-		toolCalled := false
-		err := chatSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
-			toolCalled = true
-			// Simple response for testing
-			return `{"result": 42}`
-		})
+		err := chatSession.RegisterTool(calcTool)
 		require.NoError(t, err, "Failed to register tool")
 
 		// Send a message that triggers tool use
@@ -1014,7 +1026,7 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		sessionID := session.SessionID()
 
 		// Register a tool
-		calcTool := &testToolDef{
+		calcTool := &testTool{
 			name:        "calculate",
 			description: "Perform basic arithmetic calculations",
 			jsonSchema: `{
@@ -1031,11 +1043,12 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 					"required": ["expression"]
 				}
 			}`,
+			callFn: func(ctx context.Context, input string) string {
+				return `{"result": 42}`
+			},
 		}
 
-		err := session.RegisterTool(calcTool, func(ctx context.Context, input string) string {
-			return `{"result": 42}`
-		})
+		err := session.RegisterTool(calcTool)
 		require.NoError(t, err)
 
 		baselineRecords, err := store.GetAllRecords(sessionID)
@@ -1072,9 +1085,10 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 			agent.WithRestoreSession(sessionID))
 
 		// Re-register tool on restored session
-		err = restoredSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
+		calcTool.callFn = func(ctx context.Context, input string) string {
 			return `{"result": 84}`
-		})
+		}
+		err = restoredSession.RegisterTool(calcTool)
 		require.NoError(t, err)
 
 		// Send another message
@@ -1214,7 +1228,8 @@ func TestThinkingPreservedWithToolCalls(t *testing.T, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant with access to tools. Think carefully before using tools.")
 
 	// Register a simple calculation tool
-	calcTool := &testToolDef{
+	toolCalled := false
+	calcTool := &testTool{
 		name:        "calculate",
 		description: "Perform arithmetic calculations",
 		jsonSchema: `{
@@ -1239,39 +1254,39 @@ func TestThinkingPreservedWithToolCalls(t *testing.T, client chat.Client) {
 				"required": ["a", "b", "operation"]
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolCalled = true
+			var params struct {
+				A         float64 `json:"a"`
+				B         float64 `json:"b"`
+				Operation string  `json:"operation"`
+			}
+			if err := json.Unmarshal([]byte(input), &params); err != nil {
+				return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
+			}
+
+			var result float64
+			switch params.Operation {
+			case "add":
+				result = params.A + params.B
+			case "subtract":
+				result = params.A - params.B
+			case "multiply":
+				result = params.A * params.B
+			case "divide":
+				if params.B != 0 {
+					result = params.A / params.B
+				} else {
+					return `{"error": "Division by zero"}`
+				}
+			default:
+				return `{"error": "Unknown operation"}`
+			}
+			return fmt.Sprintf(`{"result": %v}`, result)
+		},
 	}
 
-	toolCalled := false
-	err := chatSession.RegisterTool(calcTool, func(ctx context.Context, input string) string {
-		toolCalled = true
-		var params struct {
-			A         float64 `json:"a"`
-			B         float64 `json:"b"`
-			Operation string  `json:"operation"`
-		}
-		if err := json.Unmarshal([]byte(input), &params); err != nil {
-			return fmt.Sprintf(`{"error": "Failed to parse input: %v"}`, err)
-		}
-
-		var result float64
-		switch params.Operation {
-		case "add":
-			result = params.A + params.B
-		case "subtract":
-			result = params.A - params.B
-		case "multiply":
-			result = params.A * params.B
-		case "divide":
-			if params.B != 0 {
-				result = params.A / params.B
-			} else {
-				return `{"error": "Division by zero"}`
-			}
-		default:
-			return `{"error": "Unknown operation"}`
-		}
-		return fmt.Sprintf(`{"result": %v}`, result)
-	})
+	err := chatSession.RegisterTool(calcTool)
 	require.NoError(t, err, "Failed to register tool")
 
 	// Ask a question that should trigger both thinking and tool use
@@ -1327,7 +1342,8 @@ func TestTextBeforeToolCallsPreserved(t *testing.T, client chat.Client) {
 	chatSession := client.NewChat("You are a helpful assistant with access to tools.")
 
 	// Register a simple list files tool
-	listTool := &testToolDef{
+	toolCalled := false
+	listTool := &testTool{
 		name:        "list_files",
 		description: "List files in a directory",
 		jsonSchema: `{
@@ -1344,13 +1360,13 @@ func TestTextBeforeToolCallsPreserved(t *testing.T, client chat.Client) {
 				"required": ["path"]
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolCalled = true
+			return `["file1.txt", "file2.txt", "file3.txt"]`
+		},
 	}
 
-	toolCalled := false
-	err := chatSession.RegisterTool(listTool, func(ctx context.Context, input string) string {
-		toolCalled = true
-		return `["file1.txt", "file2.txt", "file3.txt"]`
-	})
+	err := chatSession.RegisterTool(listTool)
 	require.NoError(t, err, "Failed to register tool")
 
 	// Track content during streaming to verify the model emits text before tool calls

@@ -15,23 +15,28 @@ import (
 	llmtesting "github.com/bpowers/go-agent/llm/testing"
 )
 
-// testToolDef implements chat.ToolDef for testing
-type testToolDef struct {
+// testTool implements chat.Tool for testing
+type testTool struct {
 	name        string
 	description string
 	jsonSchema  string
+	callFn      func(context.Context, string) string
 }
 
-func (t *testToolDef) MCPJsonSchema() string {
+func (t *testTool) MCPJsonSchema() string {
 	return t.jsonSchema
 }
 
-func (t *testToolDef) Name() string {
+func (t *testTool) Name() string {
 	return t.name
 }
 
-func (t *testToolDef) Description() string {
+func (t *testTool) Description() string {
 	return t.description
+}
+
+func (t *testTool) Call(ctx context.Context, input string) string {
+	return t.callFn(ctx, input)
 }
 
 const provider = "claude"
@@ -155,7 +160,7 @@ func TestClaudeIntegration_ToolRegistration(t *testing.T) {
 	chatSession := client.NewChat("You are a helpful assistant.")
 
 	// Register a simple tool
-	toolDef := &testToolDef{
+	tool := &testTool{
 		name:        "test_tool",
 		description: "A test tool",
 		jsonSchema: `{
@@ -168,11 +173,12 @@ func TestClaudeIntegration_ToolRegistration(t *testing.T) {
 				}
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			return `{"result": "Tool called successfully"}`
+		},
 	}
 
-	err = chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {
-		return `{"result": "Tool called successfully"}`
-	})
+	err = chatSession.RegisterTool(tool)
 	require.NoError(t, err)
 
 	// List tools
@@ -198,8 +204,12 @@ func TestClaudeIntegration_SimpleToolCall(t *testing.T) {
 
 	chatSession := client.NewChat("You are a helpful assistant.")
 
+	// Track if tool was called and with what parameters
+	toolCalled := false
+	var toolInput string
+
 	// Register a simple echo tool
-	toolDef := &testToolDef{
+	tool := &testTool{
 		name:        "echo",
 		description: "Echo back the provided message",
 		jsonSchema: `{
@@ -216,24 +226,22 @@ func TestClaudeIntegration_SimpleToolCall(t *testing.T) {
 				"required": ["message"]
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolCalled = true
+			toolInput = input
+
+			var req struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(input), &req); err != nil {
+				return fmt.Sprintf(`{"error": "failed to parse input: %s"}`, err.Error())
+			}
+			// Return a deterministic result that we can verify
+			return fmt.Sprintf(`{"result": "Echo: %s", "timestamp": "2024-01-01T00:00:00Z"}`, req.Message)
+		},
 	}
 
-	// Track if tool was called and with what parameters
-	toolCalled := false
-	var toolInput string
-	err = chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {
-		toolCalled = true
-		toolInput = input
-
-		var req struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(input), &req); err != nil {
-			return fmt.Sprintf(`{"error": "failed to parse input: %s"}`, err.Error())
-		}
-		// Return a deterministic result that we can verify
-		return fmt.Sprintf(`{"result": "Echo: %s", "timestamp": "2024-01-01T00:00:00Z"}`, req.Message)
-	})
+	err = chatSession.RegisterTool(tool)
 	require.NoError(t, err)
 
 	// Ask Claude to use the tool

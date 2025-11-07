@@ -12,23 +12,28 @@ import (
 	llmtesting "github.com/bpowers/go-agent/llm/testing"
 )
 
-// testToolDef implements chat.ToolDef for testing
-type testToolDef struct {
+// testTool implements chat.Tool for testing
+type testTool struct {
 	name        string
 	description string
 	jsonSchema  string
+	callFn      func(context.Context, string) string
 }
 
-func (t *testToolDef) MCPJsonSchema() string {
+func (t *testTool) MCPJsonSchema() string {
 	return t.jsonSchema
 }
 
-func (t *testToolDef) Name() string {
+func (t *testTool) Name() string {
 	return t.name
 }
 
-func (t *testToolDef) Description() string {
+func (t *testTool) Description() string {
 	return t.description
+}
+
+func (t *testTool) Call(ctx context.Context, input string) string {
+	return t.callFn(ctx, input)
 }
 
 const provider = "gemini"
@@ -152,7 +157,7 @@ func TestGeminiIntegration_ToolRegistration(t *testing.T) {
 	chatSession := client.NewChat("You are a helpful assistant.")
 
 	// Register a simple tool
-	toolDef := &testToolDef{
+	tool := &testTool{
 		name:        "test_tool",
 		description: "A test tool",
 		jsonSchema: `{
@@ -165,11 +170,12 @@ func TestGeminiIntegration_ToolRegistration(t *testing.T) {
 				}
 			}
 		}`,
+		callFn: func(ctx context.Context, input string) string {
+			return `{"result": "Tool called successfully"}`
+		},
 	}
 
-	err = chatSession.RegisterTool(toolDef, func(ctx context.Context, input string) string {
-		return `{"result": "Tool called successfully"}`
-	})
+	err = chatSession.RegisterTool(tool)
 	require.NoError(t, err)
 
 	// List tools

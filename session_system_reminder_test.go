@@ -87,10 +87,10 @@ func (m *mockSystemReminderChat) MaxTokens() int {
 	return 4096
 }
 
-func (m *mockSystemReminderChat) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
+func (m *mockSystemReminderChat) RegisterTool(tool chat.Tool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.tools[def.Name()] = fn
+	m.tools[tool.Name()] = tool.Call
 	return nil
 }
 

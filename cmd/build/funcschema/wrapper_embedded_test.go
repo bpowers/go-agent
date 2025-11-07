@@ -39,16 +39,15 @@ type DocumentRequest struct {
 type DocumentResult struct {
 	Success bool    ` + "`json:\"success\"`" + `
 	DocID   string  ` + "`json:\"doc_id\"`" + `
-	Error   *string ` + "`json:\"error\"`" + `
 }
 
-func CreateDocument(ctx context.Context, req DocumentRequest) DocumentResult {
+func CreateDocument(ctx context.Context, req DocumentRequest) (DocumentResult, error) {
 	// Simulate using embedded fields
 	docID := req.ID + "-v" + strconv.Itoa(req.Version)
 	return DocumentResult{
 		Success: true,
 		DocID:   docID,
-	}
+	}, nil
 }`
 
 	testFile := filepath.Join(tmpDir, "testdata.go")
@@ -137,13 +136,20 @@ func TestEmbeddedWrapper(t *testing.T) {
 		"content": "This is test content"
 	}` + "`" + `
 
-	output := CreateDocumentTool(ctx, input)
+	output := CreateDocumentTool.Call(ctx, input)
 
-	var result DocumentResult
+	// The result is wrapped with an Error field by the generator
+	var result struct {
+		DocumentResult
+		Error *string ` + "`json:\"error,omitzero\"`" + `
+	}
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", *result.Error)
+	}
 	if !result.Success {
 		t.Errorf("expected Success=true")
 	}

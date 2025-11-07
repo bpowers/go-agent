@@ -29,11 +29,11 @@ func TestReadDirTool(t *testing.T) {
 	// Create context with filesystem
 	ctx := WithTestFS(context.Background(), testFS)
 
-	// Call ReadDir directly
-	result := ReadDir(ctx)
+	// Call ReadDir directly (empty path defaults to root)
+	result, err := ReadDir(ctx, ReadDirRequest{})
 
 	// Check for errors
-	require.Nil(t, result.Error)
+	require.NoError(t, err)
 
 	// Verify we got the expected files
 	assert.Len(t, result.Files, 3)
@@ -73,10 +73,13 @@ func TestReadDirToolWrapper(t *testing.T) {
 	ctx := WithTestFS(context.Background(), testFS)
 
 	// Call the generated wrapper function
-	output := ReadDirTool(ctx, "{}")
+	output := ReadDirTool.Call(ctx, "{}")
 
-	// Parse the JSON output
-	var result ReadDirResult
+	// Parse the JSON output (includes error field from wrapper)
+	var result struct {
+		ReadDirResult
+		Error *string `json:"error,omitzero"`
+	}
 	err = json.Unmarshal([]byte(output), &result)
 	require.NoError(t, err)
 
@@ -95,14 +98,14 @@ func TestReadFileTool(t *testing.T) {
 	ctx := WithTestFS(context.Background(), testFS)
 
 	// Test reading existing file
-	result := ReadFile(ctx, ReadFileRequest{FileName: "test.txt"})
-	require.Nil(t, result.Error)
+	result, err := ReadFile(ctx, ReadFileRequest{FileName: "test.txt"})
+	require.NoError(t, err)
 	assert.Equal(t, testContent, result.Content)
 
 	// Test reading non-existent file
-	result = ReadFile(ctx, ReadFileRequest{FileName: "nonexistent.txt"})
-	assert.NotNil(t, result.Error)
-	assert.Contains(t, *result.Error, "failed to open file")
+	_, err = ReadFile(ctx, ReadFileRequest{FileName: "nonexistent.txt"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to open file")
 }
 
 func TestReadFileToolWrapper(t *testing.T) {
@@ -117,10 +120,13 @@ func TestReadFileToolWrapper(t *testing.T) {
 
 	// Call the generated wrapper function
 	input := `{"fileName": "test.txt"}`
-	output := ReadFileTool(ctx, input)
+	output := ReadFileTool.Call(ctx, input)
 
-	// Parse the JSON output
-	var result ReadFileResult
+	// Parse the JSON output (includes error field from wrapper)
+	var result struct {
+		ReadFileResult
+		Error *string `json:"error,omitzero"`
+	}
 	err = json.Unmarshal([]byte(output), &result)
 	require.NoError(t, err)
 
@@ -136,12 +142,12 @@ func TestWriteFileTool(t *testing.T) {
 
 	// Write a new file
 	content := "New file content"
-	result := WriteFile(ctx, WriteFileRequest{
+	result, err := WriteFile(ctx, WriteFileRequest{
 		FileName: "new.txt",
 		Content:  content,
 	})
 
-	require.Nil(t, result.Error)
+	require.NoError(t, err)
 	assert.True(t, result.Success)
 
 	// Verify the file was written
@@ -150,12 +156,12 @@ func TestWriteFileTool(t *testing.T) {
 	assert.Equal(t, content, string(data))
 
 	// Test writing to subdirectory (should create it)
-	result = WriteFile(ctx, WriteFileRequest{
+	result, err = WriteFile(ctx, WriteFileRequest{
 		FileName: "subdir/nested.txt",
 		Content:  "nested content",
 	})
 
-	require.Nil(t, result.Error)
+	require.NoError(t, err)
 
 	// Verify nested file
 	data, err = fs.ReadFile(testFS, "subdir/nested.txt")
@@ -171,10 +177,13 @@ func TestWriteFileToolWrapper(t *testing.T) {
 
 	// Call the generated wrapper function
 	input := `{"fileName": "test.txt", "content": "Test content"}`
-	output := WriteFileTool(ctx, input)
+	output := WriteFileTool.Call(ctx, input)
 
-	// Parse the JSON output
-	var result WriteFileResult
+	// Parse the JSON output (includes error field from wrapper)
+	var result struct {
+		WriteFileResult
+		Error *string `json:"error,omitzero"`
+	}
 	err := json.Unmarshal([]byte(output), &result)
 	require.NoError(t, err)
 
@@ -194,12 +203,12 @@ func TestPathCleaning(t *testing.T) {
 	ctx := WithTestFS(context.Background(), testFS)
 
 	// Write a file with a path that needs cleaning
-	result := WriteFile(ctx, WriteFileRequest{
+	_, err := WriteFile(ctx, WriteFileRequest{
 		FileName: "/absolute/path.txt",
 		Content:  "absolute path",
 	})
 
-	require.Nil(t, result.Error)
+	require.NoError(t, err)
 
 	// The file should be written to "absolute/path.txt" (cleaned path without leading /)
 	data, err := fs.ReadFile(testFS, "absolute/path.txt")
@@ -207,8 +216,8 @@ func TestPathCleaning(t *testing.T) {
 	assert.Equal(t, "absolute path", string(data))
 
 	// Test that reading with absolute path also works
-	readResult := ReadFile(ctx, ReadFileRequest{FileName: "/absolute/path.txt"})
-	require.Nil(t, readResult.Error)
+	readResult, err := ReadFile(ctx, ReadFileRequest{FileName: "/absolute/path.txt"})
+	require.NoError(t, err)
 	assert.Equal(t, "absolute path", readResult.Content)
 }
 
@@ -217,7 +226,7 @@ func TestNoFilesystem(t *testing.T) {
 	// Test error handling when no filesystem in context
 	ctx := context.Background()
 
-	result := ReadDir(ctx)
-	assert.NotNil(t, result.Error)
-	assert.Contains(t, *result.Error, "no filesystem found in context")
+	_, err := ReadDir(ctx, ReadDirRequest{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no filesystem found in context")
 }

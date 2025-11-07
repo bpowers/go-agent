@@ -254,7 +254,7 @@ func (c *chatClient) Message(ctx context.Context, msg chat.Message, opts ...chat
 		tools := make([]*genai.Tool, 0, 1)
 		functionDeclarations := make([]*genai.FunctionDeclaration, 0, len(allTools))
 		for _, tool := range allTools {
-			funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool.Definition)
+			funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool)
 			if err != nil {
 				return chat.Message{}, fmt.Errorf("failed to convert tool: %w", err)
 			}
@@ -387,9 +387,9 @@ func (c *chatClient) MaxTokens() int {
 	return c.maxTokens
 }
 
-// RegisterTool registers a tool with its MCP definition and handler function
-func (c *chatClient) RegisterTool(def chat.ToolDef, fn func(context.Context, string) string) error {
-	return c.tools.Register(def, fn)
+// RegisterTool registers a tool that can be called by the LLM
+func (c *chatClient) RegisterTool(tool chat.Tool) error {
+	return c.tools.Register(tool)
 }
 
 // DeregisterTool removes a tool by name
@@ -626,7 +626,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 			tools := make([]*genai.Tool, 0, 1)
 			functionDeclarations := make([]*genai.FunctionDeclaration, 0, len(allTools))
 			for _, tool := range allTools {
-				funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool.Definition)
+				funcDecl, err := c.mcpToGeminiFunctionDeclaration(tool)
 				if err != nil {
 					// Skip this tool on error
 					continue

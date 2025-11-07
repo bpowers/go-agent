@@ -18,10 +18,9 @@ type DatasetGetRequest struct {
 type DatasetGetResult struct {
 	Revision string
 	Data     map[string][][]float64
-	Error    *string
 }
 
-func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
+func DatasetGet(ctx context.Context, args DatasetGetRequest) (DatasetGetResult, error) {
 	// In a real implementation, ctx would be used for cancellation, deadlines, etc.
 	return DatasetGetResult{
 		Revision: "1",
@@ -35,5 +34,5 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) DatasetGetResult {
 				{1, 2},
 			},
 		},
-	}
+	}, nil
 }
