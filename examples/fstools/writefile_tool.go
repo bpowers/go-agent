@@ -12,6 +12,7 @@ import (
 // writeFileResult is the internal result wrapper that adds error handling
 type writeFileResult struct {
 	WriteFileResult
+
 	Error *string `json:"error,omitzero"`
 }
 

@@ -12,6 +12,7 @@ import (
 // readDirResult is the internal result wrapper that adds error handling
 type readDirResult struct {
 	ReadDirResult
+
 	Error *string `json:"error,omitzero"`
 }
 

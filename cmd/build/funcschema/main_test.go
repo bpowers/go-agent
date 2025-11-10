@@ -648,6 +648,21 @@ func NestedFunc(ctx context.Context) (NestedResult, error) { return NestedResult
 			},
 		},
 		{
+			name: "error only return",
+			code: `package test
+type Request struct{}
+func ErrorOnly(req Request) error { return nil }`,
+			funcName: "ErrorOnly",
+			validate: func(t *testing.T, s *schema.JSON) {
+				if len(s.Properties) != 1 {
+					t.Fatalf("expected only error property, got %d", len(s.Properties))
+				}
+				if _, ok := s.Properties["error"]; !ok {
+					t.Fatalf("expected error property")
+				}
+			},
+		},
+		{
 			name: "array return type",
 			code: `package test
 import "context"
@@ -984,7 +999,7 @@ import "context"
 type Request struct{}
 func NoReturn(ctx context.Context, req Request) { }`,
 			funcName: "NoReturn",
-			wantErr:  "must return exactly two values",
+			wantErr:  "must return either (ResultType, error) or error",
 		},
 		{
 			name: "return single value instead of (Type, error)",
@@ -996,7 +1011,7 @@ type BadResult struct {
 }
 func BadReturn(ctx context.Context, req Request) BadResult { return BadResult{} }`,
 			funcName: "BadReturn",
-			wantErr:  "must return exactly two values",
+			wantErr:  "single return value must be error",
 		},
 		{
 			name: "method not function",
@@ -1077,27 +1092,31 @@ func validateFunction(targetFunc *ast.FuncDecl, funcName string, files []*ast.Fi
 				return fmt.Errorf("function %s second parameter must be a struct type, got %s", funcName, t.Name)
 			}
 		case *ast.StructType:
-			// Inline struct - this is fine
+			return fmt.Errorf("function %s second parameter must be a named struct type; inline structs are not supported", funcName)
 		default:
 			return fmt.Errorf("function %s second parameter must be a struct type", funcName)
 		}
 	}
 
-	// Check return values - must return exactly two values: (ResultType, error)
-	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) != 2 {
-		return fmt.Errorf("function %s must return exactly two values (ResultType, error)", funcName)
+	// Check return values
+	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) == 0 || len(targetFunc.Type.Results.List) > 2 {
+		return fmt.Errorf("function %s must return either (ResultType, error) or error", funcName)
 	}
 
-	// First return value must be a struct type
-	firstResult := targetFunc.Type.Results.List[0].Type
-	if !isStructTypeOrNamedStruct(firstResult, files) {
-		return fmt.Errorf("function %s first return value must be a struct type", funcName)
-	}
+	if len(targetFunc.Type.Results.List) == 1 {
+		if !isErrorType(targetFunc.Type.Results.List[0].Type) {
+			return fmt.Errorf("function %s single return value must be error", funcName)
+		}
+	} else {
+		firstResult := targetFunc.Type.Results.List[0].Type
+		if !isStructTypeOrNamedStruct(firstResult, files) {
+			return fmt.Errorf("function %s first return value must be a struct type", funcName)
+		}
 
-	// Second return value must be error type
-	secondResult := targetFunc.Type.Results.List[1].Type
-	if !isErrorType(secondResult) {
-		return fmt.Errorf("function %s second return value must be error", funcName)
+		secondResult := targetFunc.Type.Results.List[1].Type
+		if !isErrorType(secondResult) {
+			return fmt.Errorf("function %s second return value must be error", funcName)
+		}
 	}
 
 	return nil
@@ -1105,7 +1124,6 @@ func validateFunction(targetFunc *ast.FuncDecl, funcName string, files []*ast.Fi
 
 func TestNoArgumentFunction(t *testing.T) {
 	t.Parallel()
-	// Test a function with only context parameter
 	code := `package test
 import "context"
 
@@ -1121,11 +1139,8 @@ func ListFiles(ctx context.Context) (ListFilesResult, error) {
 
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, "test.go", code, parser.ParseComments)
-	if err != nil {
-		t.Fatalf("failed to parse code: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Find the function
 	var targetFunc *ast.FuncDecl
 	ast.Inspect(node, func(n ast.Node) bool {
 		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "ListFiles" {
@@ -1134,57 +1149,28 @@ func ListFiles(ctx context.Context) (ListFilesResult, error) {
 		}
 		return true
 	})
+	require.NotNil(t, targetFunc)
 
-	if targetFunc == nil {
-		t.Fatal("ListFiles function not found")
-	}
-
-	// Validate function
 	err = validateFunction(targetFunc, "ListFiles", []*ast.File{node})
-	if err != nil {
-		t.Fatalf("validation failed: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Create doc.Package for testing
 	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
-	if err != nil {
-		t.Fatalf("failed to create doc package: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Generate schemas
 	inputSchema, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
-	if err != nil {
-		t.Fatalf("failed to generate input schema: %v", err)
-	}
+	require.NoError(t, err)
 
 	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, []*ast.File{node}, docPkg)
-	if err != nil {
-		t.Fatalf("failed to generate output schema: %v", err)
+	require.NoError(t, err)
+
+	if inputSchema.Type != schema.Object || len(inputSchema.Properties) != 0 {
+		t.Fatalf("expected empty object input schema, got %+v", inputSchema.Properties)
 	}
 
-	// Validate input schema is empty object
-	if inputSchema.Type != schema.Object {
-		t.Errorf("expected object type for input, got %v", inputSchema.Type)
-	}
-	if len(inputSchema.Properties) != 0 {
-		t.Errorf("expected 0 properties for no-argument function, got %d", len(inputSchema.Properties))
-	}
-	if inputSchema.AdditionalProperties == nil || *inputSchema.AdditionalProperties != false {
-		t.Error("expected additionalProperties to be false")
+	if outputSchema.Properties["Files"] == nil || outputSchema.Properties["error"] == nil {
+		t.Fatalf("expected Files + error in output schema, got %+v", outputSchema.Properties)
 	}
 
-	// Validate output schema
-	if outputSchema.Type != schema.Object {
-		t.Errorf("expected object type for output, got %v", outputSchema.Type)
-	}
-	if outputSchema.Properties["Files"] == nil {
-		t.Error("expected Files property in output")
-	}
-	if outputSchema.Properties["error"] == nil {
-		t.Error("expected error property in output (added by generator)")
-	}
-
-	// Create tool definition
 	tool := &MCPTool{
 		Name:         strcase.ToSnake("ListFiles"),
 		Description:  "Function ListFiles",
@@ -1192,31 +1178,73 @@ func ListFiles(ctx context.Context) (ListFilesResult, error) {
 		OutputSchema: outputSchema,
 	}
 
-	// Validate the tool can be marshaled to JSON
 	jsonBytes, err := json.MarshalIndent(tool, "", "  ")
-	if err != nil {
-		t.Fatalf("failed to marshal tool definition: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Validate the JSON structure
 	var jsonMap map[string]interface{}
-	if err := json.Unmarshal(jsonBytes, &jsonMap); err != nil {
-		t.Fatalf("failed to unmarshal JSON: %v", err)
-	}
+	require.NoError(t, json.Unmarshal(jsonBytes, &jsonMap))
 
-	// Check that name is snake_case
 	if jsonMap["name"] != "list_files" {
 		t.Errorf("expected name field to be 'list_files', got %v", jsonMap["name"])
 	}
 
-	// Check input schema is an empty object
 	inputMap := jsonMap["inputSchema"].(map[string]interface{})
 	if inputMap["type"] != "object" {
 		t.Error("expected inputSchema type to be 'object'")
 	}
-	props := inputMap["properties"].(map[string]interface{})
-	if len(props) != 0 {
+	if props := inputMap["properties"].(map[string]interface{}); len(props) != 0 {
 		t.Errorf("expected empty properties in inputSchema, got %d properties", len(props))
+	}
+}
+
+func TestErrorOnlyFunction(t *testing.T) {
+	t.Parallel()
+	code := `package test
+import "context"
+
+type DeleteRequest struct {
+	Path string
+}
+
+func DeleteFile(ctx context.Context, req DeleteRequest) error {
+	return nil
+}`
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "test.go", code, parser.ParseComments)
+	require.NoError(t, err)
+
+	var targetFunc *ast.FuncDecl
+	ast.Inspect(node, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "DeleteFile" {
+			targetFunc = fn
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, targetFunc)
+
+	err = validateFunction(targetFunc, "DeleteFile", []*ast.File{node})
+	require.NoError(t, err)
+
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "", doc.AllDecls)
+	require.NoError(t, err)
+
+	inputSchema, err := generateInputSchema(targetFunc.Type.Params, []*ast.File{node}, docPkg)
+	require.NoError(t, err)
+
+	outputSchema, err := generateOutputSchema(targetFunc.Type.Results, []*ast.File{node}, docPkg)
+	require.NoError(t, err)
+
+	if len(outputSchema.Properties) != 1 || outputSchema.Properties["error"] == nil {
+		t.Fatalf("expected only error property in output schema, got %+v", outputSchema.Properties)
+	}
+	if len(outputSchema.Required) != 1 || outputSchema.Required[0] != "error" {
+		t.Fatalf("expected only error to be required, got %v", outputSchema.Required)
+	}
+
+	if len(inputSchema.Properties) != 1 || inputSchema.Properties["Path"] == nil {
+		t.Fatalf("expected Path property in input schema, got %+v", inputSchema.Properties)
 	}
 }
 

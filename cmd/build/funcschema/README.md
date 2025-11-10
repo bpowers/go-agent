@@ -41,7 +41,7 @@ func MyFunction(ctx context.Context) (ResultStruct, error) {
 ### Requirements:
 - First parameter must be `context.Context`
 - Optional second parameter must be a **named** struct type (not a pointer or anonymous inline struct)
-- Functions must return exactly two values: `(ResultStruct, error)`
+- Functions must return either `(ResultStruct, error)` **or** just `error`
 - The result struct can contain any fields you need; the generator wraps it with an error pointer automatically
 - Function must be standalone (not a method)
 

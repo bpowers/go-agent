@@ -350,3 +350,113 @@ func TestNoArgWrapper(t *testing.T) {
 		t.Fatalf("generated code does not compile or test fails: %v\nOutput: %s", err, output)
 	}
 }
+
+func TestGeneratedWrapperErrorOnlyFunction(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	testdataContent := `package main
+
+import "context"
+
+type DeleteRequest struct {
+	Path string
+}
+
+func DeleteFile(ctx context.Context, req DeleteRequest) error {
+	return nil
+}`
+
+	testFile := filepath.Join(tmpDir, "testdata.go")
+	if err := os.WriteFile(testFile, []byte(testdataContent), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("failed to get repo root: %v", err)
+	}
+	goModContent := `module testpkg
+
+go 1.24
+
+require github.com/bpowers/go-agent v0.0.0
+
+replace github.com/bpowers/go-agent => ` + repoRoot + `
+`
+	goModFile := filepath.Join(tmpDir, "go.mod")
+	if err := os.WriteFile(goModFile, []byte(goModContent), 0o644); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
+
+	cmd := exec.Command("go", "mod", "tidy")
+	cmd.Dir = tmpDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("go mod tidy output: %s", output)
+	}
+
+	cmd = exec.Command("go", "run", ".", "-func", "DeleteFile", "-input", testFile)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to run funcschema: %v\nOutput: %s", err, output)
+	}
+
+	generatedFile := filepath.Join(tmpDir, "deletefile_tool.go")
+	if _, err := os.Stat(generatedFile); os.IsNotExist(err) {
+		t.Fatal("generated file does not exist")
+	}
+
+	cmd = exec.Command("go", "mod", "tidy")
+	cmd.Dir = tmpDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("go mod tidy output: %s", output)
+	}
+
+	content, err := os.ReadFile(generatedFile)
+	if err != nil {
+		t.Fatalf("failed to read generated file: %v", err)
+	}
+
+	if strings.Contains(string(content), "result, err :=") {
+		t.Error("error-only function should not declare result variable")
+	}
+	if !strings.Contains(string(content), "err := DeleteFile(ctx, req)") {
+		t.Error("expected wrapper to call DeleteFile without result")
+	}
+
+	testMain := filepath.Join(tmpDir, "main_test.go")
+	testContent := `package main
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+)
+
+func TestErrorOnlyWrapper(t *testing.T) {
+	ctx := context.Background()
+	output := DeleteFileTool.Call(ctx, ` + "`" + `{"path":"tmp.txt"}` + "`" + `)
+
+	var result struct {
+		Error *string ` + "`json:\"error,omitzero\"`" + `
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+	if result.Error != nil {
+		t.Fatalf("expected nil error but got %s", *result.Error)
+	}
+}
+`
+
+	if err := os.WriteFile(testMain, []byte(testContent), 0o644); err != nil {
+		t.Fatalf("failed to write test main: %v", err)
+	}
+
+	cmd = exec.Command("go", "test", "-v")
+	cmd.Dir = tmpDir
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generated code does not compile or test fails: %v\nOutput: %s", err, output)
+	}
+}

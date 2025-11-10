@@ -140,21 +140,32 @@ func run() error {
 		}
 	}
 
-	// Check return values - must return exactly two values: (ResultType, error)
-	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) != 2 {
-		return fmt.Errorf("function %s must return exactly two values (ResultType, error)", *funcName)
+	// Check return values - must be either (ResultType, error) or error
+	if targetFunc.Type.Results == nil || len(targetFunc.Type.Results.List) == 0 || len(targetFunc.Type.Results.List) > 2 {
+		return fmt.Errorf("function %s must return either (ResultType, error) or error", *funcName)
 	}
 
-	// First return value must be a struct type
-	firstResult := targetFunc.Type.Results.List[0].Type
-	if !isStructTypeOrNamedStruct(firstResult, files) {
-		return fmt.Errorf("function %s first return value must be a struct type", *funcName)
-	}
+	hasResultStruct := false
+	var returnTypeName string
 
-	// Second return value must be error type
-	secondResult := targetFunc.Type.Results.List[1].Type
-	if !isErrorType(secondResult) {
-		return fmt.Errorf("function %s second return value must be error", *funcName)
+	switch len(targetFunc.Type.Results.List) {
+	case 1:
+		if !isErrorType(targetFunc.Type.Results.List[0].Type) {
+			return fmt.Errorf("function %s single return value must be error", *funcName)
+		}
+	case 2:
+		firstResult := targetFunc.Type.Results.List[0].Type
+		if !isStructTypeOrNamedStruct(firstResult, files) {
+			return fmt.Errorf("function %s first return value must be a struct type", *funcName)
+		}
+
+		secondResult := targetFunc.Type.Results.List[1].Type
+		if !isErrorType(secondResult) {
+			return fmt.Errorf("function %s second return value must be error", *funcName)
+		}
+
+		hasResultStruct = true
+		returnTypeName = getTypeName(firstResult)
 	}
 
 	// Generate input schema from parameters
@@ -189,13 +200,14 @@ func run() error {
 		// No request parameter, just context
 		paramTypeName = ""
 	}
-	returnTypeName := getTypeName(targetFunc.Type.Results.List[0].Type)
+	// Only set return type name when a result struct is present
+	// (hasResultStruct true already ensures returnTypeName is populated)
 
 	// Get the package name from the parsed file
 	packageName := node.Name.Name
 
 	// Generate the Go file with the tool definition const and wrapper function
-	if err := generateToolDefFile(tool, *funcName, paramTypeName, returnTypeName, *inputFile, packageName); err != nil {
+	if err := generateToolDefFile(tool, *funcName, paramTypeName, returnTypeName, hasResultStruct, *inputFile, packageName); err != nil {
 		return fmt.Errorf("generating tool definition file: %w", err)
 	}
 
@@ -239,46 +251,46 @@ func generateInputSchema(params *ast.FieldList, files []*ast.File, docPkg *doc.P
 }
 
 func generateOutputSchema(results *ast.FieldList, files []*ast.File, docPkg *doc.Package) (*schema.JSON, error) {
-	if results == nil || len(results.List) != 2 {
-		return nil, fmt.Errorf("function must return exactly two values (ResultType, error)")
+	if results == nil || len(results.List) == 0 || len(results.List) > 2 {
+		return nil, fmt.Errorf("function must return either (ResultType, error) or error")
 	}
 
-	// Generate schema for the first return value (the actual result type)
+	// Base schema always includes the error field
+	outputSchema := &schema.JSON{
+		Schema:               schema.URL,
+		Type:                 schema.Object,
+		Properties:           make(map[string]*schema.JSON),
+		Required:             []string{"error"},
+		AdditionalProperties: boolPtr(false),
+	}
+	outputSchema.Properties["error"] = &schema.JSON{
+		Type: []interface{}{"string", "null"},
+	}
+
+	// If there's only an error return, we're done
+	if len(results.List) == 1 {
+		if !isErrorType(results.List[0].Type) {
+			return nil, fmt.Errorf("single return value must be error")
+		}
+		return outputSchema, nil
+	}
+
+	// Otherwise, add result fields before the error field
 	result := results.List[0]
 	resultSchema, _, err := generateTypeSchema(result.Type, files, docPkg)
 	if err != nil {
 		return nil, err
 	}
 
-	// The output schema should include both the result fields AND an error field
-	// We'll create a new schema that has all the result's properties plus an error field
 	if resultSchema.Type != schema.Object {
 		return nil, fmt.Errorf("result type must be an object/struct")
 	}
 
-	// Create a new schema that includes the result properties plus error
-	outputSchema := &schema.JSON{
-		Schema:               schema.URL,
-		Type:                 schema.Object,
-		Properties:           make(map[string]*schema.JSON),
-		Required:             make([]string, 0, len(resultSchema.Required)+1),
-		AdditionalProperties: boolPtr(false),
-	}
-
-	// Copy all properties from result schema
 	for name, prop := range resultSchema.Properties {
 		outputSchema.Properties[name] = prop
 	}
 
-	// Add error field (nullable string)
-	outputSchema.Properties["error"] = &schema.JSON{
-		Type: []interface{}{"string", "null"},
-	}
-
-	// Copy required fields from result schema
-	outputSchema.Required = append(outputSchema.Required, resultSchema.Required...)
-	// Error field is also required for OpenAI compatibility
-	outputSchema.Required = append(outputSchema.Required, "error")
+	outputSchema.Required = append(append([]string{}, resultSchema.Required...), outputSchema.Required...)
 
 	return outputSchema, nil
 }
@@ -691,7 +703,7 @@ func parseEnumTag(tag *ast.BasicLit) []string {
 	return values
 }
 
-func generateToolDefFile(tool *MCPTool, funcName, paramTypeName, returnTypeName, inputFile, packageName string) error {
+func generateToolDefFile(tool *MCPTool, funcName, paramTypeName, returnTypeName string, hasResultType bool, inputFile, packageName string) error {
 	// Marshal the tool definition to JSON (compact, not pretty-printed)
 	jsonBytes, err := json.Marshal(tool)
 	if err != nil {
@@ -706,6 +718,26 @@ func generateToolDefFile(tool *MCPTool, funcName, paramTypeName, returnTypeName,
 	lowerFuncName := strings.ToLower(funcName[:1]) + funcName[1:]
 	toolTypeName := fmt.Sprintf("%sTool", lowerFuncName)
 	resultWrapperTypeName := fmt.Sprintf("%sResult", lowerFuncName)
+
+	var embeddedReturn string
+	if hasResultType {
+		embeddedReturn = fmt.Sprintf("\t%s\n", returnTypeName)
+	}
+
+	wrappedInit := fmt.Sprintf("%s{}", resultWrapperTypeName)
+	if hasResultType {
+		wrappedInit = fmt.Sprintf("%s{%s: result}", resultWrapperTypeName, returnTypeName)
+	}
+
+	callNoArg := fmt.Sprintf("result, err := %s(ctx)", funcName)
+	if !hasResultType {
+		callNoArg = fmt.Sprintf("err := %s(ctx)", funcName)
+	}
+
+	callWithReq := fmt.Sprintf("result, err := %s(ctx, req)", funcName)
+	if !hasResultType {
+		callWithReq = fmt.Sprintf("err := %s(ctx, req)", funcName)
+	}
 
 	// Use backticks for the JSON string for better readability
 	// Only fall back to strconv.Quote if the JSON contains backticks
@@ -757,10 +789,10 @@ func (%s) Call(ctx context.Context, input string) string {
 	// No input parameters needed, ignore input JSON
 
 	// Call the actual function
-	result, err := %s(ctx)
+	%s
 
 	// Wrap result with error handling
-	wrapped := %s{%s: result}
+	wrapped := %s
 	if err != nil {
 		errStr := err.Error()
 		wrapped.Error = &errStr
@@ -781,13 +813,13 @@ func (%s) Call(ctx context.Context, input string) string {
 // %sTool is the tool definition for the %s function
 var %sTool chat.Tool = %s{}
 `, packageName,
-			resultWrapperTypeName, resultWrapperTypeName, returnTypeName, // result wrapper type
+			resultWrapperTypeName, resultWrapperTypeName, embeddedReturn, // result wrapper type
 			toolTypeName, funcName, toolTypeName, // tool type comment and declaration
 			toolTypeName, jsonString, // MCPJsonSchema method
 			toolTypeName, tool.Name, // Name method
 			toolTypeName, tool.Description, // Description method
-			toolTypeName, funcName, // Call method
-			resultWrapperTypeName, returnTypeName, resultWrapperTypeName, // wrapping result
+			toolTypeName, callNoArg, // Call method
+			wrappedInit, resultWrapperTypeName, // wrapping result
 			funcName, funcName, funcName, toolTypeName) // exported variable
 	} else {
 		// Function with arguments
@@ -834,10 +866,10 @@ func (%s) Call(ctx context.Context, input string) string {
 	}
 
 	// Call the actual function
-	result, err := %s(ctx, req)
+	%s
 
 	// Wrap result with error handling
-	wrapped := %s{%s: result}
+	wrapped := %s
 	if err != nil {
 		errStr := err.Error()
 		wrapped.Error = &errStr
@@ -858,14 +890,14 @@ func (%s) Call(ctx context.Context, input string) string {
 // %sTool is the tool definition for the %s function
 var %sTool chat.Tool = %s{}
 `, packageName,
-			resultWrapperTypeName, resultWrapperTypeName, returnTypeName, // result wrapper type
+			resultWrapperTypeName, resultWrapperTypeName, embeddedReturn, // result wrapper type
 			toolTypeName, funcName, toolTypeName, // tool type comment and declaration
 			toolTypeName, jsonString, // MCPJsonSchema method
 			toolTypeName, tool.Name, // Name method
 			toolTypeName, tool.Description, // Description method
 			toolTypeName, paramTypeName, // Call method - parameter type
-			resultWrapperTypeName, funcName, // error handling
-			resultWrapperTypeName, returnTypeName, resultWrapperTypeName, // wrapping result
+			resultWrapperTypeName, callWithReq, // error handling
+			wrappedInit, resultWrapperTypeName, // wrapping result
 			funcName, funcName, funcName, toolTypeName) // exported variable
 	}
 

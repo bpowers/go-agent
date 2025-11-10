@@ -12,6 +12,7 @@ import (
 // readFileResult is the internal result wrapper that adds error handling
 type readFileResult struct {
 	ReadFileResult
+
 	Error *string `json:"error,omitzero"`
 }
 
