@@ -61,6 +61,11 @@ func TestReadDirTool(t *testing.T) {
 	assert.True(t, foundFile1)
 	assert.True(t, foundFile2)
 	assert.True(t, foundSubdir)
+
+	// Ensure absolute root path works as expected
+	rootResult, err := ReadDir(ctx, ReadDirRequest{Path: "/"})
+	require.NoError(t, err)
+	assert.Len(t, rootResult.Files, 3)
 }
 
 func TestReadDirToolWrapper(t *testing.T) {
@@ -85,6 +90,17 @@ func TestReadDirToolWrapper(t *testing.T) {
 
 	require.Nil(t, result.Error)
 	assert.Len(t, result.Files, 1)
+
+	// Slash path should also resolve to root
+	slashOutput := ReadDirTool.Call(ctx, `{"path": "/"}`)
+	var slashResult struct {
+		ReadDirResult
+		Error *string `json:"error,omitzero"`
+	}
+	err = json.Unmarshal([]byte(slashOutput), &slashResult)
+	require.NoError(t, err)
+	require.Nil(t, slashResult.Error)
+	assert.Len(t, slashResult.Files, 1)
 }
 
 func TestReadFileTool(t *testing.T) {

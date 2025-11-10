@@ -53,13 +53,16 @@ func ReadDir(ctx context.Context, req ReadDirRequest) (ReadDirResult, error) {
 		return ReadDirResult{}, err
 	}
 
-	// Clean the path to prevent directory traversal
-	dirPath := req.Path
-	if dirPath == "" {
+	dirPath := path.Clean(req.Path)
+	switch dirPath {
+	case "", ".", "/":
 		dirPath = "."
+	default:
+		dirPath = strings.TrimPrefix(dirPath, "/")
+		if dirPath == "" {
+			dirPath = "."
+		}
 	}
-	dirPath = path.Clean(dirPath)
-	dirPath = strings.TrimPrefix(dirPath, "/")
 
 	entries, err := fs.ReadDir(fileSystem, dirPath)
 	if err != nil {
