@@ -292,6 +292,14 @@ go run ./cmd/build/jsonschema -type MyStruct -input myfile.go
 go run ./cmd/build/funcschema -func MyFunction -input myfile.go
 ```
 
+For `funcschema`, target functions must look like:
+
+```go
+func MyFunction(ctx context.Context, req MyRequest) (MyResult, error)
+```
+
+The request parameter **has to be a named struct type** (no anonymous `struct { ... }` literals), and the function must return `(ResultStruct, error)`. This keeps the generator simple and ensures the emitted wrapper compiles cleanly.
+
 These tools are useful for:
 - Creating tool definitions for LLM function calling
 - Generating JSON schemas for API validation
