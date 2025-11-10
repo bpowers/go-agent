@@ -7,6 +7,8 @@ import (
 	"go/doc"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -208,34 +210,6 @@ func TaggedFunc(ctx context.Context, req TaggedRequest) TaggedResult { return Ta
 				}
 				if s.Properties["UserName"] != nil {
 					t.Error("should not have UserName property (renamed by json tag)")
-				}
-			},
-		},
-		{
-			name: "inline struct parameter",
-			code: `package test
-import "context"
-type InlineResult struct {
-	Value string
-	Error *string
-}
-func InlineFunc(ctx context.Context, req struct {
-	Name string
-	Age  int
-}) InlineResult { return InlineResult{Value: req.Name} }`,
-			funcName: "InlineFunc",
-			validate: func(t *testing.T, s *schema.JSON) {
-				if s.Type != schema.Object {
-					t.Errorf("expected object type, got %v", s.Type)
-				}
-				if len(s.Properties) != 2 {
-					t.Errorf("expected 2 properties, got %d", len(s.Properties))
-				}
-				if s.Properties["Name"] == nil {
-					t.Error("expected 'Name' property")
-				}
-				if s.Properties["Age"] == nil {
-					t.Error("expected 'Age' property")
 				}
 			},
 		},
@@ -1767,5 +1741,43 @@ func TestFunc(ctx context.Context, req TestRequest) TestResult {
 				t.Errorf("generated content should contain 'package %s', got: %s", tt.packageName, content)
 			}
 		})
+	}
+}
+
+func TestRunRejectsInlineStructParameter(t *testing.T) {
+	dir := t.TempDir()
+	source := `package test
+import "context"
+type InlineResult struct {
+	Value string
+}
+func InlineFunc(ctx context.Context, req struct {
+	Name string
+	Age  int
+}) (InlineResult, error) {
+	return InlineResult{Value: req.Name}, nil
+}`
+
+	inputPath := filepath.Join(dir, "inline.go")
+	if err := os.WriteFile(inputPath, []byte(source), 0o644); err != nil {
+		t.Fatalf("failed to write source file: %v", err)
+	}
+
+	origFuncName := *funcName
+	origInputFile := *inputFile
+	t.Cleanup(func() {
+		*funcName = origFuncName
+		*inputFile = origInputFile
+	})
+
+	*funcName = "InlineFunc"
+	*inputFile = inputPath
+
+	err := run()
+	if err == nil {
+		t.Fatal("expected run() to fail for inline request struct, got nil")
+	}
+	if !strings.Contains(err.Error(), "named struct type") {
+		t.Fatalf("expected error about named struct type, got: %v", err)
 	}
 }

@@ -134,7 +134,7 @@ func run() error {
 				return fmt.Errorf("function %s second parameter must be a struct type, got %s", *funcName, t.Name)
 			}
 		case *ast.StructType:
-			// Inline struct - this is fine
+			return fmt.Errorf("function %s second parameter must be a named struct type; inline structs are not supported", *funcName)
 		default:
 			return fmt.Errorf("function %s second parameter must be a struct type", *funcName)
 		}
