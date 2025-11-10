@@ -139,7 +139,7 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 	}
 	defer root.Close()
 
-	ctx := fstools.WithTestFS(context.Background(), root.FS())
+	ctx := fstools.WithFS(context.Background(), root.FS())
 
 	// Track tool usage if system reminders are enabled
 	var (

@@ -68,7 +68,7 @@ if err != nil {
 defer root.Close()
 
 // Used in session.Message (not at tool registration time)
-ctx := fstools.WithTestFS(context.Background(), root.FS())
+ctx := fstools.WithFS(context.Background(), root.FS())
 
 if err := session.RegisterTool(fstools.ReadDirTool); err != nil {
 	return fmt.Errorf("failed to register ReadDirTool: %w", err)

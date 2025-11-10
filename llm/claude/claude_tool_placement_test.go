@@ -36,7 +36,7 @@ func TestClaudeToolResultPlacement(t *testing.T) {
 	defer root.Close()
 
 	// Setup context with test filesystem
-	ctx := fstools.WithTestFS(context.Background(), root.FS())
+	ctx := fstools.WithFS(context.Background(), root.FS())
 
 	// Create anthropic client directly to make raw API calls
 	anthropicClient := anthropic.NewClient(option.WithAPIKey(apiKey))

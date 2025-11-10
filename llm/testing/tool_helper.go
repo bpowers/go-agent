@@ -32,7 +32,7 @@ The methodology has proven especially useful in strategy consulting, where it he
 	}
 
 	// Create context with filesystem
-	ctx := fstools.WithTestFS(context.Background(), testFS)
+	ctx := fstools.WithFS(context.Background(), testFS)
 
 	// Create a new chat session with tool support
 	systemPrompt := "You are a helpful assistant with several tools at your disposal."
@@ -108,7 +108,7 @@ The methodology has proven especially useful in strategy consulting, where it he
 // TestWritesFile tests that context is properly passed through tool calls
 func TestWritesFile(t testing.TB, client chat.Client) {
 	testFS := memfs.New()
-	ctx := fstools.WithTestFS(context.Background(), testFS)
+	ctx := fstools.WithFS(context.Background(), testFS)
 
 	chatSession := client.NewChat("You are a helpful assistant that can work with files.")
 

@@ -13,18 +13,18 @@ import (
 // contextKey is a private type for context keys
 type contextKey struct{}
 
-// WithTestFS adds a test filesystem to the context
-func WithTestFS(ctx context.Context, f fs.FS) context.Context {
+// WithFS adds an fs.FS to the context for downstream tool calls.
+func WithFS(ctx context.Context, f fs.FS) context.Context {
 	return context.WithValue(ctx, contextKey{}, f)
 }
 
-// GetTestFS retrieves the test filesystem from the context
-func GetTestFS(ctx context.Context) (fs.FS, error) {
-	testFS, ok := ctx.Value(contextKey{}).(fs.FS)
+// GetFS retrieves the filesystem from the context.
+func GetFS(ctx context.Context) (fs.FS, error) {
+	fs, ok := ctx.Value(contextKey{}).(fs.FS)
 	if !ok {
 		return nil, fmt.Errorf("no filesystem found in context")
 	}
-	return testFS, nil
+	return fs, nil
 }
 
 // ReadDirRequest is the input for ReadDir
@@ -48,7 +48,7 @@ type FileInfo struct {
 
 // ReadDir reads a directory from the test filesystem
 func ReadDir(ctx context.Context, req ReadDirRequest) (ReadDirResult, error) {
-	fileSystem, err := GetTestFS(ctx)
+	fileSystem, err := GetFS(ctx)
 	if err != nil {
 		return ReadDirResult{}, err
 	}
@@ -99,7 +99,7 @@ type ReadFileResult struct {
 
 // ReadFile reads a file from the test filesystem
 func ReadFile(ctx context.Context, req ReadFileRequest) (ReadFileResult, error) {
-	fileSystem, err := GetTestFS(ctx)
+	fileSystem, err := GetFS(ctx)
 	if err != nil {
 		return ReadFileResult{}, err
 	}
@@ -138,7 +138,7 @@ type WriteFileResult struct {
 
 // WriteFile writes a file to the test filesystem
 func WriteFile(ctx context.Context, req WriteFileRequest) (WriteFileResult, error) {
-	fileSystem, err := GetTestFS(ctx)
+	fileSystem, err := GetFS(ctx)
 	if err != nil {
 		return WriteFileResult{}, err
 	}

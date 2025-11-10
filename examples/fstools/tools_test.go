@@ -27,7 +27,7 @@ func TestReadDirTool(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create context with filesystem
-	ctx := WithTestFS(context.Background(), testFS)
+	ctx := WithFS(context.Background(), testFS)
 
 	// Call ReadDir directly (empty path defaults to root)
 	result, err := ReadDir(ctx, ReadDirRequest{})
@@ -75,7 +75,7 @@ func TestReadDirToolWrapper(t *testing.T) {
 	err := testFS.WriteFile("test.txt", []byte("test"), 0o644)
 	require.NoError(t, err)
 
-	ctx := WithTestFS(context.Background(), testFS)
+	ctx := WithFS(context.Background(), testFS)
 
 	// Call the generated wrapper function
 	output := ReadDirTool.Call(ctx, "{}")
@@ -111,7 +111,7 @@ func TestReadFileTool(t *testing.T) {
 	err := testFS.WriteFile("test.txt", []byte(testContent), 0o644)
 	require.NoError(t, err)
 
-	ctx := WithTestFS(context.Background(), testFS)
+	ctx := WithFS(context.Background(), testFS)
 
 	// Test reading existing file
 	result, err := ReadFile(ctx, ReadFileRequest{FileName: "test.txt"})
@@ -132,7 +132,7 @@ func TestReadFileToolWrapper(t *testing.T) {
 	err := testFS.WriteFile("test.txt", []byte(testContent), 0o644)
 	require.NoError(t, err)
 
-	ctx := WithTestFS(context.Background(), testFS)
+	ctx := WithFS(context.Background(), testFS)
 
 	// Call the generated wrapper function
 	input := `{"fileName": "test.txt"}`
@@ -154,7 +154,7 @@ func TestWriteFileTool(t *testing.T) {
 	t.Parallel()
 	// Create in-memory filesystem
 	testFS := memfs.New()
-	ctx := WithTestFS(context.Background(), testFS)
+	ctx := WithFS(context.Background(), testFS)
 
 	// Write a new file
 	content := "New file content"
@@ -189,7 +189,7 @@ func TestWriteFileToolWrapper(t *testing.T) {
 	t.Parallel()
 	// Create in-memory filesystem
 	testFS := memfs.New()
-	ctx := WithTestFS(context.Background(), testFS)
+	ctx := WithFS(context.Background(), testFS)
 
 	// Call the generated wrapper function
 	input := `{"fileName": "test.txt", "content": "Test content"}`
@@ -216,7 +216,7 @@ func TestPathCleaning(t *testing.T) {
 	t.Parallel()
 	// Test that path cleaning works
 	testFS := memfs.New()
-	ctx := WithTestFS(context.Background(), testFS)
+	ctx := WithFS(context.Background(), testFS)
 
 	// Write a file with a path that needs cleaning
 	_, err := WriteFile(ctx, WriteFileRequest{
