@@ -63,13 +63,13 @@ type StreamEvent struct {
 	// Content contains the text content for content events.
 	Content string `json:"content,omitzero"`
 	// ThinkingStatus contains status information for thinking events.
-	ThinkingStatus *ThinkingStatus `json:"thinking_status,omitzero"`
+	ThinkingStatus *ThinkingStatus `json:"thinkingStatus,omitzero"`
 	// ToolCalls contains any tool calls in this chunk.
-	ToolCalls []ToolCall `json:"tool_calls,omitzero"`
+	ToolCalls []ToolCall `json:"toolCalls,omitzero"`
 	// ToolResults contains tool execution outputs in this chunk.
-	ToolResults []ToolResult `json:"tool_results,omitzero"`
+	ToolResults []ToolResult `json:"toolResults,omitzero"`
 	// FinishReason indicates why the stream ended (if applicable).
-	FinishReason string `json:"finish_reason,omitzero"`
+	FinishReason string `json:"finishReason,omitzero"`
 }
 
 // ThinkingStatus represents the status of model reasoning/thinking.
@@ -79,7 +79,7 @@ type ThinkingStatus struct {
 	// Signature contains the encrypted signature for thinking block verification.
 	Signature string `json:"signature,omitzero"`
 	// RedactedData contains encrypted thinking content when flagged by safety.
-	RedactedData string `json:"redacted_data,omitzero"`
+	RedactedData string `json:"redactedData,omitzero"`
 }
 
 // ThinkingContent represents thinking/reasoning content in a message.
@@ -210,14 +210,14 @@ type Content struct {
 	Text string `json:"text,omitzero"`
 
 	// Tool-related content
-	ToolCall   *ToolCall   `json:"tool_call,omitzero"`
-	ToolResult *ToolResult `json:"tool_result,omitzero"`
+	ToolCall   *ToolCall   `json:"toolCall,omitzero"`
+	ToolResult *ToolResult `json:"toolResult,omitzero"`
 
 	// Thinking/reasoning content
 	Thinking *ThinkingContent `json:"thinking,omitzero"`
 
 	// System reminder content (ephemeral context added by tooling, filtered when replaying history)
-	SystemReminder string `json:"system_reminder,omitzero"`
+	SystemReminder string `json:"systemReminder,omitzero"`
 }
 
 // Message represents a message to or from an LLM.
