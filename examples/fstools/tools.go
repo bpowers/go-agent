@@ -40,7 +40,7 @@ type ReadDirResult struct {
 // FileInfo contains information about a file
 type FileInfo struct {
 	Name  string `json:"name"`
-	IsDir bool   `json:"is_dir"`
+	IsDir bool   `json:"isDir"`
 	Size  int64  `json:"size"`
 }
 

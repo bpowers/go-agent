@@ -25,8 +25,8 @@ type Record struct {
 	Contents     []chat.Content `json:"contents,omitzero"`
 	Live         bool           `json:"live"`
 	Status       RecordStatus   `json:"status"`
-	InputTokens  int            `json:"input_tokens"`
-	OutputTokens int            `json:"output_tokens"`
+	InputTokens  int            `json:"inputTokens"`
+	OutputTokens int            `json:"outputTokens"`
 	Timestamp    time.Time      `json:"timestamp"`
 }
 
@@ -166,10 +166,10 @@ type Store interface {
 
 // SessionMetrics represents session statistics that can be persisted.
 type SessionMetrics struct {
-	CompactionCount     int       `json:"compaction_count"`
-	LastCompaction      time.Time `json:"last_compaction"`
-	CumulativeTokens    int       `json:"cumulative_tokens"`
-	CompactionThreshold float64   `json:"compaction_threshold"`
+	CompactionCount     int       `json:"compactionCount"`
+	LastCompaction      time.Time `json:"lastCompaction"`
+	CumulativeTokens    int       `json:"cumulativeTokens"`
+	CompactionThreshold float64   `json:"compactionThreshold"`
 }
 
 // sessionData holds data for a single session

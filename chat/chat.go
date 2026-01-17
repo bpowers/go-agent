@@ -21,7 +21,7 @@ type ToolCall struct {
 // ToolResult represents the result of executing a tool.
 type ToolResult struct {
 	// ToolCallID matches the ID from the corresponding ToolCall.
-	ToolCallID string `json:"tool_call_id"`
+	ToolCallID string `json:"toolCallID"`
 	// Name is the tool name associated with this result.
 	Name string `json:"name"`
 	// Content is the result of the tool execution.
@@ -113,19 +113,19 @@ const (
 // TokenUsageDetails represents detailed token usage information
 type TokenUsageDetails struct {
 	// InputTokens is the number of tokens in the input/prompt
-	InputTokens int `json:"input_tokens"`
+	InputTokens int `json:"inputTokens"`
 	// OutputTokens is the number of tokens in the output/completion
-	OutputTokens int `json:"output_tokens"`
+	OutputTokens int `json:"outputTokens"`
 	// TotalTokens is the total tokens used (input + output)
-	TotalTokens int `json:"total_tokens"`
+	TotalTokens int `json:"totalTokens"`
 	// CachedTokens is the number of cached tokens used (if applicable)
-	CachedTokens int `json:"cached_tokens,omitzero"`
+	CachedTokens int `json:"cachedTokens,omitzero"`
 }
 
 // TokenUsage represents token usage for both the last message and cumulative session
 type TokenUsage struct {
 	// LastMessage contains token counts for the most recent message exchange
-	LastMessage TokenUsageDetails `json:"last_message"`
+	LastMessage TokenUsageDetails `json:"lastMessage"`
 	// Cumulative contains total token counts for the entire conversation
 	Cumulative TokenUsageDetails `json:"cumulative"`
 }

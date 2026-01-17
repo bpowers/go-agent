@@ -20,7 +20,7 @@ type readDirResult struct {
 type readDirTool struct{}
 
 func (readDirTool) MCPJsonSchema() string {
-	return `{"name":"read_dir","description":"Reads a directory from the test filesystem","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Directory path to read (defaults to \".\" for root)"}},"required":["path"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"files":{"type":"array","items":{"type":"object","properties":{"is_dir":{"type":"boolean"},"name":{"type":"string"},"size":{"type":"integer"}},"required":["name","is_dir","size"],"additionalProperties":false}}},"required":["files","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
+	return `{"name":"read_dir","description":"Reads a directory from the test filesystem","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Directory path to read (defaults to \".\" for root)"}},"required":["path"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"files":{"type":"array","items":{"type":"object","properties":{"isDir":{"type":"boolean"},"name":{"type":"string"},"size":{"type":"integer"}},"required":["name","isDir","size"],"additionalProperties":false}}},"required":["files","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
 }
 
 func (readDirTool) Name() string {

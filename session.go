@@ -56,14 +56,14 @@ type Session interface {
 
 // SessionMetrics provides usage statistics for the session.
 type SessionMetrics struct {
-	CumulativeTokens int       `json:"cumulative_tokens"` // Total tokens used across all messages
-	LiveTokens       int       `json:"live_tokens"`       // Tokens in active context window
-	MaxTokens        int       `json:"max_tokens"`        // Model's max context size
-	CompactionCount  int       `json:"compaction_count"`  // Number of compactions performed
-	LastCompaction   time.Time `json:"last_compaction"`   // When last compacted
-	RecordsLive      int       `json:"records_live"`      // Number of live records
-	RecordsTotal     int       `json:"records_total"`     // Total records (live + dead)
-	PercentFull      float64   `json:"percent_full"`      // LiveTokens/MaxTokens ratio
+	CumulativeTokens int       `json:"cumulativeTokens"` // Total tokens used across all messages
+	LiveTokens       int       `json:"liveTokens"`       // Tokens in active context window
+	MaxTokens        int       `json:"maxTokens"`        // Model's max context size
+	CompactionCount  int       `json:"compactionCount"`  // Number of compactions performed
+	LastCompaction   time.Time `json:"lastCompaction"`   // When last compacted
+	RecordsLive      int       `json:"recordsLive"`      // Number of live records
+	RecordsTotal     int       `json:"recordsTotal"`     // Total records (live + dead)
+	PercentFull      float64   `json:"percentFull"`      // LiveTokens/MaxTokens ratio
 }
 
 // SessionOption configures a Session.
