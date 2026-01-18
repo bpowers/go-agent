@@ -20,11 +20,11 @@ type readFileResult struct {
 type readFileTool struct{}
 
 func (readFileTool) MCPJsonSchema() string {
-	return `{"name":"read_file","description":"Reads a file from the test filesystem","inputSchema":{"type":"object","properties":{"fileName":{"type":"string"}},"required":["fileName"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"content":{"type":"string"},"error":{"type":["string","null"]}},"required":["content","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
+	return `{"name":"ReadFile","description":"Reads a file from the test filesystem","inputSchema":{"type":"object","properties":{"fileName":{"type":"string"}},"required":["fileName"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"content":{"type":"string"},"error":{"type":["string","null"]}},"required":["content","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
 }
 
 func (readFileTool) Name() string {
-	return "read_file"
+	return "ReadFile"
 }
 
 func (readFileTool) Description() string {

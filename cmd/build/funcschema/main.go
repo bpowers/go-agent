@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/bpowers/go-agent/schema"
-	"github.com/iancoleman/strcase"
 	"mvdan.cc/gofumpt/format"
 )
 
@@ -185,7 +184,7 @@ func run() error {
 
 	// Create the MCP tool definition
 	tool := &MCPTool{
-		Name:         strcase.ToSnake(*funcName),
+		Name:         *funcName,
 		Description:  description,
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,

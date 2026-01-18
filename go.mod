@@ -4,7 +4,6 @@ go 1.24.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.19.0
-	github.com/iancoleman/strcase v0.3.0
 	github.com/openai/openai-go v1.12.0
 	github.com/psanford/memfs v0.0.0-20241019191636-4ef911798f9b
 	github.com/stretchr/testify v1.11.1

@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/bpowers/go-agent/schema"
-	"github.com/iancoleman/strcase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -869,9 +868,9 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) (DatasetGetResult, 
 		t.Fatalf("failed to generate output schema: %v", err)
 	}
 
-	// Create tool definition with snake_case name
+	// Create tool definition
 	tool := &MCPTool{
-		Name:         strcase.ToSnake("DatasetGet"),
+		Name:         "DatasetGet",
 		Description:  "Function DatasetGet",
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,
@@ -889,9 +888,9 @@ func DatasetGet(ctx context.Context, args DatasetGetRequest) (DatasetGetResult, 
 		t.Fatalf("failed to unmarshal JSON: %v", err)
 	}
 
-	// Check required fields - name should be snake_case
-	if jsonMap["name"] != "dataset_get" {
-		t.Errorf("expected name field to be 'dataset_get', got %v", jsonMap["name"])
+	// Check required fields
+	if jsonMap["name"] != "DatasetGet" {
+		t.Errorf("expected name field to be 'DatasetGet', got %v", jsonMap["name"])
 	}
 	if jsonMap["inputSchema"] == nil {
 		t.Error("expected inputSchema field")
@@ -1172,7 +1171,7 @@ func ListFiles(ctx context.Context) (ListFilesResult, error) {
 	}
 
 	tool := &MCPTool{
-		Name:         strcase.ToSnake("ListFiles"),
+		Name:         "ListFiles",
 		Description:  "Function ListFiles",
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,
@@ -1184,8 +1183,8 @@ func ListFiles(ctx context.Context) (ListFilesResult, error) {
 	var jsonMap map[string]interface{}
 	require.NoError(t, json.Unmarshal(jsonBytes, &jsonMap))
 
-	if jsonMap["name"] != "list_files" {
-		t.Errorf("expected name field to be 'list_files', got %v", jsonMap["name"])
+	if jsonMap["name"] != "ListFiles" {
+		t.Errorf("expected name field to be 'ListFiles', got %v", jsonMap["name"])
 	}
 
 	inputMap := jsonMap["inputSchema"].(map[string]interface{})
@@ -1245,37 +1244,6 @@ func DeleteFile(ctx context.Context, req DeleteRequest) error {
 
 	if len(inputSchema.Properties) != 1 || inputSchema.Properties["Path"] == nil {
 		t.Fatalf("expected Path property in input schema, got %+v", inputSchema.Properties)
-	}
-}
-
-func TestCamelToSnake(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"ReadDir", "read_dir"},
-		{"DatasetGet", "dataset_get"},
-		{"HTTPServer", "http_server"},            // Fixed expectation
-		{"GetHTTPResponse", "get_http_response"}, // Fixed expectation
-		{"SimpleFunc", "simple_func"},
-		{"lowercase", "lowercase"},
-		{"A", "a"},
-		{"AB", "ab"},                       // Fixed expectation
-		{"ABC", "abc"},                     // Fixed expectation
-		{"GetUserByID", "get_user_by_id"},  // Fixed expectation
-		{"CreateAPIKey", "create_api_key"}, // Fixed expectation
-		{"IOReader", "io_reader"},          // Fixed expectation
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			t.Parallel()
-			result := strcase.ToSnake(tt.input)
-			if result != tt.expected {
-				t.Errorf("strcase.ToSnake(%q) = %q, want %q", tt.input, result, tt.expected)
-			}
-		})
 	}
 }
 

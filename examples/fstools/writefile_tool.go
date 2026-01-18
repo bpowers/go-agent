@@ -20,11 +20,11 @@ type writeFileResult struct {
 type writeFileTool struct{}
 
 func (writeFileTool) MCPJsonSchema() string {
-	return `{"name":"write_file","description":"Writes a file to the test filesystem","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"fileName":{"type":"string"}},"required":["fileName","content"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"success":{"type":"boolean"}},"required":["success","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
+	return `{"name":"WriteFile","description":"Writes a file to the test filesystem","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"fileName":{"type":"string"}},"required":["fileName","content"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"error":{"type":["string","null"]},"success":{"type":"boolean"}},"required":["success","error"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}`
 }
 
 func (writeFileTool) Name() string {
-	return "write_file"
+	return "WriteFile"
 }
 
 func (writeFileTool) Description() string {
