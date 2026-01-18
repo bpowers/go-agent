@@ -120,10 +120,12 @@ func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.C
 }
 
 var modelMaxOutputTokens = map[string]int64{
+	"claude-opus-4-5":   64000,
 	"claude-opus-4-1":   32000,
 	"claude-opus-4":     32000,
 	"claude-sonnet-4-5": 64000,
 	"claude-sonnet-4":   64000,
+	"claude-haiku-4-5":  64000,
 	"claude-3-7-sonnet": 64000,
 	"claude-3-5-haiku":  8192,
 	"claude-3-haiku":    4096,
@@ -172,13 +174,14 @@ func (s *set[T]) containsWithPredicate(predicate func(T) bool) bool {
 
 // modelsWithThinking defines which Claude models support thinking/reasoning capabilities
 var modelsWithThinking = newSet(
+	"claude-opus-4-5",
 	"claude-opus-4-1",
 	"claude-opus-4",
 	"claude-sonnet-4-5",
 	"claude-sonnet-4",
+	"claude-haiku-4-5",
 	"claude-3-7-sonnet",
 	"claude-3-5-sonnet", // Legacy naming, keep for compatibility
-	// Note: haiku models do not support thinking
 )
 
 // supportsThinking checks if a model supports thinking/reasoning capabilities
@@ -195,10 +198,12 @@ func supportsThinking(modelName string) bool {
 }
 
 var modelLimits = []chat.ModelTokenLimits{
+	{Model: "claude-opus-4-5", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-opus-4-1", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
 	{Model: "claude-opus-4", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
 	{Model: "claude-sonnet-4-5", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-sonnet-4", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
+	{Model: "claude-haiku-4-5", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-3-7-sonnet", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-3-5-haiku", TokenLimits: chat.TokenLimits{Context: 200000, Output: 8192}},
 	{Model: "claude-3-haiku", TokenLimits: chat.TokenLimits{Context: 200000, Output: 4096}},
