@@ -955,7 +955,7 @@ func (c *chatClient) handleToolCallRounds(ctx context.Context, initialMsg chat.M
 		followUpParams := anthropic.MessageNewParams{
 			Messages:  msgs,
 			Model:     anthropic.Model(c.modelName),
-			MaxTokens: 4096,
+			MaxTokens: getMaxOutputTokens(c.modelName),
 		}
 
 		// Add system prompt if present
