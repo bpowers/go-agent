@@ -209,7 +209,8 @@ func TestSystemReminderPersistence(t *testing.T) {
 	// Now test that Session filters out SystemReminder content when rebuilding history
 	// Create a mock client and session
 	mockClient := &mockClient{}
-	session := NewSession(mockClient, "test system", WithStore(store), WithRestoreSession(sessionID))
+	session, err := NewSession(mockClient, "test system", WithStore(store), WithRestoreSession(sessionID))
+	require.NoError(t, err)
 
 	// Get history - should filter out SystemReminder content
 	_, history := session.History()

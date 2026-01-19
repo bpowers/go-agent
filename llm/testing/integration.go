@@ -944,7 +944,8 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 
 	t.Run("SimpleMessages", func(t *testing.T) {
 		// Create a new session with persistence
-		session := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		session, err := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		require.NoError(t, err)
 		sessionID := session.SessionID()
 
 		// Baseline record count before first message
@@ -978,9 +979,10 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		assert.Equal(t, 1, userRecordCount1, "First user message should appear exactly once in persistence")
 
 		// Restore the session from persistence (simulating browser reload)
-		restoredSession := agent.NewSession(client, systemPrompt,
+		restoredSession, err := agent.NewSession(client, systemPrompt,
 			agent.WithStore(store),
 			agent.WithRestoreSession(sessionID))
+		require.NoError(t, err)
 
 		// Send second message on restored session
 		userMsg2 := "What is the capital of France?"
@@ -1022,7 +1024,8 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 
 	t.Run("WithToolCalls", func(t *testing.T) {
 		// Create a new session with persistence and a tool
-		session := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		session, err := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		require.NoError(t, err)
 		sessionID := session.SessionID()
 
 		// Register a tool
@@ -1080,9 +1083,10 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		assert.Equal(t, 1, userRecordCount1, "First user message should appear exactly once")
 
 		// Restore session
-		restoredSession := agent.NewSession(client, systemPrompt,
+		restoredSession, err := agent.NewSession(client, systemPrompt,
 			agent.WithStore(store),
 			agent.WithRestoreSession(sessionID))
+		require.NoError(t, err)
 
 		// Re-register tool on restored session
 		calcTool.callFn = func(ctx context.Context, input string) string {
@@ -1126,7 +1130,8 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 
 	t.Run("EmptyTextMessage", func(t *testing.T) {
 		// Test with a message that has no text (edge case)
-		session := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		session, err := agent.NewSession(client, systemPrompt, agent.WithStore(store))
+		require.NoError(t, err)
 		sessionID := session.SessionID()
 
 		// Send a normal message first
@@ -1146,9 +1151,10 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 		assert.Equal(t, 1, userRecordCount1, "User message should appear exactly once")
 
 		// Restore and send another message
-		restoredSession := agent.NewSession(client, systemPrompt,
+		restoredSession, err := agent.NewSession(client, systemPrompt,
 			agent.WithStore(store),
 			agent.WithRestoreSession(sessionID))
+		require.NoError(t, err)
 
 		userMsg2 := "Goodbye"
 		_, err = restoredSession.Message(context.Background(), chat.UserMessage(userMsg2))

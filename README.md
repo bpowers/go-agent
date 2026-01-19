@@ -97,12 +97,15 @@ import (
 )
 
 // Create a session with automatic context compaction
-session := agent.NewSession(
+session, err := agent.NewSession(
     client,
     "You are a helpful assistant",
     agent.WithStore(sqlitestore.New("chat.db")),           // Optional: persist to SQLite
     agent.WithCompactionThreshold(0.8),                    // Compact at 80% full (default)
 )
+if err != nil {
+    log.Fatal(err)
+}
 
 // Use it like a regular Chat
 response, err := session.Message(ctx, chat.Message{

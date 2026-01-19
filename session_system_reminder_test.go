@@ -116,7 +116,8 @@ func TestSessionPreservesSystemReminder(t *testing.T) {
 	t.Parallel()
 
 	client := &mockSystemReminderClient{}
-	session := NewSession(client, "Test system prompt")
+	session, err := NewSession(client, "Test system prompt")
+	require.NoError(t, err)
 
 	// Create context with a system reminder
 	reminderText := "<system-reminder>User is viewing: models/test.sd.json</system-reminder>"
@@ -125,7 +126,7 @@ func TestSessionPreservesSystemReminder(t *testing.T) {
 	})
 
 	// Send a message with the system reminder context
-	_, err := session.Message(ctx, chat.UserMessage("Tell me about this model"))
+	_, err = session.Message(ctx, chat.UserMessage("Tell me about this model"))
 	require.NoError(t, err)
 
 	// Verify that the context with system reminder was seen by the underlying chat
@@ -152,14 +153,15 @@ func TestSessionPreservesSystemReminderAcrossMultipleMessages(t *testing.T) {
 	t.Parallel()
 
 	client := &mockSystemReminderClient{}
-	session := NewSession(client, "Test system prompt")
+	session, err := NewSession(client, "Test system prompt")
+	require.NoError(t, err)
 
 	// First message with system reminder
 	ctx1 := chat.WithSystemReminder(context.Background(), func() string {
 		return "<system-reminder>Viewing: model1.sd.json</system-reminder>"
 	})
 
-	_, err := session.Message(ctx1, chat.UserMessage("First question"))
+	_, err = session.Message(ctx1, chat.UserMessage("First question"))
 	require.NoError(t, err)
 
 	// Second message with different system reminder
