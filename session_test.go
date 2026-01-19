@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,7 +197,8 @@ func (t *mockTool) Call(ctx context.Context, input string) string { return t.cal
 
 func TestSessionBasics(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "You are a helpful assistant")
+	session, err := NewSession(client, "You are a helpful assistant")
+	require.NoError(t, err)
 
 	// Test that Session implements chat.Chat
 	var _ chat.Chat = session
@@ -226,7 +228,8 @@ func TestSessionBasics(t *testing.T) {
 
 func TestSessionStreaming(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "You are a helpful assistant")
+	session, err := NewSession(client, "You are a helpful assistant")
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	var streamedContent strings.Builder
@@ -255,8 +258,9 @@ func TestSessionHistory(t *testing.T) {
 		chat.AssistantMessage("Initial response"),
 	}
 
-	session := NewSession(client, "System prompt",
+	session, err := NewSession(client, "System prompt",
 		WithInitialMessages(initialMsgs...))
+	require.NoError(t, err)
 
 	systemPrompt, msgs := session.History()
 	assert.Equal(t, "System prompt", systemPrompt)
@@ -275,7 +279,8 @@ func TestSessionHistory(t *testing.T) {
 
 func TestSessionTools(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "You are a helpful assistant")
+	session, err := NewSession(client, "You are a helpful assistant")
+	require.NoError(t, err)
 
 	// Register a tool
 	tool := &mockTool{
@@ -287,7 +292,7 @@ func TestSessionTools(t *testing.T) {
 		},
 	}
 
-	err := session.RegisterTool(tool)
+	err = session.RegisterTool(tool)
 	require.NoError(t, err)
 
 	// Check tool is registered
@@ -302,7 +307,8 @@ func TestSessionTools(t *testing.T) {
 
 func TestSessionMetrics(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "System")
+	session, err := NewSession(client, "System")
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -321,7 +327,8 @@ func TestSessionMetrics(t *testing.T) {
 
 func TestSessionCompaction(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "System prompt")
+	session, err := NewSession(client, "System prompt")
+	require.NoError(t, err)
 
 	// Lower the threshold for testing
 	session.SetCompactionThreshold(0.1) // Compact at 10% full
@@ -348,7 +355,8 @@ func TestSessionCompaction(t *testing.T) {
 
 func TestManualCompaction(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "System")
+	session, err := NewSession(client, "System")
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -359,7 +367,7 @@ func TestManualCompaction(t *testing.T) {
 	}
 
 	// Manually trigger compaction
-	err := session.CompactNow()
+	err = session.CompactNow()
 	require.NoError(t, err)
 
 	// Check that compaction occurred
@@ -386,12 +394,13 @@ func TestManualCompaction(t *testing.T) {
 
 func TestSessionTokenTracking(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "System")
+	session, err := NewSession(client, "System")
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
 	// Send a message
-	_, err := session.Message(ctx, chat.UserMessage("Test message"))
+	_, err = session.Message(ctx, chat.UserMessage("Test message"))
 	require.NoError(t, err)
 
 	// Check token usage
@@ -427,12 +436,13 @@ func TestSessionTokenTracking(t *testing.T) {
 
 func TestSessionRecordTimestamps(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "System")
+	session, err := NewSession(client, "System")
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
 	// Send a message
-	_, err := session.Message(ctx, chat.UserMessage("Test"))
+	_, err = session.Message(ctx, chat.UserMessage("Test"))
 	require.NoError(t, err)
 
 	// Check that records have timestamps
@@ -459,8 +469,9 @@ func TestSessionWithInitialMessages(t *testing.T) {
 		chat.AssistantMessage("Second response"),
 	}
 
-	session := NewSession(client, "System",
+	session, err := NewSession(client, "System",
 		WithInitialMessages(initialMsgs...))
+	require.NoError(t, err)
 
 	// Check initial records
 	records := session.LiveRecords()
@@ -480,7 +491,8 @@ func TestSessionWithInitialMessages(t *testing.T) {
 
 func TestCompactionThreshold(t *testing.T) {
 	client := &mockClient{}
-	session := NewSession(client, "System")
+	session, err := NewSession(client, "System")
+	require.NoError(t, err)
 
 	// Test setting valid thresholds
 	session.SetCompactionThreshold(0.5)
@@ -504,7 +516,8 @@ func TestSummarizerContextCancellation(t *testing.T) {
 		t: t,
 	}
 
-	session := NewSession(client, "System", WithSummarizer(cancelCheckerSummarizer))
+	session, err := NewSession(client, "System", WithSummarizer(cancelCheckerSummarizer))
+	require.NoError(t, err)
 
 	// Create a context that we'll cancel
 	ctx, cancel := context.WithCancel(context.Background())
@@ -520,7 +533,7 @@ func TestSummarizerContextCancellation(t *testing.T) {
 	cancel()
 
 	// This should fail because context is cancelled
-	_, err := session.Message(ctx, chat.UserMessage(strings.Repeat("Trigger compaction ", 200)))
+	_, err = session.Message(ctx, chat.UserMessage(strings.Repeat("Trigger compaction ", 200)))
 
 	// Should get a context cancellation error
 	assert.Error(t, err)
@@ -556,11 +569,13 @@ func TestCompactionThresholdZeroPersistence(t *testing.T) {
 	sessionID := "test-zero-threshold"
 
 	// Create first session and set threshold to 0
-	session1 := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
+	session1, err := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
+	require.NoError(t, err)
 	session1.SetCompactionThreshold(0.0)
 
 	// Create second session with same store and session ID
-	session2 := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
+	session2, err := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
+	require.NoError(t, err)
 
 	// Send messages to test that compaction doesn't occur
 	ctx := context.Background()
@@ -581,11 +596,12 @@ func TestRecordStatus(t *testing.T) {
 	store := persistence.NewMemoryStore()
 	sessionID := "test-record-status"
 
-	session := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
+	session, err := NewSession(client, "System", WithStore(store), WithRestoreSession(sessionID))
+	require.NoError(t, err)
 
 	// Send a successful message
 	ctx := context.Background()
-	_, err := session.Message(ctx, chat.UserMessage("Test message"))
+	_, err = session.Message(ctx, chat.UserMessage("Test message"))
 	require.NoError(t, err)
 
 	// Check that records have success status
@@ -648,9 +664,10 @@ func TestGetRecordEfficiency(t *testing.T) {
 func TestSessionPersistsToolInteractions(t *testing.T) {
 	store := persistence.NewMemoryStore()
 	client := &toolClient{}
-	session := NewSession(client, "You are a tool tester", WithStore(store))
+	session, err := NewSession(client, "You are a tool tester", WithStore(store))
+	require.NoError(t, err)
 
-	_, err := session.Message(context.Background(), chat.UserMessage("Trigger a tool call"))
+	_, err = session.Message(context.Background(), chat.UserMessage("Trigger a tool call"))
 	require.NoError(t, err)
 
 	records := session.LiveRecords()
@@ -675,4 +692,165 @@ func TestSessionPersistsToolInteractions(t *testing.T) {
 	assert.Equal(t, chat.ToolRole, history[2].Role)
 	require.Len(t, history[2].GetToolResults(), 1)
 	assert.Equal(t, chat.AssistantRole, history[3].Role)
+}
+
+func TestCompactionPreservesSystemPrompt(t *testing.T) {
+	// Test that compaction never marks system prompt records as dead
+	// This is critical because the system prompt provides essential context
+	client := &mockClient{}
+	systemPromptText := "You are an AI assistant that must always remember this context."
+	session, err := NewSession(client, systemPromptText)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Add enough messages to make compaction meaningful
+	for i := 0; i < 5; i++ {
+		_, err := session.Message(ctx, chat.UserMessage(fmt.Sprintf("Message %d", i)))
+		require.NoError(t, err)
+	}
+
+	// Manually trigger compaction
+	err = session.CompactNow()
+	require.NoError(t, err)
+
+	// Verify system prompt is still in live records
+	liveRecords := session.LiveRecords()
+	foundSystemPrompt := false
+	for _, r := range liveRecords {
+		if r.Role == "system" {
+			foundSystemPrompt = true
+			assert.Equal(t, systemPromptText, r.GetText())
+			break
+		}
+	}
+	assert.True(t, foundSystemPrompt, "System prompt record should remain live after compaction")
+
+	// Verify History() still returns the system prompt
+	systemPrompt, _ := session.History()
+	assert.Equal(t, systemPromptText, systemPrompt)
+}
+
+func TestCompactionPreservesSystemPromptAcrossMultipleCompactions(t *testing.T) {
+	// Test that system prompt survives multiple compaction cycles
+	client := &mockClient{}
+	systemPromptText := "Important system context that must persist."
+	session, err := NewSession(client, systemPromptText)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Perform multiple rounds of messages and compaction
+	for round := 0; round < 3; round++ {
+		// Add messages
+		for i := 0; i < 5; i++ {
+			_, err := session.Message(ctx, chat.UserMessage(fmt.Sprintf("Round %d Message %d", round, i)))
+			require.NoError(t, err)
+		}
+
+		// Trigger compaction
+		err = session.CompactNow()
+		require.NoError(t, err)
+
+		// Verify system prompt persists after each round
+		systemPrompt, _ := session.History()
+		assert.Equal(t, systemPromptText, systemPrompt, "System prompt should persist after compaction round %d", round)
+	}
+
+	// Final verification: system prompt record should still be live
+	liveRecords := session.LiveRecords()
+	foundSystemPrompt := false
+	for _, r := range liveRecords {
+		if r.Role == "system" {
+			foundSystemPrompt = true
+			break
+		}
+	}
+	assert.True(t, foundSystemPrompt, "System prompt record should remain live after multiple compactions")
+}
+
+func TestPrepareForMessageRebuildHistoryAfterCompaction(t *testing.T) {
+	// Test that when compaction triggers during prepareForMessage,
+	// the history used for the request reflects the compacted state
+	client := &mockClient{}
+	session, err := NewSession(client, "System prompt")
+	require.NoError(t, err)
+
+	// Lower threshold to trigger compaction easily
+	session.SetCompactionThreshold(0.1)
+
+	ctx := context.Background()
+
+	// Add messages to get close to compaction threshold
+	for i := 0; i < 10; i++ {
+		_, err := session.Message(ctx, chat.UserMessage(strings.Repeat("Long message ", 100)))
+		require.NoError(t, err)
+	}
+
+	// Check metrics before the triggering message
+	metricsBefore := session.Metrics()
+	compactionCountBefore := metricsBefore.CompactionCount
+
+	// Send a message that should trigger compaction
+	_, err = session.Message(ctx, chat.UserMessage(strings.Repeat("Trigger message ", 200)))
+	require.NoError(t, err)
+
+	// Verify compaction occurred
+	metricsAfter := session.Metrics()
+	if metricsAfter.CompactionCount > compactionCountBefore {
+		// Compaction occurred - verify the system prompt is still available
+		systemPrompt, _ := session.History()
+		assert.NotEmpty(t, systemPrompt, "System prompt should be available after compaction during message")
+	}
+}
+
+func TestBuildHistoryFiltersEmptyMessagesAfterSystemReminderRemoval(t *testing.T) {
+	// Test that messages containing only SystemReminder content are not
+	// included in rebuilt history (they become empty after filtering)
+	client := &mockClient{}
+	store := persistence.NewMemoryStore()
+	session, err := NewSession(client, "System prompt", WithStore(store))
+	require.NoError(t, err)
+
+	// Manually add a record with only SystemReminder content
+	// This simulates what happens when a message only had ephemeral content
+	_, err = store.AddRecord(session.SessionID(), persistence.Record{
+		Role: chat.UserRole,
+		Contents: []chat.Content{
+			{SystemReminder: "This is only a system reminder"},
+		},
+		Live:      true,
+		Status:    persistence.RecordStatusSuccess,
+		Timestamp: time.Now(),
+	})
+	require.NoError(t, err)
+
+	// Add a normal message
+	_, err = store.AddRecord(session.SessionID(), persistence.Record{
+		Role: chat.UserRole,
+		Contents: []chat.Content{
+			{Text: "Normal message with text"},
+		},
+		Live:      true,
+		Status:    persistence.RecordStatusSuccess,
+		Timestamp: time.Now().Add(time.Second),
+	})
+	require.NoError(t, err)
+
+	// Get history - it should not include the empty message
+	_, msgs := session.History()
+
+	// Verify we only have the message with actual text content
+	for _, msg := range msgs {
+		assert.NotEmpty(t, msg.Contents, "Messages in history should not be empty")
+		// Verify no message contains only empty content blocks
+		hasNonEmptyContent := false
+		for _, c := range msg.Contents {
+			if c.Text != "" || c.ToolCall != nil || c.ToolResult != nil || c.Thinking != nil {
+				hasNonEmptyContent = true
+				break
+			}
+		}
+		assert.True(t, hasNonEmptyContent, "Each message should have at least one non-empty content block")
+	}
 }

@@ -110,7 +110,8 @@ func WithSummarizer(summarizer Summarizer) SessionOption {
 }
 
 // NewSession creates a new Session with the given client, system prompt, and options.
-func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) Session {
+// Returns an error if the session store cannot be accessed (e.g., database locked or corrupted).
+func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) (Session, error) {
 	// Apply options
 	var options sessionOptions
 	for _, opt := range opts {
@@ -136,11 +137,17 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		options.summarizer = NewSummarizer(client)
 	}
 
-	// Load existing metrics if available
-	metrics, _ := options.store.LoadMetrics(options.sessionID)
+	// Load existing metrics if available - propagate errors to prevent silent failures
+	metrics, err := options.store.LoadMetrics(options.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load session metrics: %w", err)
+	}
 
-	// Check if we have existing records in the store
-	existingRecords, _ := options.store.GetAllRecords(options.sessionID)
+	// Check if we have existing records in the store - propagate errors
+	existingRecords, err := options.store.GetAllRecords(options.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load session records: %w", err)
+	}
 	hasExistingRecords := len(existingRecords) > 0
 
 	// If we have existing records, use the system prompt from the store
@@ -163,7 +170,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 	if !hasExistingRecords {
 		// Create initial records from system prompt and initial messages
 		if systemPrompt != "" {
-			options.store.AddRecord(options.sessionID, persistence.Record{
+			if _, err := options.store.AddRecord(options.sessionID, persistence.Record{
 				Role: "system",
 				Contents: []chat.Content{
 					{Text: systemPrompt},
@@ -173,11 +180,13 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 				InputTokens:  0, // System prompt tokens counted with first message
 				OutputTokens: 0,
 				Timestamp:    time.Now(),
-			})
+			}); err != nil {
+				return nil, fmt.Errorf("failed to add system prompt record: %w", err)
+			}
 		}
 
 		for _, msg := range options.initialMessages {
-			options.store.AddRecord(options.sessionID, persistence.Record{
+			if _, err := options.store.AddRecord(options.sessionID, persistence.Record{
 				Role:         chat.Role(msg.Role),
 				Contents:     append([]chat.Content(nil), msg.Contents...),
 				Live:         true,
@@ -185,7 +194,9 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 				InputTokens:  0, // Initial messages' tokens counted with first query
 				OutputTokens: 0,
 				Timestamp:    time.Now(),
-			})
+			}); err != nil {
+				return nil, fmt.Errorf("failed to add initial message record: %w", err)
+			}
 		}
 	}
 
@@ -209,7 +220,7 @@ func NewSession(client chat.Client, systemPrompt string, opts ...SessionOption) 
 		lastCompaction:      metrics.LastCompaction,
 		cumulativeTokens:    metrics.CumulativeTokens,
 		tools:               make(map[string]registeredTool),
-	}
+	}, nil
 }
 
 // session is the implementation of Session with pluggable storage.
@@ -268,10 +279,6 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Build the message history from live records
-	systemPrompt, msgs := s.buildChatHistoryLocked()
-	s.lastHistoryLen = len(msgs)
-
 	// Store the user message for comparison in trackResponse
 	s.lastUserMessage = msg
 
@@ -283,6 +290,11 @@ func (s *session) prepareForMessage(ctx context.Context, msg chat.Message) (chat
 			return nil, fmt.Errorf("auto-compaction failed: %w", err)
 		}
 	}
+
+	// Build the message history from live records AFTER any compaction
+	// This ensures the request uses the compacted history, not the pre-compaction state
+	systemPrompt, msgs := s.buildChatHistoryLocked()
+	s.lastHistoryLen = len(msgs)
 
 	// Create chat with history from store
 	tempChat := s.client.NewChat(systemPrompt, msgs...)
@@ -472,18 +484,31 @@ func (s *session) compactNowLocked(ctx context.Context) error {
 		return nil
 	}
 
-	// Keep last 2 messages, summarize the rest
-	recordsToSummarize := liveRecords[:len(liveRecords)-2]
+	// Keep last 2 messages, summarize the rest (but never touch system prompts)
+	// Find non-system records to potentially compact
+	var nonSystemRecordsToSummarize []persistence.Record
+	for i := 0; i < len(liveRecords)-2; i++ {
+		// Never include system prompt records in compaction - they must always stay live
+		if liveRecords[i].Role != "system" {
+			nonSystemRecordsToSummarize = append(nonSystemRecordsToSummarize, liveRecords[i])
+		}
+	}
+
+	// If there are no non-system records to summarize, nothing to do
+	if len(nonSystemRecordsToSummarize) == 0 {
+		return nil
+	}
 
 	// Use the configured summarizer with context from the request
-	summary, err := s.summarizer.Summarize(ctx, recordsToSummarize)
+	summary, err := s.summarizer.Summarize(ctx, nonSystemRecordsToSummarize)
 	if err != nil {
 		return fmt.Errorf("summarization failed: %w", err)
 	}
 
-	// Mark old records as dead (except last 2)
+	// Mark old records as dead (except last 2 and system records)
 	for i, r := range liveRecords {
-		if i < len(liveRecords)-2 {
+		// Never mark system records as dead - they contain the essential system prompt
+		if i < len(liveRecords)-2 && r.Role != "system" {
 			s.store.MarkRecordDead(s.sessionID, r.ID)
 		}
 	}
@@ -605,6 +630,12 @@ func (s *session) buildChatHistoryLocked() (string, []chat.Message) {
 				if c.SystemReminder == "" {
 					filteredContents = append(filteredContents, c)
 				}
+			}
+
+			// Skip messages that become empty after filtering out SystemReminder content
+			// Claude and other providers reject messages with no content blocks
+			if len(filteredContents) == 0 {
+				continue
 			}
 
 			msg := chat.Message{

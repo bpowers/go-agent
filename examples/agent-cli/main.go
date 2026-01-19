@@ -130,7 +130,10 @@ func run(config *Config, input io.Reader, output io.Writer, errOutput io.Writer)
 	}
 
 	// Create a session with automatic context management
-	session := agent.NewSession(client, config.SystemPrompt, sessionOpts...)
+	session, err := agent.NewSession(client, config.SystemPrompt, sessionOpts...)
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
 	session.SetCompactionThreshold(config.CompactThreshold)
 
 	root, err := os.OpenRoot(".")

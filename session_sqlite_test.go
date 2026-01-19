@@ -1,3 +1,5 @@
+//go:build sqlite
+
 package agent
 
 import (
@@ -32,9 +34,10 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 
 	// Create session with SQLite persistence
 	client := &mockClient{}
-	session := NewSession(client, "Persistent assistant",
+	session, err := NewSession(client, "Persistent assistant",
 		WithStore(store),
 		WithRestoreSession(sessionID))
+	require.NoError(t, err)
 
 	// Test basic messaging
 	ctx := context.Background()
@@ -52,9 +55,10 @@ func TestSessionWithSQLiteStore(t *testing.T) {
 	assert.Greater(t, metrics.CumulativeTokens, 0)
 
 	// Create new session with same store and session ID to test persistence
-	session2 := NewSession(client, "Should be ignored", // System prompt already in store
+	session2, err := NewSession(client, "Should be ignored", // System prompt already in store
 		WithStore(store),
 		WithRestoreSession(sessionID))
+	require.NoError(t, err)
 
 	// Should have the same records
 	records2 := session2.LiveRecords()
@@ -75,9 +79,10 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 	require.NoError(t, err)
 
 	client := &mockClient{}
-	session1 := NewSession(client, "Persistent system",
+	session1, err := NewSession(client, "Persistent system",
 		WithStore(store1),
 		WithRestoreSession(sessionID))
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -98,9 +103,10 @@ func TestSessionPersistenceAcrossRestarts(t *testing.T) {
 	require.NoError(t, err)
 	defer store2.Close()
 
-	session2 := NewSession(client, "Persistent system",
+	session2, err := NewSession(client, "Persistent system",
 		WithStore(store2),
 		WithRestoreSession(sessionID))
+	require.NoError(t, err)
 
 	// Should have the same history
 	records := session2.TotalRecords()
@@ -117,8 +123,9 @@ func TestSessionCompactionWithSQLite(t *testing.T) {
 	defer store.Close()
 
 	client := &mockClient{}
-	session := NewSession(client, "System",
+	session, err := NewSession(client, "System",
 		WithStore(store))
+	require.NoError(t, err)
 
 	// Lower threshold for testing
 	session.SetCompactionThreshold(0.1)
@@ -167,7 +174,8 @@ func TestSessionResumption(t *testing.T) {
 		client := &mockClient{}
 
 		// Create initial session
-		session := NewSession(client, systemPrompt, WithStore(store))
+		session, err := NewSession(client, systemPrompt, WithStore(store))
+		require.NoError(t, err)
 
 		// Record the session ID for later restoration
 		sessionID = session.SessionID()
@@ -212,9 +220,10 @@ func TestSessionResumption(t *testing.T) {
 		client := &mockClient{}
 
 		// Resume session using WithRestoreSession
-		resumedSession := NewSession(client, "Different prompt that should be ignored",
+		resumedSession, err := NewSession(client, "Different prompt that should be ignored",
 			WithStore(store),
 			WithRestoreSession(sessionID))
+		require.NoError(t, err)
 
 		// Verify the session ID matches
 		assert.Equal(t, sessionID, resumedSession.SessionID())
@@ -284,7 +293,8 @@ func TestSessionResumptionWithLLM(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create initial session
-		session := NewSession(client, systemPrompt, WithStore(store))
+		session, err := NewSession(client, systemPrompt, WithStore(store))
+		require.NoError(t, err)
 
 		// Record the session ID for later restoration
 		sessionID = session.SessionID()
@@ -334,9 +344,10 @@ func TestSessionResumptionWithLLM(t *testing.T) {
 		require.NoError(t, err)
 
 		// Resume session using WithRestoreSession
-		resumedSession := NewSession(client, "Different prompt that should be ignored",
+		resumedSession, err := NewSession(client, "Different prompt that should be ignored",
 			WithStore(store),
 			WithRestoreSession(sessionID))
+		require.NoError(t, err)
 
 		// Verify the session ID matches
 		assert.Equal(t, sessionID, resumedSession.SessionID())

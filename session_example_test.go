@@ -1,3 +1,5 @@
+//go:build sqlite
+
 package agent_test
 
 import (
@@ -50,12 +52,15 @@ func ExampleSession_resumption() {
 		}
 
 		// Create a new session with persistence
-		session := agent.NewSession(
+		session, err := agent.NewSession(
 			client,
 			"You are a helpful assistant. Remember details about our conversation.",
 			agent.WithStore(store),
 			// We could specify a session ID, but letting it auto-generate is typical
 		)
+		if err != nil {
+			log.Fatal(err)
+		}
 
 		sessionID := session.SessionID()
 		fmt.Println("Session created")
@@ -99,12 +104,15 @@ func ExampleSession_resumption() {
 		}
 
 		// Resume the previous session
-		session := agent.NewSession(
+		session, err := agent.NewSession(
 			client,
 			"This will be ignored - original prompt is preserved",
 			agent.WithStore(store),
 			agent.WithRestoreSession(sessionID), // Key: restore with the same ID
 		)
+		if err != nil {
+			log.Fatal(err)
+		}
 
 		fmt.Println("Session resumed")
 
