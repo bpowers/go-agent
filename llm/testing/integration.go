@@ -1051,7 +1051,7 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 			},
 		}
 
-		err := session.RegisterTool(calcTool)
+		err = session.RegisterTool(calcTool)
 		require.NoError(t, err)
 
 		baselineRecords, err := store.GetAllRecords(sessionID)
@@ -1136,7 +1136,7 @@ func TestMessagePersistenceAfterRestore(t *testing.T, client chat.Client) {
 
 		// Send a normal message first
 		userMsg1 := "Hello"
-		_, err := session.Message(context.Background(), chat.UserMessage(userMsg1))
+		_, err = session.Message(context.Background(), chat.UserMessage(userMsg1))
 		require.NoError(t, err)
 
 		records1, err := store.GetAllRecords(sessionID)

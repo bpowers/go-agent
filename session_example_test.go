@@ -1,3 +1,5 @@
+//go:build sqlite
+
 package agent_test
 
 import (
