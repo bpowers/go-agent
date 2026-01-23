@@ -1214,18 +1214,7 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []openai.Cha
 
 	for _, toolCall := range toolCalls {
 		result, err := c.tools.Execute(ctx, toolCall.Function.Name, toolCall.Function.Arguments)
-
-		// Emit tool result event if callback is provided
-		toolResult := chat.ToolResult{
-			ToolCallID: toolCall.ID,
-			Name:       toolCall.Function.Name,
-		}
-
-		if err != nil {
-			toolResult.Error = err.Error()
-		} else {
-			toolResult.Content = result
-		}
+		toolResult := common.BuildToolResult(toolCall.Function.Name, toolCall.ID, result, err)
 
 		if callback != nil {
 			toolResultEvent := chat.StreamEvent{

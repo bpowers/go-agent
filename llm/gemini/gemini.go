@@ -797,17 +797,11 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 		}
 
 		resultStr, err := c.tools.Execute(ctx, fc.Name, string(argsJSON))
-
-		toolResult := chat.ToolResult{
-			ToolCallID: fc.ID,
-			Name:       fc.Name,
-		}
+		toolResult := common.BuildToolResult(fc.Name, fc.ID, resultStr, err)
 
 		if err != nil {
-			toolResult.Error = err.Error()
 			c.logger.Debug("tool execution failed", "name", fc.Name, "args", string(argsJSON), "error", err.Error())
 		} else {
-			toolResult.Content = resultStr
 			c.logger.Debug("tool executed successfully", "name", fc.Name, "args", string(argsJSON), "result", resultStr)
 		}
 
@@ -834,16 +828,17 @@ func (c *chatClient) handleFunctionCalls(ctx context.Context, functionCalls []*g
 			continue
 		}
 
+		resultForModel := toolResult.Content
 		var resultMap map[string]interface{}
 		// Handle empty results specially to ensure valid response structure
-		if resultStr == "" {
+		if resultForModel == "" {
 			resultMap = map[string]interface{}{
 				"result": "success", // Provide a non-empty result for empty tool responses
 			}
-		} else if err := json.Unmarshal([]byte(resultStr), &resultMap); err != nil {
+		} else if err := json.Unmarshal([]byte(resultForModel), &resultMap); err != nil {
 			// If not valid JSON, wrap as string result
 			resultMap = map[string]interface{}{
-				"result": resultStr,
+				"result": resultForModel,
 			}
 		}
 

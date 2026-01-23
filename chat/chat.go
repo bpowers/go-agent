@@ -26,6 +26,8 @@ type ToolResult struct {
 	Name string `json:"name"`
 	// Content is the result of the tool execution.
 	Content string `json:"content"`
+	// DisplayContent is optional full content intended for UI display.
+	DisplayContent string `json:"displayContent,omitzero"`
 	// Error indicates if the tool execution failed.
 	Error string `json:"error,omitzero"`
 }

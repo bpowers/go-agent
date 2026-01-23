@@ -723,19 +723,11 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 	for _, toolCall := range toolCalls {
 		argsStr := string(toolCall.Input)
 		result, err := c.tools.Execute(ctx, toolCall.Name, argsStr)
+		toolResult := common.BuildToolResult(toolCall.Name, toolCall.ID, result, err)
 
-		toolResult := chat.ToolResult{
-			ToolCallID: toolCall.ID,
-			Name:       toolCall.Name,
-		}
-
-		var resultContent string
+		resultContent := toolResult.Content
 		if err != nil {
 			resultContent = common.FormatToolErrorJSON(err.Error())
-			toolResult.Error = err.Error()
-		} else {
-			resultContent = result
-			toolResult.Content = result
 		}
 
 		if callback != nil {
@@ -757,7 +749,7 @@ func (c *chatClient) handleToolCalls(ctx context.Context, toolCalls []anthropic.
 
 		c.logger.Debug("tool executed", "name", toolCall.Name, "args", argsStr, "result", result)
 
-		resultBlock := anthropic.NewToolResultBlock(toolCall.ID, result, false)
+		resultBlock := anthropic.NewToolResultBlock(toolCall.ID, resultContent, false)
 		toolResults = append(toolResults, resultBlock)
 		chatResults = append(chatResults, toolResult)
 	}
