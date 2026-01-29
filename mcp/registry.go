@@ -8,6 +8,8 @@ import (
 	"github.com/bpowers/go-agent/chat"
 )
 
+// Registry holds a collection of tools that can be exposed via an MCP server.
+// It is safe for concurrent use; tools can be registered while the server is running.
 type Registry struct {
 	mu          sync.Mutex
 	tools       map[string]chat.Tool
@@ -15,6 +17,7 @@ type Registry struct {
 	order       []string
 }
 
+// NewRegistry creates an empty tool registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		tools:       make(map[string]chat.Tool),
@@ -23,6 +26,9 @@ func NewRegistry() *Registry {
 	}
 }
 
+// Register adds a tool to the registry. The tool's MCPJsonSchema method is called
+// to extract its name and schema. If a tool with the same name already exists,
+// it is replaced. Returns an error if the tool is nil or has an invalid schema.
 func (r *Registry) Register(tool chat.Tool) error {
 	if tool == nil {
 		return fmt.Errorf("register tool: nil tool")
@@ -45,6 +51,8 @@ func (r *Registry) Register(tool chat.Tool) error {
 	return nil
 }
 
+// Get retrieves a tool by name. Returns the tool and true if found,
+// or nil and false if no tool with that name is registered.
 func (r *Registry) Get(name string) (chat.Tool, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -53,6 +61,8 @@ func (r *Registry) Get(name string) (chat.Tool, bool) {
 	return tool, ok
 }
 
+// Definitions returns the tool definitions for all registered tools
+// in the order they were first registered. This is used by tools/list.
 func (r *Registry) Definitions() []ToolDefinition {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -16,8 +16,11 @@ const (
 	errInternal       = -32603
 )
 
+// Option configures a Server during construction.
 type Option func(*Server)
 
+// Server implements an MCP server that handles JSON-RPC requests over an io.Reader/io.Writer pair.
+// It is safe for concurrent use, though typically a server handles a single connection.
 type Server struct {
 	registry        *Registry
 	info            Implementation
@@ -25,6 +28,12 @@ type Server struct {
 	instructions    string
 }
 
+// NewServer creates a new MCP server with the given tool registry and server information.
+// The registry must not be nil, and info must have non-empty Name and Version fields.
+//
+// Options can customize the server behavior:
+//   - [WithInstructions]: Set human-readable instructions for LLM clients
+//   - [WithProtocolVersion]: Override the default protocol version
 func NewServer(registry *Registry, info Implementation, opts ...Option) (*Server, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("new server: registry is required")
@@ -55,18 +64,34 @@ func NewServer(registry *Registry, info Implementation, opts ...Option) (*Server
 	return server, nil
 }
 
+// WithInstructions sets human-readable instructions that are returned to clients
+// during initialization. These instructions help LLMs understand how to use the
+// server's tools effectively.
 func WithInstructions(instructions string) Option {
 	return func(server *Server) {
 		server.instructions = instructions
 	}
 }
 
+// WithProtocolVersion overrides the default MCP protocol version.
+// This should only be used for compatibility testing; in normal use,
+// the default [ProtocolVersion] constant should be sufficient.
 func WithProtocolVersion(version string) Option {
 	return func(server *Server) {
 		server.protocolVersion = version
 	}
 }
 
+// Serve reads JSON-RPC requests from in and writes responses to out until
+// the context is canceled, EOF is reached, or a fatal error occurs.
+//
+// Each request is processed synchronously. Notifications (requests without an ID)
+// do not receive a response. The server recovers from panics in tool execution,
+// returning them as error responses rather than crashing.
+//
+// For typical MCP usage, pass os.Stdin and os.Stdout:
+//
+//	err := server.Serve(ctx, os.Stdin, os.Stdout)
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	if s == nil {
 		return fmt.Errorf("serve: server is nil")
