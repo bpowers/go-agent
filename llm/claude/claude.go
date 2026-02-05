@@ -120,6 +120,7 @@ func (c client) NewChat(systemPrompt string, initialMsgs ...chat.Message) chat.C
 }
 
 var modelMaxOutputTokens = map[string]int64{
+	"claude-opus-4-6":   128000,
 	"claude-opus-4-5":   64000,
 	"claude-opus-4-1":   32000,
 	"claude-opus-4":     32000,
@@ -174,6 +175,7 @@ func (s *set[T]) containsWithPredicate(predicate func(T) bool) bool {
 
 // modelsWithThinking defines which Claude models support thinking/reasoning capabilities
 var modelsWithThinking = newSet(
+	"claude-opus-4-6",
 	"claude-opus-4-5",
 	"claude-opus-4-1",
 	"claude-opus-4",
@@ -198,6 +200,7 @@ func supportsThinking(modelName string) bool {
 }
 
 var modelLimits = []chat.ModelTokenLimits{
+	{Model: "claude-opus-4-6", TokenLimits: chat.TokenLimits{Context: 200000, Output: 128000}},
 	{Model: "claude-opus-4-5", TokenLimits: chat.TokenLimits{Context: 200000, Output: 64000}},
 	{Model: "claude-opus-4-1", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
 	{Model: "claude-opus-4", TokenLimits: chat.TokenLimits{Context: 200000, Output: 32000}},
