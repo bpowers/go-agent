@@ -84,9 +84,11 @@ func OptionalFunc(ctx context.Context, req OptionalRequest) OptionalResult { ret
 				} else if len(typeArr) != 2 || typeArr[0] != "string" || typeArr[1] != "null" {
 					t.Errorf("expected [\"string\", \"null\"], got %v", typeArr)
 				}
-				// Should still be in required for OpenAI compatibility
+				// Nullable pointer fields without omitzero are still required:
+				// "required" means the key must be present, while the nullable
+				// type allows the value to be null.
 				if len(s.Required) != 2 {
-					t.Errorf("expected 2 required fields (OpenAI compat), got %v", s.Required)
+					t.Errorf("expected 2 required fields, got %v", s.Required)
 				}
 			},
 		},
@@ -462,6 +464,83 @@ func NestedEmbedFunc(ctx context.Context, req NestedEmbedRequest) NestedEmbedRes
 				if s.Properties["TopField"] == nil {
 					t.Error("expected 'TopField' from top struct")
 				}
+			},
+		},
+		{
+			name: "omitzero fields are not required",
+			code: `package test
+import "context"
+type OmitzeroRequest struct {
+	ProjectPath string              ` + "`json:\"projectPath\"`" + `
+	ModelName   string              ` + "`json:\"modelName,omitzero\"`" + `
+	DryRun      bool                ` + "`json:\"dryRun,omitzero\"`" + `
+	SimSpecs    *OmitzeroSimSpecs   ` + "`json:\"simSpecs,omitzero\"`" + `
+	Operations  []OmitzeroOperation ` + "`json:\"operations\"`" + `
+}
+type OmitzeroSimSpecs struct {
+	StartTime float64
+	EndTime   float64
+}
+type OmitzeroOperation struct {
+	Name string
+}
+type OmitzeroResult struct {
+	Value string
+}
+func OmitzeroFunc(ctx context.Context, req OmitzeroRequest) (OmitzeroResult, error) { return OmitzeroResult{}, nil }`,
+			funcName: "OmitzeroFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				assert.Equal(t, schema.Object, s.Type)
+				assert.Len(t, s.Properties, 5)
+
+				// Only fields WITHOUT omitzero should be required
+				assert.ElementsMatch(t, []string{"projectPath", "operations"}, s.Required)
+
+				// simSpecs should be nullable (pointer type) but NOT required
+				require.NotNil(t, s.Properties["simSpecs"])
+			},
+		},
+		{
+			name: "omitempty fields are not required",
+			code: `package test
+import "context"
+type OmitemptyRequest struct {
+	Name     string ` + "`json:\"name\"`" + `
+	Optional string ` + "`json:\"optional,omitempty\"`" + `
+}
+type OmitemptyResult struct {
+	Value string
+}
+func OmitemptyFunc(ctx context.Context, req OmitemptyRequest) (OmitemptyResult, error) { return OmitemptyResult{}, nil }`,
+			funcName: "OmitemptyFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				assert.Equal(t, schema.Object, s.Type)
+				assert.Len(t, s.Properties, 2)
+				assert.Equal(t, []string{"name"}, s.Required)
+			},
+		},
+		{
+			name: "embedded struct with omitzero fields preserves optionality",
+			code: `package test
+import "context"
+type EmbeddedOptionalBase struct {
+	Required string ` + "`json:\"required\"`" + `
+	Optional string ` + "`json:\"optional,omitzero\"`" + `
+}
+type EmbeddedOptionalRequest struct {
+	EmbeddedOptionalBase
+	Extra string ` + "`json:\"extra\"`" + `
+}
+type EmbeddedOptionalResult struct {
+	Value string
+}
+func EmbeddedOptionalFunc(ctx context.Context, req EmbeddedOptionalRequest) (EmbeddedOptionalResult, error) { return EmbeddedOptionalResult{}, nil }`,
+			funcName: "EmbeddedOptionalFunc",
+			validate: func(t *testing.T, s *schema.JSON) {
+				assert.Equal(t, schema.Object, s.Type)
+				assert.Len(t, s.Properties, 3)
+				// "optional" from embedded struct should NOT be required
+				assert.ElementsMatch(t, []string{"required", "extra"}, s.Required)
 			},
 		},
 		{

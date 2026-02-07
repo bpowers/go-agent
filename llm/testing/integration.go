@@ -1447,3 +1447,60 @@ func TestTextBeforeToolCallsPreserved(t *testing.T, client chat.Client) {
 		t.Log("Model did not emit text before tool calls in this run")
 	}
 }
+
+// TestToolWithOptionalFields tests that tool schemas with optional fields
+// (fields not in the "required" array) work correctly. This validates that
+// providers accept standard JSON Schema where not all properties are required.
+func TestToolWithOptionalFields(t testing.TB, client chat.Client) {
+	chatSession := client.NewChat("You are a helpful assistant with access to tools. When asked to look up weather, use the get_weather tool.")
+
+	var receivedInput string
+	toolCalled := false
+	weatherTool := &testTool{
+		name:        "get_weather",
+		description: "Get current weather for a location",
+		jsonSchema: `{
+			"name": "get_weather",
+			"description": "Get current weather for a location",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"location": {
+						"type": "string",
+						"description": "City name"
+					},
+					"units": {
+						"type": "string",
+						"description": "Temperature units: celsius or fahrenheit. Defaults to celsius if not provided."
+					}
+				},
+				"required": ["location"],
+				"additionalProperties": false
+			}
+		}`,
+		callFn: func(ctx context.Context, input string) string {
+			toolCalled = true
+			receivedInput = input
+			return `{"temperature": 22, "units": "celsius", "condition": "sunny"}`
+		},
+	}
+
+	err := chatSession.RegisterTool(weatherTool)
+	require.NoError(t, err)
+
+	response, err := chatSession.Message(
+		context.Background(),
+		chat.UserMessage("What's the weather in Paris?"),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, response.GetText())
+	require.True(t, toolCalled, "Tool should have been called")
+
+	// Verify the tool received valid JSON with at least the required field
+	var args map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(receivedInput), &args))
+	assert.Contains(t, args, "location")
+
+	t.Logf("Tool called with args: %s", receivedInput)
+	t.Logf("Response: %s", response.GetText())
+}

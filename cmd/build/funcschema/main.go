@@ -486,14 +486,16 @@ func generateStructTypeSchema(structType *ast.StructType, files []*ast.File, doc
 
 			// Get JSON tag if present
 			jsonName := fieldName
+			isOptional := false
 			if field.Tag != nil {
-				jsonTag, _ := parseJSONTag(field.Tag)
+				jsonTag, omit := parseJSONTag(field.Tag)
 				if jsonTag == "-" {
 					continue // Skip fields with json:"-"
 				}
 				if jsonTag != "" {
 					jsonName = jsonTag
 				}
+				isOptional = omit
 			}
 
 			// Generate schema for field type
@@ -549,8 +551,10 @@ func generateStructTypeSchema(structType *ast.StructType, files []*ast.File, doc
 			s.Properties[jsonName] = fieldSchema
 			fieldNames[jsonName] = true
 
-			// For OpenAI compatibility, ALL fields must be required
-			required = append(required, jsonName)
+			// Fields with omitzero/omitempty are optional in the JSON payload.
+			if !isOptional {
+				required = append(required, jsonName)
+			}
 		}
 	}
 
@@ -589,12 +593,20 @@ func generateStructTypeSchema(structType *ast.StructType, files []*ast.File, doc
 				return nil, false, err
 			}
 
+			// Build a set of required field names from the embedded schema.
+			embeddedRequired := make(map[string]bool, len(embeddedSchema.Required))
+			for _, r := range embeddedSchema.Required {
+				embeddedRequired[r] = true
+			}
+
 			// Merge embedded fields into parent, skipping fields that are already defined (shadowed)
 			for propName, propSchema := range embeddedSchema.Properties {
 				if !fieldNames[propName] {
 					s.Properties[propName] = propSchema
 					fieldNames[propName] = true
-					required = append(required, propName)
+					if embeddedRequired[propName] {
+						required = append(required, propName)
+					}
 				}
 			}
 		}

@@ -290,6 +290,17 @@ func TestClaudeIntegration_SimpleToolCall(t *testing.T) {
 		toolCalled, toolInput, responseText)
 }
 
+func TestClaudeIntegration_ToolWithOptionalFields(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(AnthropicURL, getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err)
+	require.NotNil(t, client)
+
+	llmtesting.TestToolWithOptionalFields(t, client)
+}
+
 func TestClaudeIntegration_SystemReminderWithToolCalls(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)

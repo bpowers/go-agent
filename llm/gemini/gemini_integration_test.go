@@ -203,6 +203,17 @@ func TestGeminiIntegration_EmptyToolResultsHandling(t *testing.T) {
 	llmtesting.TestEmptyToolResultsHandling(t, client)
 }
 
+func TestGeminiIntegration_ToolWithOptionalFields(t *testing.T) {
+	t.Parallel()
+	llmtesting.SkipIfNoAPIKey(t, provider)
+
+	client, err := NewClient(getAPIKey(), WithModel(getTestModel()))
+	require.NoError(t, err)
+	require.NotNil(t, client)
+
+	llmtesting.TestToolWithOptionalFields(t, client)
+}
+
 func TestGeminiIntegration_SystemReminderWithToolCalls(t *testing.T) {
 	t.Parallel()
 	llmtesting.SkipIfNoAPIKey(t, provider)
