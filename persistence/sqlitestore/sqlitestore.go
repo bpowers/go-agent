@@ -26,6 +26,13 @@ func New(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	// Praxis-specific: enable FK enforcement for cascade deletes.
+	// Preserve this across future updates of the vendored dependency.
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+
 	store := &SQLiteStore{db: db}
 	if err := store.initSchema(); err != nil {
 		db.Close()
@@ -40,7 +47,7 @@ func (s *SQLiteStore) initSchema() error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS records (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id    TEXT NOT NULL,
+    session_id    TEXT NOT NULL REFERENCES session_metadata(session_id) ON DELETE CASCADE,
     role          TEXT NOT NULL,
     contents      TEXT NOT NULL,
     live          BOOLEAN NOT NULL,
