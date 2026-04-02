@@ -13,6 +13,30 @@ import (
 	"github.com/bpowers/go-agent/persistence"
 )
 
+// createSessionMetadata creates the session_metadata parent table and inserts
+// a row for the given sessionID. The records table has an FK constraint
+// referencing session_metadata, so this must be called before inserting records.
+func createSessionMetadata(t *testing.T, s *SQLiteStore, sessionID string) {
+	t.Helper()
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS session_metadata (
+			session_id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			model TEXT NOT NULL,
+			system_prompt TEXT NOT NULL,
+			title TEXT,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`)
+	require.NoError(t, err)
+	_, err = s.db.Exec(`
+		INSERT OR IGNORE INTO session_metadata (session_id, project_id, user_id, model, system_prompt, title, created_at, updated_at)
+		VALUES (?, 'test-project', 'test-user', 'test-model', 'test', '', datetime('now'), datetime('now'))
+	`, sessionID)
+	require.NoError(t, err)
+}
+
 func TestSQLiteStoreBasics(t *testing.T) {
 	// Use in-memory database for testing
 	store, err := New(":memory:")
@@ -20,6 +44,7 @@ func TestSQLiteStoreBasics(t *testing.T) {
 	defer store.Close()
 
 	sessionID := "test-session"
+	createSessionMetadata(t, store, sessionID)
 
 	// Test adding a record
 	record := persistence.Record{
@@ -71,6 +96,7 @@ func TestSQLiteStoreUpdateRecord(t *testing.T) {
 	defer store.Close()
 
 	sessionID := "test-session"
+	createSessionMetadata(t, store, sessionID)
 
 	// Add a record
 	record := persistence.Record{
@@ -110,6 +136,7 @@ func TestSQLiteStoreMarkLiveDead(t *testing.T) {
 	defer store.Close()
 
 	sessionID := "test-session"
+	createSessionMetadata(t, store, sessionID)
 
 	// Add multiple records
 	for i := 0; i < 3; i++ {
@@ -160,6 +187,7 @@ func TestSQLiteStoreDelete(t *testing.T) {
 	defer store.Close()
 
 	sessionID := "test-session"
+	createSessionMetadata(t, store, sessionID)
 
 	// Add records
 	for i := 0; i < 3; i++ {
@@ -196,6 +224,7 @@ func TestSQLiteStoreClear(t *testing.T) {
 	defer store.Close()
 
 	sessionID := "test-session"
+	createSessionMetadata(t, store, sessionID)
 
 	// Add records
 	for i := 0; i < 5; i++ {
@@ -262,6 +291,7 @@ func TestSQLiteStorePersistence(t *testing.T) {
 	// Create store and add records
 	store1, err := New(dbPath)
 	require.NoError(t, err)
+	createSessionMetadata(t, store1, sessionID)
 
 	record := persistence.Record{
 		Role: chat.AssistantRole,
@@ -314,6 +344,7 @@ func TestSQLiteStoreOrdering(t *testing.T) {
 	defer store.Close()
 
 	sessionID := "test-session"
+	createSessionMetadata(t, store, sessionID)
 
 	// Add records with specific timestamps
 	baseTime := time.Now()
@@ -375,6 +406,8 @@ func TestSQLiteStoreMultipleSessions(t *testing.T) {
 	// Add records for multiple sessions
 	session1 := "session-1"
 	session2 := "session-2"
+	createSessionMetadata(t, store, session1)
+	createSessionMetadata(t, store, session2)
 
 	// Add records to session 1
 	for i := 0; i < 3; i++ {

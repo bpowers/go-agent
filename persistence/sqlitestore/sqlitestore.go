@@ -21,16 +21,12 @@ type SQLiteStore struct {
 // New creates a new SQLite-based store at the given path.
 // Use ":memory:" for an in-memory database.
 func New(dbPath string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// FK enforcement is set via DSN pragma so it applies to every connection
+	// in the pool, not just the first one. A bare PRAGMA foreign_keys = ON
+	// via db.Exec only affects the single connection that executes it.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
-	}
-
-	// Praxis-specific: enable FK enforcement for cascade deletes.
-	// Preserve this across future updates of the vendored dependency.
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	store := &SQLiteStore{db: db}
